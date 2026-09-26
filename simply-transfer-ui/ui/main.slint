@@ -326,7 +326,7 @@ export component MainWindow inherits Window {
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                             edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
                             Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(); } }
-                            Button { text: "Remove"; clicked => { root.remove_key(); } }
+                            Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
                         }
                         
                         Rectangle { vertical-stretch: 1; }
