@@ -103,7 +103,7 @@ export component MainWindow inherits Window {
                     ListView {
                         for item[idx] in root.connections : Rectangle {
                             height: 40px;
-                            background: root.selected_connection_idx == idx ? #4a90e2 : (touch.has-hover ? #333 : transparent);
+                            background: root.selected_connection_idx == idx ? #c45b23 : (touch.has-hover ? #333 : transparent);
                             touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
                             HorizontalBox {
                                 Text { text: item.name; vertical-alignment: center; }
@@ -271,7 +271,7 @@ export component MainWindow inherits Window {
                                 ListView {
                                     for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
                                         height: 30px;
-                                        background: root.selected_session_idx == idx ? #4a90e2 : (ta.has-hover ? #333 : transparent);
+                                        background: root.selected_session_idx == idx ? #c45b23 : (ta.has-hover ? #333 : transparent);
                                         ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
                                         Text { text: session; x: 10px; vertical-alignment: center; }
                                     }
@@ -328,7 +328,7 @@ export component MainWindow inherits Window {
                     ListView {
                         for setting[idx] in ["Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
                             height: 40px;
-                            background: root.selected_setting_idx == idx ? #4a90e2 : (sta.has-hover ? #333 : transparent);
+                            background: root.selected_setting_idx == idx ? #c45b23 : (sta.has-hover ? #333 : transparent);
                             sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
                             Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
                         }
@@ -402,7 +402,7 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Github Repository:"; font-weight: 700; }
-                        Text { text: "https://github.com/TheInfoMoose/Simply_Transfer.git"; color: #4a90e2; }
+                        Text { text: "https://github.com/TheInfoMoose/ST_Rust_Age.git"; color: #c45b23; }
                         
                         Rectangle { height: 20px; }
                         

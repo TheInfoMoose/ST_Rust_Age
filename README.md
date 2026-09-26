@@ -1,5 +1,9 @@
 # ST Rust Age (Simply Transfer v2)
 
+<p align="center">
+  <img src="assets/logo.png" width="600" alt="Simply Transfer v2 Logo">
+</p>
+
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
 [![GUI: Slint](https://img.shields.io/badge/GUI-Slint-blue)](https://slint.dev/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
