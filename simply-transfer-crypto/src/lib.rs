@@ -88,3 +88,4 @@ mod tests {
         assert!(storage.get_secret(account).is_err());
     }
 }
+pub mod keys;

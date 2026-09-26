@@ -210,8 +210,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
+    let _ui_weak = ui.as_weak();
     ui.on_generate_key(move || {
-        format!("st:mock-key-{}|ssh-ed25519", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()).into()
+        let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+        match key_mgr.generate_and_store() {
+            Ok(pub_key) => {
+                let ip = "0.0.0.0"; // Default or pull from UI host field? The Slint callback doesn't pass the host right now, so we will stub the IP/Port.
+                let port = 22;
+                simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key).into()
+            },
+            Err(e) => {
+                tracing::error!("Failed to generate key: {}", e);
+                "".into()
+            }
+        }
     });
 
     ui.on_remove_key(move || {
