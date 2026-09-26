@@ -226,7 +226,7 @@ export component MainWindow inherits Window {
                     VerticalBox {
                         padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                         HorizontalBox {
-                            padding-left: 8px; padding-bottom: 8px;
+                            padding-left: 16px; padding-bottom: 8px;
                             Text { text: "Active Connections"; font-weight: 800; font-size: 16px; }
                         }
                         ListView {
@@ -235,7 +235,7 @@ export component MainWindow inherits Window {
                                 background: root.selected_connection_idx == idx ? AppTheme.accent : (touch.has-hover ? AppTheme.list_hover : transparent);
                                 touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
                                 HorizontalBox {
-                                    padding-left: 8px; padding-right: 8px;
+                                    padding-left: 16px; padding-right: 16px;
                                     Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 130px; font-weight: 700; overflow: elide; }
                                     Text { text: item.state; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
                                     Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 70px; font-weight: 700; }
@@ -406,7 +406,7 @@ export component MainWindow inherits Window {
                                 VerticalBox {
                                     padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                                     HorizontalBox {
-                                        padding-left: 10px; padding-bottom: 8px;
+                                        padding-left: 16px; padding-bottom: 8px;
                                         Text { text: "Active Sessions"; font-weight: 800; font-size: 16px; }
                                     }
                                     ListView {
@@ -414,7 +414,10 @@ export component MainWindow inherits Window {
                                             height: 30px;
                                             background: root.selected_session_idx == idx ? AppTheme.accent : (ta.has-hover ? AppTheme.list_hover : transparent);
                                             ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
-                                            Text { text: session; x: 10px; vertical-alignment: center; font-weight: 700; }
+                                            HorizontalBox {
+                                                padding-left: 16px; padding-right: 16px;
+                                                Text { text: session; vertical-alignment: center; font-weight: 700; }
+                                            }
                                         }
                                     }
                                 }
@@ -478,7 +481,10 @@ export component MainWindow inherits Window {
                                 height: 40px;
                                 background: root.selected_setting_idx == idx ? AppTheme.accent : (sta.has-hover ? AppTheme.list_hover : transparent);
                                 sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
-                                Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
+                                HorizontalBox {
+                                    padding-left: 16px; padding-right: 16px;
+                                    Text { text: setting; vertical-alignment: center; font-weight: 700; }
+                                }
                             }
                         }
                     }
