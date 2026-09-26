@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox, Palette } from "std-widgets.slint";
 
 export struct TransferQueueItem {
     name: string,
@@ -90,6 +90,10 @@ export component MainWindow inherits Window {
     // Settings States
     property <int> selected_setting_idx: 0;
 
+    init => {
+        Palette.accent-background = #b94616;
+    }
+
     TabWidget {
         current-index: root.active_tab;
 
@@ -103,7 +107,7 @@ export component MainWindow inherits Window {
                     ListView {
                         for item[idx] in root.connections : Rectangle {
                             height: 40px;
-                            background: root.selected_connection_idx == idx ? #c45b23 : (touch.has-hover ? #333 : transparent);
+                            background: root.selected_connection_idx == idx ? #b94616 : (touch.has-hover ? #333 : transparent);
                             touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
                             HorizontalBox {
                                 Text { text: item.name; vertical-alignment: center; }
@@ -271,7 +275,7 @@ export component MainWindow inherits Window {
                                 ListView {
                                     for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
                                         height: 30px;
-                                        background: root.selected_session_idx == idx ? #c45b23 : (ta.has-hover ? #333 : transparent);
+                                        background: root.selected_session_idx == idx ? #b94616 : (ta.has-hover ? #333 : transparent);
                                         ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
                                         Text { text: session; x: 10px; vertical-alignment: center; }
                                     }
@@ -328,7 +332,7 @@ export component MainWindow inherits Window {
                     ListView {
                         for setting[idx] in ["Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
                             height: 40px;
-                            background: root.selected_setting_idx == idx ? #c45b23 : (sta.has-hover ? #333 : transparent);
+                            background: root.selected_setting_idx == idx ? #b94616 : (sta.has-hover ? #333 : transparent);
                             sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
                             Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
                         }
@@ -402,7 +406,7 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Github Repository:"; font-weight: 700; }
-                        Text { text: "https://github.com/TheInfoMoose/ST_Rust_Age.git"; color: #c45b23; }
+                        Text { text: "https://github.com/TheInfoMoose/ST_Rust_Age.git"; color: #b94616; }
                         
                         Rectangle { height: 20px; }
                         
