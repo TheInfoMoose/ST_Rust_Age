@@ -1,0 +1,12 @@
+[package]
+name = "simply-transfer-crypto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.23.1"
+hex = "0.4.3"
+keyring = "4.2.0"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+zeroize = "1.9.0"

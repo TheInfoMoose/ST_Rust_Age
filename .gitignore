@@ -1,0 +1,46 @@
+## Visual Studio & IDE Caches
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Build Results & Artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+publish/
+dist/
+
+## Testing & Code Coverage
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+## Sensitive Local Files & Keys
+profiles.json
+*.id_rsa
+*.id_ed25519
+*.pem
+*.key
+*.conf
+prerequisites-report.txt
+dest-prerequisites-report.txt
+*-report.txt
+*-report.log
+
+## OS Generated Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+## Rust Artifacts
+/target/
+

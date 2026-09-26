@@ -1,0 +1,184 @@
+use std::sync::Arc;
+use simply_transfer_core::engine::{TransferEngine, TransferEvent, FileTransferStatus};
+use simply_transfer_core::ssh::MockSshClient;
+use simply_transfer_snapshots::FallbackSnapshotDriver;
+use tokio::sync::mpsc;
+use std::path::PathBuf;
+use slint::Model;
+slint::include_modules!();
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
+    let ui = MainWindow::new()?;
+
+    let ui_handle = ui.as_weak();
+
+    ui.on_start_transfer(move |src, dest| {
+        let ui_handle = ui_handle.clone();
+
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_active_tab(1);
+        }
+        
+        tokio::spawn(async move {
+            let (tx, mut rx) = mpsc::channel(100);
+            
+            let engine = TransferEngine::new(
+                PathBuf::from(src.as_str()),
+                dest.to_string(),
+                tx,
+                Arc::new(MockSshClient::new()),
+                Arc::new(FallbackSnapshotDriver),
+            );
+
+            let (batch_tx, mut batch_rx) = mpsc::channel(10000);
+            
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    batch_tx.send(event).await.ok();
+                }
+            });
+
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                let mut buffer = Vec::with_capacity(5000);
+
+                let mut local_t_q = Vec::new();
+                let mut local_c_q = Vec::new();
+                let mut phase_txt = "Live Transfer Queue".to_string();
+                let mut status_txt = "Completed: 0 / 0 files".to_string();
+
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            if buffer.is_empty() {
+                                continue;
+                            }
+
+                            let events = std::mem::replace(&mut buffer, Vec::with_capacity(5000));
+                            
+                            for event in events {
+                                match event {
+                                    TransferEvent::PhaseChanged(phase, name) => {
+                                        phase_txt = format!("Phase {}: {}", phase, name);
+                                    }
+                                    TransferEvent::FileStatusChanged(file, status) => {
+                                        match status {
+                                            FileTransferStatus::Transferring { progress_bytes, total_bytes } => {
+                                                let progress = if total_bytes > 0 { progress_bytes as f32 / total_bytes as f32 } else { 0.0 };
+                                                local_t_q = vec![TransferQueueItem {
+                                                    name: file.into(),
+                                                    size: format!("{} bytes", total_bytes).into(),
+                                                    progress,
+                                                }];
+                                            }
+                                            FileTransferStatus::Completed => {
+                                                local_c_q.push(CompletedItem {
+                                                    name: file.into(),
+                                                    status: "Completed".into(),
+                                                    status_color: slint::Color::from_rgb_u8(200, 200, 50),
+                                                });
+                                            }
+                                            FileTransferStatus::Validated => {
+                                                local_c_q.push(CompletedItem {
+                                                    name: file.into(),
+                                                    status: "Validated".into(),
+                                                    status_color: slint::Color::from_rgb_u8(50, 200, 50),
+                                                });
+                                            }
+                                            FileTransferStatus::Failed(err) => {
+                                                local_c_q.push(CompletedItem {
+                                                    name: file.into(),
+                                                    status: format!("Failed: {}", err).into(),
+                                                    status_color: slint::Color::from_rgb_u8(200, 50, 50),
+                                                });
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    TransferEvent::TransferComplete { successful, failed } => {
+                                        status_txt = format!("Completed: {} Success, {} Failed", successful, failed);
+                                        phase_txt = "Transfer Complete".to_string();
+                                        local_t_q.clear();
+                                    }
+                                    TransferEvent::TransferFailed(err) => {
+                                        status_txt = format!("Transfer Aborted: {}", err);
+                                        local_t_q.clear();
+                                    }
+                                }
+                            }
+
+                            let ui_handle = ui_handle.clone();
+                            let clone_t_q = local_t_q.clone();
+                            let clone_c_q = local_c_q.clone();
+                            let clone_phase = phase_txt.clone();
+                            let clone_status = status_txt.clone();
+
+                            slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_handle.upgrade() {
+                                    let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
+                                    ui.set_transfer_queue(t_model.into());
+
+                                    let c_model = std::rc::Rc::new(slint::VecModel::from(clone_c_q));
+                                    ui.set_completed_queue(c_model.into());
+
+                                    ui.set_phase_text(clone_phase.into());
+                                    ui.set_overall_status(clone_status.into());
+                                }
+                            }).unwrap();
+                        }
+                        n = batch_rx.recv_many(&mut buffer, 5000) => {
+                            if n == 0 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+
+            if let Err(e) = engine.execute().await {
+                tracing::error!("Engine execution failed: {:?}", e);
+            }
+        });
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_commit_connection(move |new_conn| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            conns.push(new_conn);
+            let model = std::rc::Rc::new(slint::VecModel::from(conns));
+            ui.set_connections(model.into());
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_browse_source(move || {
+        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_source_path(path.to_string_lossy().to_string().into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_browse_destination(move || {
+        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_destination_path(path.to_string_lossy().to_string().into());
+            }
+        }
+    });
+
+    ui.on_popout_session(move || {
+        let popout = SessionPopout::new().unwrap();
+        popout.show().unwrap();
+        Box::leak(Box::new(popout));
+    });
+
+    ui.run()?;
+
+    Ok(())
+}

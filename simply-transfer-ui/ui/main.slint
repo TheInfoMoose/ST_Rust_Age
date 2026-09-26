@@ -1,0 +1,423 @@
+import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox } from "std-widgets.slint";
+
+export struct TransferQueueItem {
+    name: string,
+    size: string,
+    progress: float,
+}
+
+export struct CompletedItem {
+    name: string,
+    status: string,
+    status_color: color,
+}
+
+export struct ConnectionItem {
+    name: string,
+    host: string,
+    state: string,
+    transfer_rate: string,
+    duration: string,
+    eta: string,
+    transfer_type: string,
+    token: string,
+}
+
+export component SessionPopout inherits Window {
+    title: "Session Monitor";
+    width: 600px;
+    height: 400px;
+
+    in property <[TransferQueueItem]> transfer_queue;
+    in property <string> phase_text: "Live Transfer Queue";
+
+    VerticalBox {
+        Text { text: root.phase_text; font-weight: 700; font-size: 16px; }
+        ListView {
+            for file in root.transfer_queue : HorizontalBox {
+                Text { text: file.name; }
+                Text { text: file.size; }
+                ProgressIndicator { progress: file.progress; }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Simply Transfer v2";
+    width: 1000px;
+    height: 750px;
+
+    // Callbacks for Rust backend
+    callback start_transfer(string, string);
+    callback add_connection();
+    callback commit_connection(ConnectionItem);
+    callback copy_token();
+    callback generate_key();
+    callback remove_key();
+    callback pause_transfer();
+    callback cancel_transfer();
+    callback popout_session();
+    
+    // File browsing callbacks
+    callback browse_source();
+    callback browse_destination();
+    
+    // Properties updated by backend
+    in property <int> active_tab: 0;
+    in property <[TransferQueueItem]> transfer_queue;
+    in property <[CompletedItem]> completed_queue;
+    in property <string> overall_status: "Completed: 0 / 0 files";
+    in property <string> phase_text: "Live Transfer Queue";
+    
+    // Dashboard States
+    in-out property <[ConnectionItem]> connections: [
+        { name: "Production DB", host: "192.168.1.100:2222", state: "Connected", transfer_rate: "45 MB/s", duration: "00:15:23", eta: "00:05:10", transfer_type: "Continuous Sync (1hr)", token: "st:MTkyLjE2OC4xLjEwMHwyMjIyfHNzaC1lZDI1NTE5IEFBQUFDMw" },
+        { name: "Backup Server", host: "10.0.0.50:22", state: "Idle", transfer_rate: "0 MB/s", duration: "-", eta: "-", transfer_type: "Single Transfer", token: "st:MTAuMC4wLjUwfDIyfHNzaC1lZDI1NTE5IEFCQ0RFRg" }
+    ];
+    property <int> selected_connection_idx: 0;
+    property <bool> is_editing_connection: false;
+    property <bool> show_key: false;
+
+    // Transfer Setup States
+    property <string> transfer_type_val: "Single Transfer";
+    in-out property <string> source_path: "";
+    in-out property <string> destination_path: "";
+
+    // Active Transfers States
+    property <int> selected_session_idx: 0;
+
+    // Settings States
+    property <int> selected_setting_idx: 0;
+
+    TabWidget {
+        current-index: root.active_tab;
+
+        Tab {
+            title: "Dashboard";
+            HorizontalBox {
+                // Left Column: Active Connections
+                VerticalBox {
+                    width: 300px;
+                    Text { text: "Active Connections"; font-weight: 700; }
+                    ListView {
+                        for item[idx] in root.connections : Rectangle {
+                            height: 40px;
+                            background: root.selected_connection_idx == idx ? #4a90e2 : (touch.has-hover ? #333 : transparent);
+                            touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
+                            HorizontalBox {
+                                Text { text: item.name; vertical-alignment: center; }
+                                Text { text: item.state; vertical-alignment: center; }
+                                Text { text: item.transfer_rate; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                // Right Column: Connection Details
+                VerticalBox {
+                    HorizontalBox {
+                        alignment: end;
+                        Button {
+                            text: "+";
+                            clicked => { 
+                                root.is_editing_connection = true; 
+                                root.add_connection(); 
+                            }
+                        }
+                    }
+                    Text { text: "Connection Details"; font-weight: 700; font-size: 18px; }
+                    
+                    if !root.is_editing_connection && root.connections.length > 0: VerticalBox {
+                        spacing: 8px;
+                        Text { text: "Name: " + root.connections[root.selected_connection_idx].name; }
+                        Text { text: "Host: " + root.connections[root.selected_connection_idx].host; }
+                        Text { text: "State: " + root.connections[root.selected_connection_idx].state; }
+                        Text { text: "Transfer Rate: " + root.connections[root.selected_connection_idx].transfer_rate; }
+                        Text { text: "Duration: " + root.connections[root.selected_connection_idx].duration; }
+                        Text { text: "Estimated Completion: " + root.connections[root.selected_connection_idx].eta; }
+                        Text { text: "Type of Transfer: " + root.connections[root.selected_connection_idx].transfer_type; }
+                        
+                        HorizontalBox {
+                            Text { text: "Key:"; vertical-alignment: center; }
+                            Text { text: root.show_key ? root.connections[root.selected_connection_idx].token : "*******************"; vertical-alignment: center; }
+                            Button { text: root.show_key ? "Hide" : "Show"; clicked => { root.show_key = !root.show_key; } }
+                        }
+                    }
+
+                    if root.is_editing_connection: VerticalBox {
+                        spacing: 8px;
+                        HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } edit_name := LineEdit { placeholder-text: "Connection Name"; } }
+                        HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
+                        HorizontalBox { 
+                            Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
+                            edit_key := LineEdit { placeholder-text: "Paste Token Here"; }
+                            Button { text: "Generate"; clicked => { root.generate_key(); } }
+                            Button { text: "Remove"; clicked => { root.remove_key(); } }
+                        }
+                        
+                        HorizontalBox {
+                            alignment: end;
+                            Button { 
+                                text: "Commit"; 
+                                primary: true; 
+                                clicked => { 
+                                    root.is_editing_connection = false; 
+                                    root.commit_connection({
+                                        name: edit_name.text,
+                                        host: edit_host.text,
+                                        state: "Idle",
+                                        transfer_rate: "-",
+                                        duration: "-",
+                                        eta: "-",
+                                        transfer_type: "Single Transfer",
+                                        token: edit_key.text,
+                                    }); 
+                                } 
+                            }
+                        }
+                    }
+
+                    Rectangle { vertical-stretch: 1; }
+
+                    if !root.is_editing_connection && root.connections.length > 0: HorizontalBox {
+                        Text { text: "Destination Token:"; vertical-alignment: center; }
+                        LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
+                        Button { text: "Copy"; clicked => { root.copy_token(); } }
+                    }
+                    if !root.is_editing_connection && root.connections.length > 0: Button { 
+                        text: "Edit Connection"; 
+                        clicked => { root.is_editing_connection = true; } 
+                    }
+                }
+            }
+        }
+
+        Tab {
+            title: "Transfer";
+            VerticalBox {
+                TabWidget {
+                    Tab {
+                        title: "Transfer Setup";
+                        VerticalBox {
+                            spacing: 12px;
+                            HorizontalBox {
+                                Text { text: "Source Path:"; vertical-alignment: center; }
+                                LineEdit { text: root.source_path; placeholder-text: "/path/to/source"; edited(text) => { root.source_path = text; } }
+                                Button { text: "Browse"; clicked => { root.browse_source(); } }
+
+                                Rectangle { width: 20px; }
+
+                                Text { text: "Destination Path:"; vertical-alignment: center; }
+                                LineEdit { text: root.destination_path; placeholder-text: "/path/to/destination"; edited(text) => { root.destination_path = text; } }
+                                Button { text: "Browse"; clicked => { root.browse_destination(); } }
+                            }
+                            Button { text: "+ Add Row"; }
+
+                            Rectangle { height: 1px; background: gray; }
+
+                            HorizontalBox {
+                                Text { text: "Transfer Type:"; vertical-alignment: center; width: 120px; }
+                                ComboBox {
+                                    model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
+                                    current-value: root.transfer_type_val;
+                                    selected(val) => { root.transfer_type_val = val; }
+                                }
+                            }
+                            
+                            if root.transfer_type_val == "Continuous Sync": HorizontalBox {
+                                Text { text: "Sync Frequency:"; vertical-alignment: center; width: 120px; }
+                                ComboBox {
+                                    model: ["1min", "5min", "15min", "30min", "1hr", "2hr", "4hr", "6hr", "8hr", "12hr", "24hr", "48hr", "72hr"];
+                                    current-value: "1hr";
+                                }
+                            }
+
+                            if root.transfer_type_val == "Scheduled Transfer": VerticalBox {
+                                spacing: 8px;
+                                HorizontalBox {
+                                    Text { text: "Active Days:"; vertical-alignment: center; width: 120px; }
+                                    CheckBox { text: "M"; } CheckBox { text: "T"; } CheckBox { text: "W"; } CheckBox { text: "Th"; } CheckBox { text: "F"; } CheckBox { text: "Sa"; } CheckBox { text: "Su"; }
+                                }
+                                HorizontalBox {
+                                    Text { text: "Start Permitted:"; vertical-alignment: center; width: 120px; }
+                                    ComboBox { model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"]; }
+                                    Rectangle { width: 20px; }
+                                    Text { text: "Finish Permitted:"; vertical-alignment: center; }
+                                    ComboBox { model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"]; }
+                                }
+                            }
+
+                            Rectangle { vertical-stretch: 1; }
+
+                            HorizontalBox {
+                                alignment: end;
+                                Button { text: "Commit"; }
+                                Button { 
+                                    text: "Commit & Start"; 
+                                    primary: true;
+                                    clicked => { root.start_transfer(root.source_path, root.destination_path); }
+                                }
+                            }
+                        }
+                    }
+                    Tab {
+                        title: "Active Transfers";
+                        HorizontalBox {
+                            // Left list
+                            VerticalBox {
+                                width: 250px;
+                                Text { text: "Active Sessions"; font-weight: 700; }
+                                ListView {
+                                    for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
+                                        height: 30px;
+                                        background: root.selected_session_idx == idx ? #4a90e2 : (ta.has-hover ? #333 : transparent);
+                                        ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
+                                        Text { text: session; x: 10px; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                            // Right details
+                            VerticalBox {
+                                HorizontalBox {
+                                    alignment: end;
+                                    Button { text: "↗"; clicked => { root.popout_session(); } }
+                                }
+                                Text { text: root.phase_text; font-weight: 700; }
+                                ListView {
+                                    height: 150px;
+                                    for file in root.transfer_queue : HorizontalBox {
+                                        Text { text: file.name; }
+                                        Text { text: file.size; }
+                                        ProgressIndicator { progress: file.progress; }
+                                    }
+                                }
+                                Text { text: "Upload: 45 MB/s | Download: 0 MB/s | Latency: 12ms"; }
+                                
+                                Rectangle { height: 10px; }
+                                Rectangle { height: 1px; background: gray; }
+                                Rectangle { height: 10px; }
+
+                                Text { text: "Integrity Validation"; font-weight: 700; }
+                                ListView {
+                                    height: 150px;
+                                    for file in root.completed_queue : HorizontalBox {
+                                        Text { text: file.name; }
+                                        Text { text: file.status; color: file.status_color; }
+                                    }
+                                }
+                                Text { text: root.overall_status; }
+
+                                HorizontalBox {
+                                    Button { text: "Pause Transfer"; clicked => { root.pause_transfer(); } }
+                                    Button { text: "Cancel Transfer"; clicked => { root.cancel_transfer(); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Tab {
+            title: "Settings";
+            HorizontalBox {
+                // Left Column
+                VerticalBox {
+                    width: 250px;
+                    ListView {
+                        for setting[idx] in ["Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
+                            height: 40px;
+                            background: root.selected_setting_idx == idx ? #4a90e2 : (sta.has-hover ? #333 : transparent);
+                            sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
+                            Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
+                        }
+                    }
+                }
+
+                // Right Column
+                VerticalBox {
+                    padding-left: 20px;
+                    
+                    if root.selected_setting_idx == 0: VerticalBox {
+                        Text { text: "Transfer Settings"; font-size: 20px; font-weight: 700; }
+                        Rectangle { height: 20px; }
+                        
+                        Text { text: "Bandwidth Allocation (MB/s):"; font-weight: 700; }
+                        Text { text: "Connection: GbE | Max Throughput: ~125 MB/s"; font-size: 11px; color: gray; }
+                        Rectangle { height: 5px; }
+                        LineEdit { text: "0 (Unlimited)"; }
+                        
+                        Rectangle { height: 20px; }
+                        
+                        Text { text: "Max Threads:"; font-weight: 700; }
+                        Text { text: "Processor: 8 Physical, 16 Virtual Cores | GPU: 1024 CUDA Cores"; font-size: 11px; color: gray; }
+                        Rectangle { height: 5px; }
+                        LineEdit { text: "16"; }
+
+                        Rectangle { height: 20px; }
+
+                        Text { text: "Max Memory (MB):"; font-weight: 700; }
+                        Text { text: "RAM: 32 GB Available | Minimum Required: 512 MB"; font-size: 11px; color: gray; }
+                        Rectangle { height: 5px; }
+                        LineEdit { text: "4096"; }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    if root.selected_setting_idx == 1: VerticalBox {
+                        Text { text: "Notifications"; font-size: 20px; font-weight: 700; }
+                        Rectangle { height: 20px; }
+                        
+                        HorizontalBox {
+                            Text { text: "Notification Type:"; vertical-alignment: center; }
+                            ComboBox { model: ["OS Pop-up", "Email", "None"]; }
+                        }
+                        
+                        CheckBox { text: "Notify on transfer completion"; checked: true; }
+                        CheckBox { text: "Notify on validation failure"; checked: true; }
+                        
+                        Rectangle { height: 10px; }
+                        Button { text: "Request OS Permissions"; }
+                        Rectangle { height: 5px; }
+                        Text { text: "Note: If permissions are denied by the OS, notifications will safely fall back to None."; font-size: 11px; color: gray; }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    if root.selected_setting_idx == 2: VerticalBox {
+                        Text { text: "Import/Export Profiles"; font-size: 20px; font-weight: 700; }
+                        Rectangle { height: 20px; }
+                        
+                        HorizontalBox {
+                            Button { text: "Import Profile (.json)"; }
+                            Button { text: "Export Profile (.json)"; }
+                        }
+                        
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    if root.selected_setting_idx == 3: VerticalBox {
+                        Text { text: "Help & Support"; font-size: 20px; font-weight: 700; }
+                        Rectangle { height: 20px; }
+                        
+                        Text { text: "Github Repository:"; font-weight: 700; }
+                        Text { text: "https://github.com/TheInfoMoose/Simply_Transfer.git"; color: #4a90e2; }
+                        
+                        Rectangle { height: 20px; }
+                        
+                        Text { text: "Troubleshooting:"; font-weight: 700; }
+                        Text { text: "• If connections fail, verify firewall rules for SSH (port 22).\n• Ensure destination tokens are copied completely.\n• OOM crashes are prevented via stream buffering."; wrap: word-wrap; }
+                        
+                        Rectangle { height: 20px; }
+
+                        Text { text: "FAQs:"; font-weight: 700; }
+                        Text { text: "Q: Can I transfer active databases?\nA: Yes, Windows VSS and Linux LVM snapshots automatically handle locked files."; wrap: word-wrap; }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+}

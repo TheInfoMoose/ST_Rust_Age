@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "simply-transfer-core",
+    "simply-transfer-ui",
+    "simply-transfer-snapshots",
+    "simply-transfer-crypto"
+]
+resolver = "2"
