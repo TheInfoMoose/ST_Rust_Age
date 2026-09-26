@@ -148,6 +148,17 @@ export component MainWindow inherits Window {
 
     // Settings States
     property <int> selected_setting_idx: 0;
+    property <string> current_theme: "Match System";
+
+    changed current_theme => {
+        if (root.current_theme == "Dark") {
+            Palette.color-scheme = ColorScheme.dark;
+        } else if (root.current_theme == "Light") {
+            Palette.color-scheme = ColorScheme.light;
+        } else {
+            Palette.color-scheme = ColorScheme.unknown;
+        }
+    }
 
     TabWidget {
         current-index: root.active_tab;
@@ -383,7 +394,7 @@ export component MainWindow inherits Window {
                 VerticalBox {
                     width: 250px;
                     ListView {
-                        for setting[idx] in ["Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
+                        for setting[idx] in ["Display", "Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
                             height: 40px;
                             background: root.selected_setting_idx == idx ? #b94616 : (sta.has-hover ? #333 : transparent);
                             sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
@@ -397,6 +408,40 @@ export component MainWindow inherits Window {
                     padding-left: 20px;
                     
                     if root.selected_setting_idx == 0: VerticalBox {
+                        Text { text: "Display Settings"; font-size: 20px; font-weight: 700; }
+                        Rectangle { height: 20px; }
+                        
+                        HorizontalBox {
+                            spacing: 20px;
+                            VerticalBox {
+                                Image { source: @image-url("../../assets/theme_dark.png"); width: 200px; height: 120px; }
+                                RustCheckBox { 
+                                    text: "Dark Mode"; 
+                                    checked: root.current_theme == "Dark"; 
+                                    toggled => { root.current_theme = "Dark"; } 
+                                }
+                            }
+                            VerticalBox {
+                                Image { source: @image-url("../../assets/theme_light.png"); width: 200px; height: 120px; }
+                                RustCheckBox { 
+                                    text: "Light Mode"; 
+                                    checked: root.current_theme == "Light"; 
+                                    toggled => { root.current_theme = "Light"; } 
+                                }
+                            }
+                            VerticalBox {
+                                Image { source: @image-url("../../assets/theme_system.png"); width: 200px; height: 120px; }
+                                RustCheckBox { 
+                                    text: "Match System"; 
+                                    checked: root.current_theme == "Match System"; 
+                                    toggled => { root.current_theme = "Match System"; } 
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    if root.selected_setting_idx == 1: VerticalBox {
                         Text { text: "Transfer Settings"; font-size: 20px; font-weight: 700; }
                         Rectangle { height: 20px; }
                         
@@ -422,7 +467,7 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    if root.selected_setting_idx == 1: VerticalBox {
+                    if root.selected_setting_idx == 2: VerticalBox {
                         Text { text: "Notifications"; font-size: 20px; font-weight: 700; }
                         Rectangle { height: 20px; }
                         
@@ -442,7 +487,7 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    if root.selected_setting_idx == 2: VerticalBox {
+                    if root.selected_setting_idx == 3: VerticalBox {
                         Text { text: "Import/Export Profiles"; font-size: 20px; font-weight: 700; }
                         Rectangle { height: 20px; }
                         
@@ -454,7 +499,7 @@ export component MainWindow inherits Window {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    if root.selected_setting_idx == 3: VerticalBox {
+                    if root.selected_setting_idx == 4: VerticalBox {
                         Text { text: "Help & Support"; font-size: 20px; font-weight: 700; }
                         Rectangle { height: 20px; }
                         
