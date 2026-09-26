@@ -3,6 +3,7 @@
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
 [![GUI: Slint](https://img.shields.io/badge/GUI-Slint-blue)](https://slint.dev/)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![Rust CI](https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/rust.yml)
 
 A complete Rust rewrite of Simply Transfer. This modular, high-performance file transfer utility features cross-platform snapshot support, secure cryptographic validation, SSH capabilities, and a sleek GUI. Designed from the ground up for speed, reliability, and security.
 
