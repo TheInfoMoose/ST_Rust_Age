@@ -345,13 +345,25 @@ export component MainWindow inherits Window {
                     }
 
                     if root.is_adding_connection: VerticalBox {
-                        Text { text: "Add Connection"; font-weight: 700; font-size: 18px; }
-                        Rectangle { height: 10px; }
                         HorizontalBox {
-                            alignment: start;
-                            spacing: 10px;
-                            Button { text: "New"; clicked => { root.add_connection_tab = 0; } }
-                            Button { text: "Remote"; clicked => { root.add_connection_tab = 1; } }
+                            alignment: space-between;
+                            HorizontalBox {
+                                alignment: start;
+                                spacing: 0px;
+                                Rectangle {
+                                    width: 80px; height: 30px;
+                                    background: root.add_connection_tab == 0 ? AppTheme.list_hover : transparent;
+                                    Text { text: "New"; horizontal-alignment: center; vertical-alignment: center; font-weight: root.add_connection_tab == 0 ? 700 : 500; }
+                                    TouchArea { clicked => { root.add_connection_tab = 0; } }
+                                }
+                                Rectangle {
+                                    width: 80px; height: 30px;
+                                    background: root.add_connection_tab == 1 ? AppTheme.list_hover : transparent;
+                                    Text { text: "Remote"; horizontal-alignment: center; vertical-alignment: center; font-weight: root.add_connection_tab == 1 ? 700 : 500; }
+                                    TouchArea { clicked => { root.add_connection_tab = 1; } }
+                                }
+                            }
+                            Text { text: "Add Connection"; font-weight: 700; font-size: 18px; vertical-alignment: center; }
                         }
                         Rectangle { height: 20px; }
 
@@ -363,7 +375,7 @@ export component MainWindow inherits Window {
                             HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                                new_key := LineEdit { placeholder-text: "Paste Token Here"; }
+                                new_key := LineEdit { placeholder-text: "Click Generate to create key"; }
                                 Button { text: "Generate"; clicked => { root.generate_key(); } }
                             }
                             Rectangle { vertical-stretch: 1; }
@@ -388,6 +400,13 @@ export component MainWindow inherits Window {
                             HorizontalBox { 
                                 Text { text: "Token:"; width: 100px; vertical-alignment: center; } 
                                 remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
+                                Button { 
+                                    text: "Verify"; 
+                                    clicked => { 
+                                        root.remote_verification_status = "Verifying...";
+                                        root.verify_remote_token(remote_token.text); 
+                                    } 
+                                }
                             }
                             if root.remote_verification_status != "": Text {
                                 text: "Status: " + root.remote_verification_status;
@@ -398,13 +417,6 @@ export component MainWindow inherits Window {
                                 alignment: end;
                                 spacing: 10px;
                                 Button { text: "Cancel"; clicked => { root.is_adding_connection = false; } }
-                                Button { 
-                                    text: "Verify"; 
-                                    clicked => { 
-                                        root.remote_verification_status = "Verifying...";
-                                        root.verify_remote_token(remote_token.text); 
-                                    } 
-                                }
                                 Rectangle {
                                     width: max(100px, btn_txt.preferred-width + 24px);
                                     height: 30px;
