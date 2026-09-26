@@ -24,19 +24,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_handle = ui.as_weak();
 
-    ui.on_start_transfer(move |src, dest| {
+    ui.on_start_transfer(move || {
         let ui_handle = ui_handle.clone();
 
-        if let Some(ui) = ui_handle.upgrade() {
+        let (src, dest) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
-        }
+            let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            if mappings.is_empty() { return; }
+            (mappings[0].source.to_string(), mappings[0].destination.to_string())
+        } else {
+            return;
+        };
 
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
 
             let engine = TransferEngine::new(
-                PathBuf::from(src.as_str()),
-                dest.to_string(),
+                PathBuf::from(src),
+                dest,
                 tx,
                 Arc::new(MockSshClient::new()),
                 Arc::new(FallbackSnapshotDriver),
@@ -164,20 +169,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
-    ui.on_browse_source(move || {
+    ui.on_browse_source(move |idx| {
         if let Some(path) = rfd::FileDialog::new().pick_folder()
             && let Some(ui) = ui_weak.upgrade()
         {
-            ui.set_source_path(path.to_string_lossy().to_string().into());
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let idx = idx as usize;
+            if idx < mappings.len() {
+                mappings[idx].source = path.to_string_lossy().to_string().into();
+                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
         }
     });
 
     let ui_weak = ui.as_weak();
-    ui.on_browse_destination(move || {
+    ui.on_browse_destination(move |idx| {
         if let Some(path) = rfd::FileDialog::new().pick_folder()
             && let Some(ui) = ui_weak.upgrade()
         {
-            ui.set_destination_path(path.to_string_lossy().to_string().into());
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let idx = idx as usize;
+            if idx < mappings.len() {
+                mappings[idx].destination = path.to_string_lossy().to_string().into();
+                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_add_mapping(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            mappings.push(DirectoryMapping { source: "".into(), destination: "".into() });
+            ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_remove_mapping(move |idx| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let idx = idx as usize;
+            if idx < mappings.len() {
+                mappings.remove(idx);
+                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_update_mapping_source(move |idx, text| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let idx = idx as usize;
+            if idx < mappings.len() {
+                mappings[idx].source = text.into();
+                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_update_mapping_destination(move |idx, text| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let idx = idx as usize;
+            if idx < mappings.len() {
+                mappings[idx].destination = text.into();
+                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
         }
     });
 
