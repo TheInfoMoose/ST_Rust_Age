@@ -177,6 +177,9 @@ export component MainWindow inherits Window {
     callback browse_source();
     callback browse_destination();
     
+    // System Info States
+    in property <string> os_processor_info: "Processor: Unknown";
+    in property <string> os_memory_info: "RAM: Unknown";
     // Properties updated by backend
     in property <int> active_tab: 0;
     in property <[TransferQueueItem]> transfer_queue: [];
@@ -656,14 +659,14 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Max Threads:"; font-weight: 700; }
-                        Text { text: "Processor: 8 Physical, 16 Virtual Cores | GPU: 1024 CUDA Cores"; font-size: 11px; color: gray; }
+                        Text { text: root.os_processor_info; font-size: 11px; color: gray; }
                         Rectangle { height: 5px; }
                         LineEdit { text: "16"; }
 
                         Rectangle { height: 20px; }
 
                         Text { text: "Max Memory (MB):"; font-weight: 700; }
-                        Text { text: "RAM: 32 GB Available | Minimum Required: 512 MB"; font-size: 11px; color: gray; }
+                        Text { text: root.os_memory_info + " | Minimum Required: 512 MB"; font-size: 11px; color: gray; }
                         Rectangle { height: 5px; }
                         LineEdit { text: "4096"; }
 

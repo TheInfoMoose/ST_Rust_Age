@@ -9,6 +9,7 @@ simply-transfer-core = { version = "0.1.0", path = "../simply-transfer-core" }
 simply-transfer-crypto = { version = "0.1.0", path = "../simply-transfer-crypto" }
 simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }
 slint = "1.18.1"
+sysinfo = "0.39.6"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"

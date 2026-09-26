@@ -14,6 +14,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = MainWindow::new()?;
 
+    // Fetch system info and push to UI
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_all();
+    let cpu_count = sys.cpus().len();
+    let memory_mb = sys.total_memory() / 1024 / 1024;
+    ui.set_os_processor_info(format!("Processor: {} Logical Cores Detected", cpu_count).into());
+    ui.set_os_memory_info(format!("RAM: {} MB Available", memory_mb).into());
+
     let ui_handle = ui.as_weak();
 
     ui.on_start_transfer(move |src, dest| {
