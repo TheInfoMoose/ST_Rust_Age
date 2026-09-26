@@ -120,6 +120,7 @@ async fn test_extreme_10000_files() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Takes 20+ minutes and requires 100GB sparse file support (fails on Windows CI)"]
 async fn test_extreme_100gb_file() {
     let dir = tempdir().unwrap();
     println!("Generating 100 GB sparse file...");
