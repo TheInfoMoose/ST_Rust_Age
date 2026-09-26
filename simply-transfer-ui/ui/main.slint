@@ -23,11 +23,63 @@ export struct ConnectionItem {
     token: string,
 }
 
+export global AppTheme {
+    in-out property <bool> force_light: false;
+    out property <color> accent: force_light ? #CB693F : #b94616;
+    out property <color> accent_hover: force_light ? #e07b50 : #c95b28;
+    out property <color> accent_pressed: force_light ? #b0552b : #943812;
+    out property <color> border: force_light ? #E0E0E0 : #333333;
+    out property <color> list_hover: force_light ? #E0E0E0 : #333333;
+    out property <color> window_bg: force_light ? #F5F5F5 : Palette.background;
+}
+
+component StyledBox inherits Rectangle {
+    border-width: 1px;
+    border-color: AppTheme.border;
+    border-radius: 6px;
+}
+
+component RustRadioButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked: false;
+    callback clicked();
+    height: 20px;
+
+    HorizontalBox {
+        spacing: 8px;
+        padding: 0;
+        alignment: start;
+
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-width: 2px;
+            border-radius: 9px;
+            border-color: root.checked ? AppTheme.accent : gray;
+            background: transparent;
+            
+            if root.checked: Rectangle {
+                width: 10px; height: 10px;
+                x: 4px; y: 4px;
+                border-radius: 5px;
+                background: AppTheme.accent;
+            }
+        }
+        Text { 
+            text: root.text; 
+            vertical-alignment: center; 
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 component RustButton inherits Rectangle {
     in property <string> text;
     callback clicked <=> touch.clicked;
     
-    background: touch.pressed ? #943812 : (touch.has-hover ? #c95b28 : #b94616);
+    background: touch.pressed ? AppTheme.accent_pressed : (touch.has-hover ? AppTheme.accent_hover : AppTheme.accent);
     border-radius: 4px;
     height: 30px;
     min-width: max(100px, txt.preferred-width + 24px);
@@ -58,8 +110,8 @@ component RustCheckBox inherits Rectangle {
             height: 18px;
             border-width: 2px;
             border-radius: 3px;
-            border-color: root.checked ? #b94616 : gray;
-            background: root.checked ? #b94616 : transparent;
+            border-color: root.checked ? AppTheme.accent : gray;
+            background: root.checked ? AppTheme.accent : transparent;
             
             if root.checked: Path {
                 viewbox-width: 14; viewbox-height: 14;
@@ -106,6 +158,7 @@ export component MainWindow inherits Window {
     title: "Simply Transfer v2";
     width: 1000px;
     height: 750px;
+    background: AppTheme.window_bg;
 
     // Callbacks for Rust backend
     callback start_transfer(string, string);
@@ -151,6 +204,7 @@ export component MainWindow inherits Window {
     property <string> current_theme: "Match System";
 
     changed current_theme => {
+        AppTheme.force_light = (root.current_theme == "Light");
         if (root.current_theme == "Dark") {
             Palette.color-scheme = ColorScheme.dark;
         } else if (root.current_theme == "Light") {
@@ -167,25 +221,30 @@ export component MainWindow inherits Window {
             title: "Dashboard";
             HorizontalBox {
                 // Left Column: Active Connections
-                VerticalBox {
-                    width: 300px;
-                    Text { text: "Active Connections"; font-weight: 700; }
-                    ListView {
-                        for item[idx] in root.connections : Rectangle {
-                            height: 40px;
-                            background: root.selected_connection_idx == idx ? #b94616 : (touch.has-hover ? #333 : transparent);
-                            touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
-                            HorizontalBox {
-                                Text { text: item.name; vertical-alignment: center; }
-                                Text { text: item.state; vertical-alignment: center; }
-                                Text { text: item.transfer_rate; vertical-alignment: center; }
+                StyledBox {
+                    VerticalBox {
+                        padding: 15px;
+                        width: 300px;
+                        Text { text: "Active Connections"; font-weight: 700; }
+                        ListView {
+                            for item[idx] in root.connections : Rectangle {
+                                height: 40px;
+                                background: root.selected_connection_idx == idx ? AppTheme.accent : (touch.has-hover ? AppTheme.list_hover : transparent);
+                                touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
+                                HorizontalBox {
+                                    Text { text: item.name; vertical-alignment: center; }
+                                    Text { text: item.state; vertical-alignment: center; }
+                                    Text { text: item.transfer_rate; vertical-alignment: center; }
+                                }
                             }
                         }
                     }
                 }
 
                 // Right Column: Connection Details
-                VerticalBox {
+                StyledBox {
+                    VerticalBox {
+                        padding: 15px;
                     HorizontalBox {
                         alignment: end;
                         Button {
@@ -259,6 +318,7 @@ export component MainWindow inherits Window {
                         clicked => { root.is_editing_connection = true; } 
                     }
                 }
+                }
             }
         }
 
@@ -268,7 +328,9 @@ export component MainWindow inherits Window {
                 TabWidget {
                     Tab {
                         title: "Transfer Setup";
-                        VerticalBox {
+                        StyledBox {
+                            VerticalBox {
+                                padding: 15px;
                             spacing: 12px;
                             HorizontalBox {
                                 Text { text: "Source Path:"; vertical-alignment: center; }
@@ -328,25 +390,31 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                        }
                     }
                     Tab {
                         title: "Active Transfers";
                         HorizontalBox {
                             // Left list
-                            VerticalBox {
-                                width: 250px;
-                                Text { text: "Active Sessions"; font-weight: 700; }
-                                ListView {
-                                    for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
-                                        height: 30px;
-                                        background: root.selected_session_idx == idx ? #b94616 : (ta.has-hover ? #333 : transparent);
-                                        ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
-                                        Text { text: session; x: 10px; vertical-alignment: center; }
+                            StyledBox {
+                                VerticalBox {
+                                    padding: 15px;
+                                    width: 250px;
+                                    Text { text: "Active Sessions"; font-weight: 700; }
+                                    ListView {
+                                        for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
+                                            height: 30px;
+                                            background: root.selected_session_idx == idx ? AppTheme.accent : (ta.has-hover ? AppTheme.list_hover : transparent);
+                                            ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
+                                            Text { text: session; x: 10px; vertical-alignment: center; }
+                                        }
                                     }
                                 }
                             }
                             // Right details
-                            VerticalBox {
+                            StyledBox {
+                                VerticalBox {
+                                    padding: 15px;
                                 HorizontalBox {
                                     alignment: end;
                                     Button { text: "↗"; clicked => { root.popout_session(); } }
@@ -382,6 +450,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                        }
                     }
                 }
             }
@@ -391,21 +460,26 @@ export component MainWindow inherits Window {
             title: "Settings";
             HorizontalBox {
                 // Left Column
-                VerticalBox {
-                    width: 250px;
-                    ListView {
-                        for setting[idx] in ["Display", "Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
-                            height: 40px;
-                            background: root.selected_setting_idx == idx ? #b94616 : (sta.has-hover ? #333 : transparent);
-                            sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
-                            Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
+                StyledBox {
+                    VerticalBox {
+                        padding: 15px;
+                        width: 250px;
+                        ListView {
+                            for setting[idx] in ["Display", "Transfer Settings", "Notifications", "Import/Export", "Help"] : Rectangle {
+                                height: 40px;
+                                background: root.selected_setting_idx == idx ? AppTheme.accent : (sta.has-hover ? AppTheme.list_hover : transparent);
+                                sta := TouchArea { clicked => { root.selected_setting_idx = idx; } }
+                                Text { text: setting; x: 15px; vertical-alignment: center; font-weight: 700; }
+                            }
                         }
                     }
                 }
 
                 // Right Column
-                VerticalBox {
-                    padding-left: 20px;
+                StyledBox {
+                    VerticalBox {
+                        padding: 15px;
+                        padding-left: 20px;
                     
                     if root.selected_setting_idx == 0: VerticalBox {
                         Text { text: "Display Settings"; font-size: 20px; font-weight: 700; }
@@ -415,26 +489,26 @@ export component MainWindow inherits Window {
                             spacing: 20px;
                             VerticalBox {
                                 Image { source: @image-url("../../assets/theme_dark.png"); width: 200px; height: 120px; }
-                                RustCheckBox { 
+                                RustRadioButton { 
                                     text: "Dark Mode"; 
                                     checked: root.current_theme == "Dark"; 
-                                    toggled => { root.current_theme = "Dark"; } 
+                                    clicked => { root.current_theme = "Dark"; } 
                                 }
                             }
                             VerticalBox {
                                 Image { source: @image-url("../../assets/theme_light.png"); width: 200px; height: 120px; }
-                                RustCheckBox { 
+                                RustRadioButton { 
                                     text: "Light Mode"; 
                                     checked: root.current_theme == "Light"; 
-                                    toggled => { root.current_theme = "Light"; } 
+                                    clicked => { root.current_theme = "Light"; } 
                                 }
                             }
                             VerticalBox {
                                 Image { source: @image-url("../../assets/theme_system.png"); width: 200px; height: 120px; }
-                                RustCheckBox { 
+                                RustRadioButton { 
                                     text: "Match System"; 
                                     checked: root.current_theme == "Match System"; 
-                                    toggled => { root.current_theme = "Match System"; } 
+                                    clicked => { root.current_theme = "Match System"; } 
                                 }
                             }
                         }
@@ -504,7 +578,7 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Github Repository:"; font-weight: 700; }
-                        Text { text: "https://github.com/TheInfoMoose/ST_Rust_Age.git"; color: #b94616; }
+                        Text { text: "https://github.com/TheInfoMoose/ST_Rust_Age.git"; color: AppTheme.accent; }
                         
                         Rectangle { height: 20px; }
                         
@@ -517,6 +591,7 @@ export component MainWindow inherits Window {
                         Text { text: "Q: Can I transfer active databases?\nA: Yes, Windows VSS and Linux LVM snapshots automatically handle locked files."; wrap: word-wrap; }
 
                         Rectangle { vertical-stretch: 1; }
+                    }
                     }
                 }
             }
