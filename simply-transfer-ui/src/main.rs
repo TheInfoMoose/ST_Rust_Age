@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_browser_is_source(true);
             ui.set_browser_target_idx(idx);
             
-            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
             let mut start_path = "/".to_string();
             if idx < mappings.len() && !mappings[idx].source.is_empty() {
@@ -215,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_browser_is_source(false);
             ui.set_browser_target_idx(idx);
             
-            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
             let mut start_path = "/".to_string();
             if idx < mappings.len() && !mappings[idx].destination.is_empty() {
