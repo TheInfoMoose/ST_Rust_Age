@@ -23,6 +23,65 @@ export struct ConnectionItem {
     token: string,
 }
 
+component RustButton inherits Rectangle {
+    in property <string> text;
+    callback clicked <=> touch.clicked;
+    
+    background: touch.pressed ? #943812 : (touch.has-hover ? #c95b28 : #b94616);
+    border-radius: 4px;
+    height: 30px;
+    min-width: 100px;
+
+    Text {
+        text: root.text;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-weight: 500;
+    }
+    touch := TouchArea {}
+}
+
+component RustCheckBox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+    height: 20px;
+
+    HorizontalBox {
+        spacing: 8px;
+        padding: 0;
+        alignment: start;
+
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-width: 2px;
+            border-radius: 3px;
+            border-color: root.checked ? #b94616 : gray;
+            background: root.checked ? #b94616 : transparent;
+            
+            if root.checked: Path {
+                viewbox-width: 14; viewbox-height: 14;
+                stroke: white; stroke-width: 2px;
+                MoveTo { x: 3; y: 7; }
+                LineTo { x: 6; y: 10; }
+                LineTo { x: 11; y: 4; }
+            }
+        }
+        Text { 
+            text: root.text; 
+            vertical-alignment: center; 
+        }
+    }
+    touch := TouchArea {
+        clicked => { 
+            root.checked = !root.checked; 
+            root.toggled(root.checked);
+        }
+    }
+}
+
 export component SessionPopout inherits Window {
     title: "Session Monitor";
     width: 600px;
@@ -89,10 +148,6 @@ export component MainWindow inherits Window {
 
     // Settings States
     property <int> selected_setting_idx: 0;
-
-    init => {
-        Palette.accent-background = #b94616;
-    }
 
     TabWidget {
         current-index: root.active_tab;
@@ -162,9 +217,8 @@ export component MainWindow inherits Window {
                         
                         HorizontalBox {
                             alignment: end;
-                            Button { 
+                            RustButton { 
                                 text: "Commit"; 
-                                primary: true; 
                                 clicked => { 
                                     root.is_editing_connection = false; 
                                     root.commit_connection({
@@ -241,7 +295,7 @@ export component MainWindow inherits Window {
                                 spacing: 8px;
                                 HorizontalBox {
                                     Text { text: "Active Days:"; vertical-alignment: center; width: 120px; }
-                                    CheckBox { text: "M"; } CheckBox { text: "T"; } CheckBox { text: "W"; } CheckBox { text: "Th"; } CheckBox { text: "F"; } CheckBox { text: "Sa"; } CheckBox { text: "Su"; }
+                                    RustCheckBox { text: "M"; } RustCheckBox { text: "T"; } RustCheckBox { text: "W"; } RustCheckBox { text: "Th"; } RustCheckBox { text: "F"; } RustCheckBox { text: "Sa"; } RustCheckBox { text: "Su"; }
                                 }
                                 HorizontalBox {
                                     Text { text: "Start Permitted:"; vertical-alignment: center; width: 120px; }
@@ -257,9 +311,8 @@ export component MainWindow inherits Window {
                             HorizontalBox {
                                 alignment: end;
                                 Button { text: "Commit"; }
-                                Button { 
+                                RustButton { 
                                     text: "Commit & Start"; 
-                                    primary: true;
                                     clicked => { root.start_transfer(root.source_path, root.destination_path); }
                                 }
                             }
@@ -378,8 +431,8 @@ export component MainWindow inherits Window {
                             ComboBox { model: ["OS Pop-up", "Email", "None"]; }
                         }
                         
-                        CheckBox { text: "Notify on transfer completion"; checked: true; }
-                        CheckBox { text: "Notify on validation failure"; checked: true; }
+                        RustCheckBox { text: "Notify on transfer completion"; checked: true; }
+                        RustCheckBox { text: "Notify on validation failure"; checked: true; }
                         
                         Rectangle { height: 10px; }
                         Button { text: "Request OS Permissions"; }
