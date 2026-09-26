@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 slint::include_modules!();
 
 #[tokio::main]
+#[rustfmt::skip]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
