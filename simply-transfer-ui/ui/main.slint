@@ -164,6 +164,8 @@ export component MainWindow inherits Window {
     callback start_transfer(string, string);
     callback add_connection();
     callback commit_connection(ConnectionItem);
+    callback delete_connection(int);
+    callback verify_remote_token(string);
     callback copy_token();
     callback generate_key();
     callback remove_key();
@@ -177,18 +179,19 @@ export component MainWindow inherits Window {
     
     // Properties updated by backend
     in property <int> active_tab: 0;
-    in property <[TransferQueueItem]> transfer_queue;
-    in property <[CompletedItem]> completed_queue;
+    in property <[TransferQueueItem]> transfer_queue: [];
+    in property <[CompletedItem]> completed_queue: [];
     in property <string> overall_status: "Completed: 0 / 0 files";
     in property <string> phase_text: "Live Transfer Queue";
     
     // Dashboard States
-    in-out property <[ConnectionItem]> connections: [
-        { name: "Production DB", host: "192.168.1.100:2222", state: "Connected", transfer_rate: "45 MB/s", duration: "00:15:23", eta: "00:05:10", transfer_type: "Continuous Sync (1hr)", token: "st:MTkyLjE2OC4xLjEwMHwyMjIyfHNzaC1lZDI1NTE5IEFBQUFDMw" },
-        { name: "Backup Server", host: "10.0.0.50:22", state: "Idle", transfer_rate: "0 MB/s", duration: "-", eta: "-", transfer_type: "Single Transfer", token: "st:MTAuMC4wLjUwfDIyfHNzaC1lZDI1NTE5IEFCQ0RFRg" }
-    ];
+    in-out property <[ConnectionItem]> connections: [];
     property <int> selected_connection_idx: 0;
     property <bool> is_editing_connection: false;
+    property <bool> is_adding_connection: false;
+    property <int> add_connection_tab: 0;
+    property <bool> is_remote_verified: false;
+    property <string> remote_verification_status: "";
     property <bool> show_key: false;
 
     // Transfer Setup States
@@ -197,6 +200,7 @@ export component MainWindow inherits Window {
     in-out property <string> destination_path: "";
 
     // Active Transfers States
+    in property <[string]> active_sessions: [];
     property <int> selected_session_idx: 0;
 
     // Settings States
@@ -222,7 +226,7 @@ export component MainWindow inherits Window {
             HorizontalBox {
                 // Left Column: Active Connections
                 StyledBox {
-                    width: 320px;
+                    width: 300px;
                     VerticalBox {
                         padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                         HorizontalBox {
@@ -233,12 +237,23 @@ export component MainWindow inherits Window {
                             for item[idx] in root.connections : Rectangle {
                                 height: 40px;
                                 background: root.selected_connection_idx == idx ? AppTheme.accent : (touch.has-hover ? AppTheme.list_hover : transparent);
-                                touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; } }
+                                touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; root.is_adding_connection = false; } }
                                 HorizontalBox {
                                     padding-left: 16px; padding-right: 16px;
-                                    Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 130px; font-weight: 700; overflow: elide; }
+                                    Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 110px; font-weight: 700; overflow: elide; }
                                     Text { text: item.state; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
-                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 70px; font-weight: 700; }
+                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 60px; font-weight: 700; }
+                                }
+                            }
+                        }
+                        Rectangle { height: 10px; }
+                        HorizontalBox {
+                            padding-left: 16px; padding-right: 16px;
+                            RustButton {
+                                text: "+";
+                                clicked => { 
+                                    root.is_adding_connection = true; 
+                                    root.is_editing_connection = false;
                                 }
                             }
                         }
@@ -250,19 +265,19 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     VerticalBox {
                         padding: 15px;
-                    HorizontalBox {
+                    if !root.is_adding_connection && !root.is_editing_connection && root.connections.length > 0: HorizontalBox {
                         alignment: end;
                         Button {
-                            text: "+";
+                            text: "-";
                             clicked => { 
-                                root.is_editing_connection = true; 
-                                root.add_connection(); 
+                                root.delete_connection(root.selected_connection_idx); 
                             }
                         }
                     }
-                    Text { text: "Connection Details"; font-weight: 700; font-size: 18px; }
-                    
-                    if !root.is_editing_connection && root.connections.length > 0: VerticalBox {
+
+                    if !root.is_adding_connection && !root.is_editing_connection && root.connections.length > 0: VerticalBox {
+                        Text { text: "Connection Details"; font-weight: 700; font-size: 18px; }
+                        Rectangle { height: 10px; }
                         spacing: 8px;
                         Text { text: "Name: " + root.connections[root.selected_connection_idx].name; }
                         Text { text: "Host: " + root.connections[root.selected_connection_idx].host; }
@@ -277,50 +292,136 @@ export component MainWindow inherits Window {
                             Text { text: root.show_key ? root.connections[root.selected_connection_idx].token : "*******************"; vertical-alignment: center; }
                             Button { text: root.show_key ? "Hide" : "Show"; clicked => { root.show_key = !root.show_key; } }
                         }
+
+                        Rectangle { vertical-stretch: 1; }
+
+                        HorizontalBox {
+                            Text { text: "Destination Token:"; vertical-alignment: center; }
+                            LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
+                            Button { text: "Copy"; clicked => { root.copy_token(); } }
+                        }
+                        Button { 
+                            text: "Edit Connection"; 
+                            clicked => { root.is_editing_connection = true; } 
+                        }
                     }
 
-                    if root.is_editing_connection: VerticalBox {
+                    if root.is_editing_connection && root.connections.length > 0: VerticalBox {
+                        HorizontalBox {
+                            alignment: end;
+                            Button {
+                                text: "-";
+                                clicked => { 
+                                    root.delete_connection(root.selected_connection_idx); 
+                                    root.is_editing_connection = false;
+                                }
+                            }
+                        }
+                        Text { text: "Edit Connection"; font-weight: 700; font-size: 18px; }
+                        Rectangle { height: 10px; }
                         spacing: 8px;
-                        HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } edit_name := LineEdit { placeholder-text: "Connection Name"; } }
-                        HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
+                        HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } edit_name := LineEdit { text: root.connections[root.selected_connection_idx].name; } }
+                        HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { text: root.connections[root.selected_connection_idx].host; } }
                         HorizontalBox { 
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                            edit_key := LineEdit { placeholder-text: "Paste Token Here"; }
+                            edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
                             Button { text: "Generate"; clicked => { root.generate_key(); } }
                             Button { text: "Remove"; clicked => { root.remove_key(); } }
                         }
                         
+                        Rectangle { vertical-stretch: 1; }
+
                         HorizontalBox {
                             alignment: end;
+                            spacing: 10px;
+                            Button { text: "Cancel"; clicked => { root.is_editing_connection = false; } }
                             RustButton { 
                                 text: "Commit"; 
                                 clicked => { 
                                     root.is_editing_connection = false; 
-                                    root.commit_connection({
-                                        name: edit_name.text,
-                                        host: edit_host.text,
-                                        state: "Idle",
-                                        transfer_rate: "-",
-                                        duration: "-",
-                                        eta: "-",
-                                        transfer_type: "Single Transfer",
-                                        token: edit_key.text,
-                                    }); 
                                 } 
                             }
                         }
                     }
 
-                    Rectangle { vertical-stretch: 1; }
+                    if root.is_adding_connection: VerticalBox {
+                        Text { text: "Add Connection"; font-weight: 700; font-size: 18px; }
+                        Rectangle { height: 10px; }
+                        HorizontalBox {
+                            alignment: start;
+                            spacing: 10px;
+                            Button { text: "New"; clicked => { root.add_connection_tab = 0; } }
+                            Button { text: "Remote"; clicked => { root.add_connection_tab = 1; } }
+                        }
+                        Rectangle { height: 20px; }
 
-                    if !root.is_editing_connection && root.connections.length > 0: HorizontalBox {
-                        Text { text: "Destination Token:"; vertical-alignment: center; }
-                        LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
-                        Button { text: "Copy"; clicked => { root.copy_token(); } }
-                    }
-                    if !root.is_editing_connection && root.connections.length > 0: Button { 
-                        text: "Edit Connection"; 
-                        clicked => { root.is_editing_connection = true; } 
+                        if root.add_connection_tab == 0: VerticalBox {
+                            Text { text: "New Connection"; font-weight: 700; font-size: 16px; }
+                            Rectangle { height: 10px; }
+                            spacing: 8px;
+                            HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } new_name := LineEdit { placeholder-text: "Connection Name"; } }
+                            HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
+                            HorizontalBox { 
+                                Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
+                                new_key := LineEdit { placeholder-text: "Paste Token Here"; }
+                                Button { text: "Generate"; clicked => { root.generate_key(); } }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                            HorizontalBox {
+                                alignment: end;
+                                spacing: 10px;
+                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; } }
+                                RustButton { 
+                                    text: "Commit"; 
+                                    clicked => { 
+                                        root.is_adding_connection = false; 
+                                        root.commit_connection({ name: new_name.text, host: new_host.text, state: "Idle", transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Single Transfer", token: new_key.text }); 
+                                    } 
+                                }
+                            }
+                        }
+
+                        if root.add_connection_tab == 1: VerticalBox {
+                            Text { text: "Remote Connection"; font-weight: 700; font-size: 16px; }
+                            Rectangle { height: 10px; }
+                            spacing: 8px;
+                            HorizontalBox { 
+                                Text { text: "Token:"; width: 100px; vertical-alignment: center; } 
+                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
+                            }
+                            if root.remote_verification_status != "": Text {
+                                text: "Status: " + root.remote_verification_status;
+                                color: root.is_remote_verified ? AppTheme.accent : gray;
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                            HorizontalBox {
+                                alignment: end;
+                                spacing: 10px;
+                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; } }
+                                Button { 
+                                    text: "Verify"; 
+                                    clicked => { 
+                                        root.remote_verification_status = "Verifying...";
+                                        root.verify_remote_token(remote_token.text); 
+                                    } 
+                                }
+                                Rectangle {
+                                    width: max(100px, btn_txt.preferred-width + 24px);
+                                    height: 30px;
+                                    border-radius: 4px;
+                                    background: root.is_remote_verified ? AppTheme.accent : gray;
+                                    btn_txt := Text { text: "Commit"; color: white; horizontal-alignment: center; vertical-alignment: center; font-weight: 500; }
+                                    TouchArea {
+                                        clicked => {
+                                            if root.is_remote_verified {
+                                                root.is_adding_connection = false;
+                                                root.commit_connection({ name: "Remote", host: "Remote", state: "Idle", transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 }
@@ -410,7 +511,7 @@ export component MainWindow inherits Window {
                                         Text { text: "Active Sessions"; font-weight: 800; font-size: 16px; }
                                     }
                                     ListView {
-                                        for session[idx] in ["Session 1 (Sync)", "Session 2 (Scheduled)"] : Rectangle {
+                                        for session[idx] in root.active_sessions : Rectangle {
                                             height: 30px;
                                             background: root.selected_session_idx == idx ? AppTheme.accent : (ta.has-hover ? AppTheme.list_hover : transparent);
                                             ta := TouchArea { clicked => { root.selected_session_idx = idx; } }
