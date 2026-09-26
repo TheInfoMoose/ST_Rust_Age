@@ -30,9 +30,9 @@ component RustButton inherits Rectangle {
     background: touch.pressed ? #943812 : (touch.has-hover ? #c95b28 : #b94616);
     border-radius: 4px;
     height: 30px;
-    min-width: 100px;
+    min-width: max(100px, txt.preferred-width + 24px);
 
-    Text {
+    txt := Text {
         text: root.text;
         color: white;
         horizontal-alignment: center;
