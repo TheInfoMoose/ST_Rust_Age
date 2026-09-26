@@ -193,6 +193,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let idx = idx as usize;
             if idx < conns.len() {
+                let token = conns[idx].token.to_string();
+                if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    let _ = key_mgr.delete_key(&parsed.pub_key);
+                }
                 conns.remove(idx);
                 let model = std::rc::Rc::new(slint::VecModel::from(conns));
                 ui.set_connections(model.into());
@@ -234,8 +239,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let ui_weak = ui.as_weak();
     ui.on_remove_key(move || {
-        println!("Removed key associated with connection");
+        if let Some(ui) = ui_weak.upgrade() {
+            let idx = ui.get_selected_connection_idx() as usize;
+            let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            if idx < conns.len() {
+                let token = conns[idx].token.to_string();
+                if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    if let Err(e) = key_mgr.delete_key(&parsed.pub_key) {
+                        tracing::warn!("Failed to delete key: {}", e);
+                    } else {
+                        println!("Successfully deleted key from OS keyring for connection: {}", conns[idx].name);
+                    }
+                }
+            }
+        }
     });
 
     let ui_weak = ui.as_weak();
