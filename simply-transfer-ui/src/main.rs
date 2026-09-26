@@ -1,10 +1,10 @@
-use std::sync::Arc;
-use simply_transfer_core::engine::{TransferEngine, TransferEvent, FileTransferStatus};
+use simply_transfer_core::engine::{FileTransferStatus, TransferEngine, TransferEvent};
 use simply_transfer_core::ssh::MockSshClient;
 use simply_transfer_snapshots::FallbackSnapshotDriver;
-use tokio::sync::mpsc;
-use std::path::PathBuf;
 use slint::Model;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 slint::include_modules!();
 
 #[tokio::main]
@@ -21,10 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
         }
-        
+
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
-            
+
             let engine = TransferEngine::new(
                 PathBuf::from(src.as_str()),
                 dest.to_string(),
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             let (batch_tx, mut batch_rx) = mpsc::channel(10000);
-            
+
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     batch_tx.send(event).await.ok();
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
 
                             let events = std::mem::replace(&mut buffer, Vec::with_capacity(5000));
-                            
+
                             for event in events {
                                 match event {
                                     TransferEvent::PhaseChanged(phase, name) => {
@@ -156,19 +156,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     ui.on_browse_source(move || {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_source_path(path.to_string_lossy().to_string().into());
-            }
+        if let Some(path) = rfd::FileDialog::new().pick_folder()
+            && let Some(ui) = ui_weak.upgrade()
+        {
+            ui.set_source_path(path.to_string_lossy().to_string().into());
         }
     });
 
     let ui_weak = ui.as_weak();
     ui.on_browse_destination(move || {
-        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_destination_path(path.to_string_lossy().to_string().into());
-            }
+        if let Some(path) = rfd::FileDialog::new().pick_folder()
+            && let Some(ui) = ui_weak.upgrade()
+        {
+            ui.set_destination_path(path.to_string_lossy().to_string().into());
         }
     });
 

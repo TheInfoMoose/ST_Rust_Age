@@ -31,6 +31,9 @@ mod tests {
     #[test]
     fn test_compute_sha256_bytes() {
         let hash = compute_sha256_bytes(b"hello world");
-        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 }

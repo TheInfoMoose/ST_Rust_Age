@@ -32,7 +32,11 @@ pub trait SnapshotDriver: Send + Sync {
 
     /// Translate a standard file path into its snapshot-relative equivalent
     /// so it can be safely read even if exclusively locked by an application.
-    fn resolve_snapshot_path(&self, snapshot: &Snapshot, original_path: &Path) -> Result<PathBuf, SnapshotError>;
+    fn resolve_snapshot_path(
+        &self,
+        snapshot: &Snapshot,
+        original_path: &Path,
+    ) -> Result<PathBuf, SnapshotError>;
 
     /// Release and clean up the snapshot from the operating system.
     fn cleanup_snapshot(&self, snapshot: &Snapshot) -> Result<(), SnapshotError>;
@@ -50,7 +54,11 @@ impl SnapshotDriver for FallbackSnapshotDriver {
         })
     }
 
-    fn resolve_snapshot_path(&self, _snapshot: &Snapshot, original_path: &Path) -> Result<PathBuf, SnapshotError> {
+    fn resolve_snapshot_path(
+        &self,
+        _snapshot: &Snapshot,
+        original_path: &Path,
+    ) -> Result<PathBuf, SnapshotError> {
         Ok(original_path.to_path_buf())
     }
 

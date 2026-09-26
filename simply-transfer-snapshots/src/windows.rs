@@ -12,15 +12,20 @@ impl VssSnapshotDriver {
 
 impl SnapshotDriver for VssSnapshotDriver {
     fn create_snapshot(&self, volume_path: &Path) -> Result<Snapshot, SnapshotError> {
-        let drive = volume_path.to_string_lossy().chars().take(2).collect::<String>() + "\\";
-        
+        let drive = volume_path
+            .to_string_lossy()
+            .chars()
+            .take(2)
+            .collect::<String>()
+            + "\\";
+
         let script = format!(
             "$class = Get-WmiObject -List Win32_ShadowCopy; \
              $res = $class.Create('{}', 'ClientAccessible'); \
              if ($res.ReturnValue -ne 0) {{ exit 1 }}; \
              $shadow = Get-WmiObject Win32_ShadowCopy | Where-Object {{ $_.ID -eq $res.ShadowID }}; \
              Write-Output ($shadow.ID + '|' + $shadow.DeviceObject)",
-             drive
+            drive
         );
 
         let output = std::process::Command::new("powershell")
@@ -29,13 +34,17 @@ impl SnapshotDriver for VssSnapshotDriver {
             .map_err(|e| SnapshotError::CreationFailed(e.to_string()))?;
 
         if !output.status.success() {
-            return Err(SnapshotError::CreationFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+            return Err(SnapshotError::CreationFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
         }
 
         let output_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = output_str.trim().split('|').collect();
         if parts.len() != 2 {
-            return Err(SnapshotError::CreationFailed("Failed to parse WMI ShadowCopy output".to_string()));
+            return Err(SnapshotError::CreationFailed(
+                "Failed to parse WMI ShadowCopy output".to_string(),
+            ));
         }
 
         Ok(Snapshot {
@@ -44,7 +53,11 @@ impl SnapshotDriver for VssSnapshotDriver {
         })
     }
 
-    fn resolve_snapshot_path(&self, snapshot: &Snapshot, original_path: &Path) -> Result<PathBuf, SnapshotError> {
+    fn resolve_snapshot_path(
+        &self,
+        snapshot: &Snapshot,
+        original_path: &Path,
+    ) -> Result<PathBuf, SnapshotError> {
         let path_str = original_path.to_string_lossy();
         if path_str.len() > 2 && path_str.chars().nth(1) == Some(':') {
             let relative = &path_str[2..];
@@ -68,7 +81,9 @@ impl SnapshotDriver for VssSnapshotDriver {
             .map_err(|e| SnapshotError::CleanupFailed(e.to_string()))?;
 
         if !output.status.success() {
-            return Err(SnapshotError::CleanupFailed(String::from_utf8_lossy(&output.stderr).to_string()));
+            return Err(SnapshotError::CleanupFailed(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
         }
 
         Ok(())

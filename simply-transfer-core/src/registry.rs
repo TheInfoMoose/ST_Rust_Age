@@ -18,6 +18,12 @@ pub struct Registry {
     pub files: HashMap<String, FileEntry>,
 }
 
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Registry {
     pub fn new() -> Self {
         Self {

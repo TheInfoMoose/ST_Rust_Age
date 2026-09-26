@@ -64,9 +64,12 @@ async fn run_engine_and_measure(source_dir: std::path::PathBuf, expected_success
     }
 
     handle.await.unwrap();
-    
+
     let duration = start_time.elapsed();
-    println!("Test completed in {:?} (Completed: {}, Validated: {})", duration, completed, validated);
+    println!(
+        "Test completed in {:?} (Completed: {}, Validated: {})",
+        duration, completed, validated
+    );
 
     assert_eq!(completed, expected_success);
     assert_eq!(validated, expected_success);
@@ -109,7 +112,7 @@ async fn test_stress_numerous_large_files() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_extreme_10000_files() {
     let dir = tempdir().unwrap();
-    let count = 10000; 
+    let count = 10000;
     println!("Generating {} files...", count);
     create_many_files(dir.path(), count);
     println!("Executing engine...");
@@ -121,7 +124,7 @@ async fn test_extreme_100gb_file() {
     let dir = tempdir().unwrap();
     println!("Generating 100 GB sparse file...");
     let file_path = dir.path().join("massive_database.qbw");
-    
+
     // Create a sparse file to avoid physically writing 100GB to the disk
     let file = File::create(&file_path).unwrap();
     let size_100gb: u64 = 100 * 1024 * 1024 * 1024;

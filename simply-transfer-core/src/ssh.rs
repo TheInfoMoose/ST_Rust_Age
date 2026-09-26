@@ -18,13 +18,18 @@ pub enum SshError {
 pub trait SshClient: Send + Sync {
     /// Connect to the remote host.
     fn connect(&mut self, host: &str, port: u16) -> Result<(), SshError>;
-    
+
     /// Authenticate using an Ed25519/RSA private key string.
-    fn authenticate_publickey(&mut self, username: &str, private_key_pem: &str, passphrase: Option<&str>) -> Result<(), SshError>;
-    
+    fn authenticate_publickey(
+        &mut self,
+        username: &str,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+    ) -> Result<(), SshError>;
+
     /// Open an SFTP session to upload a file.
     fn upload_file(&self, local_path: &Path, remote_path: &Path) -> Result<(), SshError>;
-    
+
     /// Execute a remote command and return stdout.
     fn execute_command(&self, command: &str) -> Result<String, SshError>;
 }
@@ -33,6 +38,12 @@ pub trait SshClient: Send + Sync {
 pub struct MockSshClient {
     pub is_connected: bool,
     pub is_authenticated: bool,
+}
+
+impl Default for MockSshClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockSshClient {
@@ -50,7 +61,12 @@ impl SshClient for MockSshClient {
         Ok(())
     }
 
-    fn authenticate_publickey(&mut self, _username: &str, _private_key_pem: &str, _passphrase: Option<&str>) -> Result<(), SshError> {
+    fn authenticate_publickey(
+        &mut self,
+        _username: &str,
+        _private_key_pem: &str,
+        _passphrase: Option<&str>,
+    ) -> Result<(), SshError> {
         if self.is_connected {
             self.is_authenticated = true;
             Ok(())

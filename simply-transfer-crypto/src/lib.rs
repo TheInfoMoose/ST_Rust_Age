@@ -73,12 +73,14 @@ mod tests {
     fn test_secure_storage() {
         let storage = SecureStorage::new("test.simplytransfer.crypto");
         let account = "test_user";
-        
+
         let _ = storage.delete_secret(account);
 
         assert!(storage.get_secret(account).is_err());
 
-        storage.set_secret(account, "super_secret".to_string()).unwrap();
+        storage
+            .set_secret(account, "super_secret".to_string())
+            .unwrap();
         let retrieved = storage.get_secret(account).unwrap();
         assert_eq!(retrieved, "super_secret");
 
