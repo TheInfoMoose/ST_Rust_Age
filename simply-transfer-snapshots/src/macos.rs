@@ -5,6 +5,12 @@ use tracing::warn;
 
 pub struct ApfsSnapshotDriver;
 
+impl Default for ApfsSnapshotDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApfsSnapshotDriver {
     pub fn new() -> Self {
         Self
@@ -12,7 +18,7 @@ impl ApfsSnapshotDriver {
 }
 
 impl SnapshotDriver for ApfsSnapshotDriver {
-    fn create_snapshot(&self, volume_path: &Path) -> Result<Snapshot, SnapshotError> {
+    fn create_snapshot(&self, _volume_path: &Path) -> Result<Snapshot, SnapshotError> {
         warn!("APFS snapshotting requires elevated privileges (tmutil / diskutil).");
 
         // Example: `tmutil localsnapshot` or `diskutil apfs snapshot /`
@@ -30,7 +36,6 @@ impl SnapshotDriver for ApfsSnapshotDriver {
         // Parse stdout for the snapshot name, e.g., "Created local snapshot with date: 2026-09-25-103000"
         let output_str = String::from_utf8_lossy(&output.stdout);
         let id = output_str
-            .trim()
             .split_whitespace()
             .last()
             .unwrap_or("unknown")

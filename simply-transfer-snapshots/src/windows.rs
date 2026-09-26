@@ -1,8 +1,12 @@
 use crate::{Snapshot, SnapshotDriver, SnapshotError};
 use std::path::{Path, PathBuf};
-use tracing::warn;
-
 pub struct VssSnapshotDriver;
+
+impl Default for VssSnapshotDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl VssSnapshotDriver {
     pub fn new() -> Self {
@@ -29,7 +33,7 @@ impl SnapshotDriver for VssSnapshotDriver {
         );
 
         let output = std::process::Command::new("powershell")
-            .args(&["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .map_err(|e| SnapshotError::CreationFailed(e.to_string()))?;
 
@@ -76,7 +80,7 @@ impl SnapshotDriver for VssSnapshotDriver {
         );
 
         let output = std::process::Command::new("powershell")
-            .args(&["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .map_err(|e| SnapshotError::CleanupFailed(e.to_string()))?;
 
