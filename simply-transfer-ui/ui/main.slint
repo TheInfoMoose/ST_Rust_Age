@@ -226,7 +226,7 @@ export component MainWindow inherits Window {
     property <bool> show_key: false;
 
     // Transfer Setup States
-    property <string> transfer_type_val: "Single Transfer";
+    in-out property <string> transfer_type_val: "Single Transfer";
     in-out property <[DirectoryMapping]> current_mappings: [{source: "", destination: ""}];
 
     // Active Transfers States

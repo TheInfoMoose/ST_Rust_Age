@@ -27,11 +27,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_start_transfer(move || {
         let ui_handle = ui_handle.clone();
 
-        let (src, dest) = if let Some(ui) = ui_handle.upgrade() {
+        let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
-            (mappings[0].source.to_string(), mappings[0].destination.to_string())
+            let t_type = ui.get_transfer_type_val().to_string();
+            (mappings[0].source.to_string(), mappings[0].destination.to_string(), t_type)
         } else {
             return;
         };
@@ -152,8 +153,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
 
-            if let Err(e) = engine.execute().await {
-                tracing::error!("Engine execution failed: {:?}", e);
+            if transfer_type == "Continuous Sync" || transfer_type == "Scheduled Transfer" {
+                tracing::info!("Starting background daemon for {}", transfer_type);
+                loop {
+                    tracing::info!("Executing background transfer cycle...");
+                    if let Err(e) = engine.execute().await {
+                        tracing::error!("Engine execution failed: {:?}", e);
+                    }
+                    
+                    let sleep_duration = if transfer_type == "Continuous Sync" {
+                        60 // Mock 1 min sync
+                    } else {
+                        3600 // Mock 1 hr schedule
+                    };
+                    
+                    tracing::info!("Cycle complete. Sleeping for {} seconds...", sleep_duration);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration)).await;
+                }
+            } else {
+                if let Err(e) = engine.execute().await {
+                    tracing::error!("Engine execution failed: {:?}", e);
+                }
             }
         });
     });
