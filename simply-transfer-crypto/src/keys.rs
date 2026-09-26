@@ -1,6 +1,6 @@
-use ed25519_dalek::{SigningKey};
-use crate::SecureStorage;
 use crate::CryptoError;
+use crate::SecureStorage;
+use ed25519_dalek::SigningKey;
 
 pub struct KeyPairManager {
     storage: SecureStorage,
@@ -19,7 +19,7 @@ impl KeyPairManager {
         let mut csprng = rand::rng();
         let signing_key = SigningKey::generate(&mut csprng);
         let verifying_key = signing_key.verifying_key();
-        
+
         let priv_hex = hex::encode(signing_key.to_bytes());
         let pub_hex = hex::encode(verifying_key.to_bytes());
         self.storage.set_secret(&pub_hex, priv_hex)?;
@@ -32,8 +32,9 @@ impl KeyPairManager {
         let priv_hex = self.storage.get_secret(connection_id)?;
         let bytes = hex::decode(&priv_hex)
             .map_err(|_| CryptoError::Other("Invalid hex in secure storage".into()))?;
-        
-        let bytes_array: [u8; 32] = bytes.try_into()
+
+        let bytes_array: [u8; 32] = bytes
+            .try_into()
             .map_err(|_| CryptoError::Other("Invalid key length".into()))?;
 
         Ok(SigningKey::from_bytes(&bytes_array))
