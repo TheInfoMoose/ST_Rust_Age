@@ -170,27 +170,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     ui.on_browse_source(move |idx| {
-        if let Some(path) = rfd::FileDialog::new().pick_folder()
-            && let Some(ui) = ui_weak.upgrade()
-        {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_is_browser_open(true);
+            ui.set_browser_is_remote(false);
+            ui.set_browser_is_source(true);
+            ui.set_browser_target_idx(idx);
+            
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
-            if idx < mappings.len() {
-                mappings[idx].source = path.to_string_lossy().to_string().into();
-                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            let mut start_path = "/".to_string();
+            if idx < mappings.len() && !mappings[idx].source.is_empty() {
+                start_path = mappings[idx].source.to_string();
             }
+            ui.set_browser_current_path(start_path.clone().into());
+            ui.invoke_fetch_directory(start_path.into(), false);
         }
     });
 
     let ui_weak = ui.as_weak();
     ui.on_browse_destination(move |idx| {
-        if let Some(path) = rfd::FileDialog::new().pick_folder()
-            && let Some(ui) = ui_weak.upgrade()
-        {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_is_browser_open(true);
+            ui.set_browser_is_remote(true);
+            ui.set_browser_is_source(false);
+            ui.set_browser_target_idx(idx);
+            
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
+            let mut start_path = "/".to_string();
+            if idx < mappings.len() && !mappings[idx].destination.is_empty() {
+                start_path = mappings[idx].destination.to_string();
+            }
+            ui.set_browser_current_path(start_path.clone().into());
+            ui.invoke_fetch_directory(start_path.into(), true);
+        }
+    });
+    
+    let ui_weak = ui.as_weak();
+    ui.on_fetch_directory(move |path, is_remote| {
+        let ui_weak = ui_weak.clone();
+        let path_str = path.to_string();
+        
+        tokio::spawn(async move {
+            let mut nodes = Vec::new();
+            if !is_remote {
+                if let Ok(entries) = std::fs::read_dir(&path_str) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                        nodes.push(FileNode {
+                            name: name.into(),
+                            is_dir,
+                            path: entry.path().to_string_lossy().to_string().into(),
+                        });
+                    }
+                }
+            } else {
+                // Mock remote directory
+                nodes.push(FileNode { name: "config".into(), is_dir: true, path: format!("{}/config", path_str).into() });
+                nodes.push(FileNode { name: "data".into(), is_dir: true, path: format!("{}/data", path_str).into() });
+                nodes.push(FileNode { name: "remote_file.txt".into(), is_dir: false, path: format!("{}/remote_file.txt", path_str).into() });
+            }
+            
+            nodes.sort_by(|a, b| {
+                if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
+                else if !a.is_dir && b.is_dir { std::cmp::Ordering::Greater }
+                else { a.name.cmp(&b.name) }
+            });
+            
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let model = std::rc::Rc::new(slint::VecModel::from(nodes));
+                    ui.set_browser_nodes(model.into());
+                    ui.set_browser_current_path(path_str.into());
+                }
+            }).unwrap();
+        });
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_commit_browser_selection(move |path| {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_is_browser_open(false);
+            let idx = ui.get_browser_target_idx() as usize;
+            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if idx < mappings.len() {
-                mappings[idx].destination = path.to_string_lossy().to_string().into();
+                if ui.get_browser_is_source() {
+                    mappings[idx].source = path.into();
+                } else {
+                    mappings[idx].destination = path.into();
+                }
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
             }
         }

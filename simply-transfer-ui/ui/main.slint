@@ -17,6 +17,12 @@ export struct DirectoryMapping {
     destination: string,
 }
 
+export struct FileNode {
+    name: string,
+    is_dir: bool,
+    path: string,
+}
+
 export struct ConnectionItem {
     name: string,
     host: string,
@@ -186,6 +192,10 @@ export component MainWindow inherits Window {
     callback update_mapping_source(int, string);
     callback update_mapping_destination(int, string);
     
+    // Remote browser callbacks
+    callback fetch_directory(string, bool); // path, is_remote
+    callback commit_browser_selection(string); // path
+    
     // System Info States
     in property <string> os_processor_info: "Processor: Unknown";
     in property <string> os_memory_info: "RAM: Unknown";
@@ -195,6 +205,15 @@ export component MainWindow inherits Window {
     in property <[CompletedItem]> completed_queue: [];
     in property <string> overall_status: "Completed: 0 / 0 files";
     in property <string> phase_text: "Live Transfer Queue";
+    
+    // Browser States
+    in-out property <bool> is_browser_open: false;
+    in-out property <bool> browser_is_remote: false;
+    in-out property <int> browser_target_idx: 0;
+    in-out property <string> browser_current_path: "/";
+    in-out property <[FileNode]> browser_nodes: [];
+    in-out property <string> browser_selection: "";
+    in-out property <bool> browser_is_source: false;
     
     // Dashboard States
     in-out property <[ConnectionItem]> connections: [];
@@ -738,5 +757,79 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    } // End of TabWidget
+        
+        // File Browser Modal Overlay
+        if root.is_browser_open: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: rgba(0, 0, 0, 0.6);
+            
+            Rectangle {
+                width: 600px;
+                height: 400px;
+                background: AppTheme.window_bg;
+                border-radius: 8px;
+                border-color: AppTheme.border;
+                border-width: 1px;
+                drop-shadow-blur: 15px;
+                drop-shadow-color: rgba(0, 0, 0, 0.3);
+                
+                VerticalBox {
+                    padding: 20px;
+                    spacing: 15px;
+                    
+                    Text { 
+                        text: root.browser_is_remote ? "Browse Remote Directory" : "Browse Local Directory"; 
+                        font-size: 18px; 
+                        font-weight: 700; 
+                    }
+                    
+                    HorizontalBox {
+                        Text { text: "Path:"; vertical-alignment: center; }
+                        LineEdit { text: root.browser_current_path; edited(t) => { root.browser_current_path = t; } }
+                        Button { text: "Go"; clicked => { root.fetch_directory(root.browser_current_path, root.browser_is_remote); } }
+                        Button { text: "Up"; clicked => { root.fetch_directory(root.browser_current_path + "/..", root.browser_is_remote); } }
+                    }
+                    
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: AppTheme.window_bg; // Changed from AppTheme.item_bg
+                        border-width: 1px;
+                        border-color: AppTheme.border;
+                        ListView {
+                            for node[idx] in root.browser_nodes: Rectangle {
+                                height: 35px;
+                                background: root.browser_selection == node.path ? AppTheme.accent : (ta_browser.has-hover ? rgba(255, 255, 255, 0.1) : transparent);
+                                
+                                HorizontalBox {
+                                    padding: 5px;
+                                    spacing: 10px;
+                                    Text { text: node.is_dir ? "📁" : "📄"; vertical-alignment: center; }
+                                    Text { text: node.name; vertical-alignment: center; }
+                                }
+                                
+                                ta_browser := TouchArea {
+                                    clicked => {
+                                        root.browser_selection = node.path;
+                                    }
+                                    double-clicked => {
+                                        if node.is_dir {
+                                            root.fetch_directory(node.path, root.browser_is_remote);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    HorizontalBox {
+                        alignment: end;
+                        spacing: 10px;
+                        Button { text: "Cancel"; clicked => { root.is_browser_open = false; } }
+                        RustButton { text: "Select"; clicked => { root.commit_browser_selection(root.browser_selection); } }
+                    }
+                }
+            }
+        }
     }
-}
