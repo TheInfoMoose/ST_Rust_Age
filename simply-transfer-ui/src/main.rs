@@ -179,6 +179,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::leak(Box::new(popout));
     });
 
+    let ui_weak = ui.as_weak();
+    ui.on_delete_connection(move |idx| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            let idx = idx as usize;
+            if idx < conns.len() {
+                conns.remove(idx);
+                let model = std::rc::Rc::new(slint::VecModel::from(conns));
+                ui.set_connections(model.into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_verify_remote_token(move |token| {
+        let ui_weak = ui_weak.clone();
+        let token = token.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let verified = token.len() > 10;
+            let status = if verified { "Connection Verified Successfully" } else { "Invalid Token Format" };
+            
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_is_remote_verified(verified);
+                    ui.set_remote_verification_status(status.into());
+                }
+            }).unwrap();
+        });
+    });
+
+    ui.on_generate_key(move || {
+        format!("st:mock-key-{}|ssh-ed25519", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()).into()
+    });
+
+    ui.on_remove_key(move || {
+        println!("Removed key associated with connection");
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_copy_token(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            let idx = ui.get_selected_connection_idx() as usize;
+            let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            if idx < conns.len() {
+                let token = conns[idx].token.to_string();
+                println!("Token copied to clipboard: {}", token);
+            }
+        }
+    });
+
+    ui.on_add_connection(move || {
+        println!("Add connection initiated");
+    });
+
+    ui.on_pause_transfer(move || {
+        println!("Transfer paused");
+    });
+
+    ui.on_cancel_transfer(move || {
+        println!("Transfer cancelled");
+    });
+
     ui.run()?;
 
     Ok(())

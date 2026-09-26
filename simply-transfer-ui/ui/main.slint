@@ -167,7 +167,7 @@ export component MainWindow inherits Window {
     callback delete_connection(int);
     callback verify_remote_token(string);
     callback copy_token();
-    callback generate_key();
+    callback generate_key() -> string;
     callback remove_key();
     callback pause_transfer();
     callback cancel_transfer();
@@ -186,12 +186,12 @@ export component MainWindow inherits Window {
     
     // Dashboard States
     in-out property <[ConnectionItem]> connections: [];
-    property <int> selected_connection_idx: 0;
+    in-out property <int> selected_connection_idx: 0;
     property <bool> is_editing_connection: false;
     property <bool> is_adding_connection: false;
     property <int> add_connection_tab: 0;
-    property <bool> is_remote_verified: false;
-    property <string> remote_verification_status: "";
+    in-out property <bool> is_remote_verified: false;
+    in-out property <string> remote_verification_status: "";
     property <bool> show_key: false;
 
     // Transfer Setup States
@@ -325,7 +325,7 @@ export component MainWindow inherits Window {
                         HorizontalBox { 
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                             edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
-                            Button { text: "Generate"; clicked => { root.generate_key(); } }
+                            Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(); } }
                             Button { text: "Remove"; clicked => { root.remove_key(); } }
                         }
                         
@@ -376,7 +376,7 @@ export component MainWindow inherits Window {
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                                 new_key := LineEdit { placeholder-text: "Click Generate to create key"; }
-                                Button { text: "Generate"; clicked => { root.generate_key(); } }
+                                Button { text: "Generate"; clicked => { new_key.text = root.generate_key(); } }
                             }
                             Rectangle { vertical-stretch: 1; }
                             HorizontalBox {
