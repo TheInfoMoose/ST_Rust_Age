@@ -297,7 +297,7 @@ export component MainWindow inherits Window {
 
                         HorizontalBox {
                             Text { text: "Destination Token:"; vertical-alignment: center; }
-                            LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
+                            LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; input-type: password; }
                             Button { text: "Copy"; clicked => { root.copy_token(); } }
                         }
                         Button { 
@@ -324,7 +324,7 @@ export component MainWindow inherits Window {
                         HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { text: root.connections[root.selected_connection_idx].host; } }
                         HorizontalBox { 
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                            edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
+                            edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; input-type: password; }
                             Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(); } }
                             Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
                         }
@@ -375,7 +375,7 @@ export component MainWindow inherits Window {
                             HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                                new_key := LineEdit { placeholder-text: "Click Generate to create key"; }
+                                new_key := LineEdit { placeholder-text: "Click Generate to create key"; input-type: password; }
                                 Button { text: "Generate"; clicked => { new_key.text = root.generate_key(); } }
                             }
                             Rectangle { vertical-stretch: 1; }
@@ -399,7 +399,7 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             HorizontalBox { 
                                 Text { text: "Token:"; width: 100px; vertical-alignment: center; } 
-                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
+                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; input-type: password; }
                                 Button { 
                                     text: "Verify"; 
                                     clicked => { 
