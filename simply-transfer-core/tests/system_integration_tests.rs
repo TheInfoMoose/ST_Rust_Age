@@ -23,9 +23,13 @@ async fn test_cross_platform_pathing_normalization() {
     let (tx, _rx) = mpsc::channel(100);
 
     let ssh_client = Arc::new(MockSshClient::new());
-    
+
     let remote_dir = tempdir().unwrap();
-    let remote_dest = remote_dir.path().to_string_lossy().to_string().replace('\\', "/");
+    let remote_dest = remote_dir
+        .path()
+        .to_string_lossy()
+        .to_string()
+        .replace('\\', "/");
 
     let engine = TransferEngine::new(
         source_dir.to_path_buf(),
