@@ -35,6 +35,7 @@ async fn run_engine_and_measure(source_dir: std::path::PathBuf, expected_success
         tx,
         Arc::new(MockSshClient::new()),
         Arc::new(FallbackSnapshotDriver),
+        None,
     );
 
     let start_time = std::time::Instant::now();

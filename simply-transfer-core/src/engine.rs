@@ -351,6 +351,7 @@ mod tests {
             tx,
             Arc::new(MockSshClient::new()),
             Arc::new(FallbackSnapshotDriver),
+            None,
         );
 
         // Run engine in a separate task

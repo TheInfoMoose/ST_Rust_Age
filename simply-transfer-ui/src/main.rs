@@ -1,4 +1,6 @@
-use simply_transfer_core::engine::{ControlSignal, FileTransferStatus, TransferEngine, TransferEvent};
+use simply_transfer_core::engine::{
+    ControlSignal, FileTransferStatus, TransferEngine, TransferEvent,
+};
 use simply_transfer_core::ssh::MockSshClient;
 use simply_transfer_snapshots::FallbackSnapshotDriver;
 use slint::Model;
