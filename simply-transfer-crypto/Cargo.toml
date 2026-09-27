@@ -11,6 +11,6 @@ keyring = "4.2.0"
 rand = "0.8"
 rand_core = "0.6"
 sha2 = "0.11.0"
-ssh-key = { version = "0.6.7", features = ["ed25519", "rand_core"] }
+ssh-key = { version = "0.6.7", default-features = false, features = ["alloc", "ed25519", "rand_core"] }
 thiserror = "2.0.21"
 zeroize = "1.9.0"

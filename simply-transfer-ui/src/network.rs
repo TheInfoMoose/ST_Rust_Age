@@ -141,9 +141,10 @@ pub fn get_active_network_info() -> (String, String) {
 
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = Command::new("networksetup")
+        if Command::new("networksetup")
             .arg("-listallhardwareports")
-            .output()
+            .status()
+            .is_ok()
         {
             link_type = "Mac Network".to_string();
             max_throughput = "Variable".to_string();
