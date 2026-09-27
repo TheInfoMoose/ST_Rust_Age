@@ -224,6 +224,9 @@ export component MainWindow inherits Window {
     in-out property <bool> is_remote_verified: false;
     in-out property <string> remote_verification_status: "";
 
+    in property <string> network_link_type: "Dynamic";
+    in property <string> network_max_throughput: "Variable";
+
 
     // Transfer Setup States
     in-out property <string> transfer_type_val: "Single Transfer";
@@ -678,7 +681,7 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Bandwidth Allocation (MB/s):"; font-weight: 700; }
-                        Text { text: "Link Capability: Dynamic | Max Throughput: Variable"; font-size: 11px; color: gray; }
+                        Text { text: "Connection: " + root.network_link_type + " | Max Throughput: " + root.network_max_throughput; font-size: 11px; color: gray; }
                         Rectangle { height: 5px; }
                         LineEdit { text: "0 (Unlimited)"; }
                         

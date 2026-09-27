@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 slint::include_modules!();
 
+mod network;
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct SavedConnection {
     name: String,
@@ -31,16 +33,19 @@ fn load_connections() -> Vec<SavedConnection> {
 }
 
 fn save_connections(conns: &[ConnectionItem]) {
-    let saved: Vec<SavedConnection> = conns.iter().map(|c| SavedConnection {
-        name: c.name.to_string(),
-        host: c.host.to_string(),
-        state: c.state.to_string(),
-        transfer_rate: c.transfer_rate.to_string(),
-        duration: c.duration.to_string(),
-        eta: c.eta.to_string(),
-        transfer_type: c.transfer_type.to_string(),
-        token: c.token.to_string(),
-    }).collect();
+    let saved: Vec<SavedConnection> = conns
+        .iter()
+        .map(|c| SavedConnection {
+            name: c.name.to_string(),
+            host: c.host.to_string(),
+            state: c.state.to_string(),
+            transfer_rate: c.transfer_rate.to_string(),
+            duration: c.duration.to_string(),
+            eta: c.eta.to_string(),
+            transfer_type: c.transfer_type.to_string(),
+            token: c.token.to_string(),
+        })
+        .collect();
     if let Ok(json) = serde_json::to_string_pretty(&saved) {
         let _ = std::fs::write("connections.json", json);
     }
@@ -73,6 +78,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memory_mb = sys.total_memory() / 1024 / 1024;
     ui.set_os_processor_info(format!("Processor: {} Logical Cores Detected", cpu_count).into());
     ui.set_os_memory_info(format!("RAM: {} MB Available", memory_mb).into());
+
+    let (net_link, net_throughput) = network::get_active_network_info();
+    ui.set_network_link_type(net_link.into());
+    ui.set_network_max_throughput(net_throughput.into());
 
     let ui_handle = ui.as_weak();
     
