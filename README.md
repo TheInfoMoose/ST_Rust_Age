@@ -4,10 +4,13 @@
   <img src="assets/logo.png" width="600" alt="Simply Transfer v2 Logo">
 </p>
 
-[![Language: Rust](https://img.shields.io/badge/Language-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
-[![GUI: Slint](https://img.shields.io/badge/GUI-Slint-blue)](https://slint.dev/)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Rust CI](https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/rust.yml)
+<p align="center">
+  <a href="https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/ci.yml"><img src="https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Build"></a>
+  <a href="https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/release.yml"><img src="https://github.com/TheInfoMoose/ST_Rust_Age/actions/workflows/release.yml/badge.svg" alt="Release Build"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Language-Rust-dea584?logo=rust" alt="Language: Rust"></a>
+  <a href="https://slint.dev/"><img src="https://img.shields.io/badge/GUI-Slint-blue" alt="GUI: Slint"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
+</p>
 
 A complete Rust rewrite of Simply Transfer. This modular, high-performance file transfer utility features cross-platform snapshot support, secure cryptographic validation, SSH capabilities, and a sleek GUI. Designed from the ground up for speed, reliability, and security.
 
