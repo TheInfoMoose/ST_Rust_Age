@@ -354,9 +354,10 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
 
+        let remote_dir = tempdir().unwrap();
         let engine = TransferEngine::new(
             dir.path().to_path_buf(),
-            "/remote/backup".to_string(),
+            remote_dir.path().to_string_lossy().to_string(),
             tx,
             Arc::new(MockSshClient::new()),
             Arc::new(FallbackSnapshotDriver),

@@ -24,9 +24,16 @@ async fn test_cross_platform_pathing_normalization() {
 
     let ssh_client = Arc::new(MockSshClient::new());
 
+    let remote_dir = tempdir().unwrap();
+    let remote_dest = remote_dir
+        .path()
+        .to_string_lossy()
+        .to_string()
+        .replace('\\', "/");
+
     let engine = TransferEngine::new(
         source_dir.to_path_buf(),
-        "/remote/backup".to_string(), // Explicitly POSIX formatted remote dest
+        remote_dest.clone(),
         tx,
         ssh_client.clone(),
         Arc::new(FallbackSnapshotDriver),
@@ -42,7 +49,7 @@ async fn test_cross_platform_pathing_normalization() {
     let path = &uploaded_paths[0];
 
     // Check that it starts with the destination prefix
-    assert!(path.starts_with("/remote/backup/"));
+    assert!(path.starts_with(&format!("{}/", remote_dest)));
 
     // Check that it contains forward slashes for the subfolder
     assert!(path.contains("/subfolder/test_file.txt"));

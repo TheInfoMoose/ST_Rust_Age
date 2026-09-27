@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Test 2",
+    "host": "172.17.2.1",
+    "state": "Idle",
+    "transfer_rate": "-",
+    "duration": "-",
+    "eta": "-",
+    "transfer_type": "Single Transfer",
+    "token": "st:Y0ddXlxXZA5TXA9WXUc0C3tXUkdBVFgSW1ZbegJFXkc1XQ9GXhxhFlRWEgBUQW8AelNfQRdRUhZbVw8sAEFcFGVdCEVUTGJAAl5K"
+  }
+]

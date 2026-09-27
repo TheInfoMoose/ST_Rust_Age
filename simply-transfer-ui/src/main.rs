@@ -9,12 +9,96 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 slint::include_modules!();
 
+mod network;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SavedConnection {
+    name: String,
+    host: String,
+    state: String,
+    transfer_rate: String,
+    duration: String,
+    eta: String,
+    transfer_type: String,
+    token: String,
+}
+
+fn load_connections() -> Vec<SavedConnection> {
+    if let Ok(data) = std::fs::read_to_string("connections.json")
+        && let Ok(conns) = serde_json::from_str(&data)
+    {
+        return conns;
+    }
+    Vec::new()
+}
+
+fn save_connections(conns: &[ConnectionItem]) {
+    let saved: Vec<SavedConnection> = conns
+        .iter()
+        .map(|c| SavedConnection {
+            name: c.name.to_string(),
+            host: c.host.to_string(),
+            state: c.state.to_string(),
+            transfer_rate: c.transfer_rate.to_string(),
+            duration: c.duration.to_string(),
+            eta: c.eta.to_string(),
+            transfer_type: c.transfer_type.to_string(),
+            token: c.token.to_string(),
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string_pretty(&saved) {
+        let _ = std::fs::write("connections.json", json);
+    }
+}
+
+fn log_event(log_type: &str, message: &str) {
+    use std::io::Write;
+    let dir = std::path::Path::new("logs");
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let filepath = dir.join(format!("{}.log", log_type));
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(filepath)
+    {
+        let _ = writeln!(file, "[{}] {}", timestamp, message);
+    }
+}
+
+fn open_log(filename: &str) {
+    let path = format!("logs/{}", filename);
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", &path])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+}
+
 #[tokio::main]
 #[rustfmt::skip]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let ui = MainWindow::new()?;
+
+    let loaded = load_connections();
+    let slint_conns: Vec<ConnectionItem> = loaded.into_iter().map(|c| ConnectionItem {
+        name: c.name.into(),
+        host: c.host.into(),
+        state: c.state.into(),
+        transfer_rate: c.transfer_rate.into(),
+        duration: c.duration.into(),
+        eta: c.eta.into(),
+        transfer_type: c.transfer_type.into(),
+        token: c.token.into(),
+    }).collect();
+    ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
 
     // Fetch system info and push to UI
     let mut sys = sysinfo::System::new_all();
@@ -23,6 +107,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memory_mb = sys.total_memory() / 1024 / 1024;
     ui.set_os_processor_info(format!("Processor: {} Logical Cores Detected", cpu_count).into());
     ui.set_os_memory_info(format!("RAM: {} MB Available", memory_mb).into());
+
+    let (net_link, net_throughput) = network::get_active_network_info();
+    ui.set_network_link_type(net_link.into());
+    ui.set_network_max_throughput(net_throughput.into());
+
+    ui.on_open_log_file(|filename| {
+        open_log(filename.as_str());
+    });
 
     let ui_handle = ui.as_weak();
     
@@ -193,11 +285,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             if transfer_type == "Continuous Sync" || transfer_type == "Scheduled Transfer" {
+                let log_file = if transfer_type == "Continuous Sync" { "sync" } else { "schedule" };
+                log_event(log_file, &format!("Starting background daemon for {}", transfer_type));
                 tracing::info!("Starting background daemon for {}", transfer_type);
                 loop {
+                    log_event(log_file, "Executing background transfer cycle...");
                     tracing::info!("Executing background transfer cycle...");
                     if let Err(e) = engine.execute().await {
+                        log_event(log_file, &format!("Engine execution failed: {:?}", e));
                         tracing::error!("Engine execution failed: {:?}", e);
+                    } else {
+                        log_event(log_file, "Cycle completed successfully, waiting for next interval.");
                     }
                     
                     let sleep_duration = if transfer_type == "Continuous Sync" {
@@ -210,8 +308,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration)).await;
                 }
             } else {
+                log_event("transfers", "Initiating single transfer...");
                 if let Err(e) = engine.execute().await {
+                    log_event("transfers", &format!("Engine execution failed: {:?}", e));
                     tracing::error!("Engine execution failed: {:?}", e);
+                } else {
+                    log_event("transfers", "Transfer and validation completed successfully.");
                 }
             }
         });
@@ -222,6 +324,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             conns.push(new_conn);
+            save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
         }
@@ -266,29 +369,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     
     let ui_weak = ui.as_weak();
-    ui.on_fetch_directory(move |path, is_remote| {
+    ui.on_fetch_directory(move |path, _is_remote| {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
         
         tokio::spawn(async move {
             let mut nodes = Vec::new();
-            if !is_remote {
-                if let Ok(entries) = std::fs::read_dir(&path_str) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                        nodes.push(FileNode {
-                            name: name.into(),
-                            is_dir,
-                            path: entry.path().to_string_lossy().to_string().into(),
-                        });
-                    }
+            if let Ok(entries) = std::fs::read_dir(&path_str) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                    nodes.push(FileNode {
+                        name: name.into(),
+                        is_dir,
+                        path: entry.path().to_string_lossy().to_string().into(),
+                    });
                 }
-            } else {
-                // Mock remote directory
-                nodes.push(FileNode { name: "config".into(), is_dir: true, path: format!("{}/config", path_str).into() });
-                nodes.push(FileNode { name: "data".into(), is_dir: true, path: format!("{}/data", path_str).into() });
-                nodes.push(FileNode { name: "remote_file.txt".into(), is_dir: false, path: format!("{}/remote_file.txt", path_str).into() });
             }
             
             nodes.sort_by(|a, b| {
@@ -387,6 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = key_mgr.delete_key(&parsed.pub_key);
                 }
                 conns.remove(idx);
+                save_connections(&conns);
                 let model = std::rc::Rc::new(slint::VecModel::from(conns));
                 ui.set_connections(model.into());
             }
@@ -398,9 +495,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui_weak.clone();
         let token = token.to_string();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            let verified = token.len() > 10;
-            let status = if verified { "Connection Verified Successfully" } else { "Invalid Token Format" };
+            log_event("connection", &format!("Validating remote token: {}", token));
+            
+            let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                Ok(parsed) => {
+                    // Ingest the public key to authorized_keys
+                    let pub_key_line = format!("ssh-ed25519 {} simply-transfer", parsed.pub_key);
+                    
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    let ssh_dir = std::path::Path::new(&home).join(".ssh");
+                    let _ = std::fs::create_dir_all(&ssh_dir);
+                    let auth_keys = ssh_dir.join("authorized_keys");
+                    
+                    let mut key_exists = false;
+                    if let Ok(content) = std::fs::read_to_string(&auth_keys)
+                        && content.contains(&parsed.pub_key)
+                    {
+                        key_exists = true;
+                    }
+                    
+                    if !key_exists {
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
+                            let _ = writeln!(file, "{}", pub_key_line);
+                            log_event("connection", "Appended public key to authorized_keys.");
+                        }
+                    } else {
+                        log_event("connection", "Public key already in authorized_keys.");
+                    }
+                    
+                    // Trigger remote handshake (TCP connect to source device)
+                    let addr = format!("{}:{}", parsed.ip, parsed.port);
+                    log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
+                    
+                    // Use a short timeout for the handshake
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        tokio::net::TcpStream::connect(&addr)
+                    ).await {
+                        Ok(Ok(_)) => {
+                            log_event("connection", "Remote token validated and handshake succeeded.");
+                            (true, "Connection Verified Successfully".to_string())
+                        }
+                        Ok(Err(e)) => {
+                            log_event("connection", &format!("Handshake failed: {}", e));
+                            // Still return verified true since we ingested the key, but indicate connection issue
+                            (true, format!("Key Ingested, but Handshake Failed: {}", e))
+                        }
+                        Err(_) => {
+                            log_event("connection", "Handshake timed out.");
+                            (true, "Key Ingested, but Handshake Timed Out".to_string())
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_event("connection", &format!("Invalid token format: {}", e));
+                    (false, format!("Invalid Token Format: {}", e))
+                }
+            };
             
             slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
@@ -412,11 +564,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let _ui_weak = ui.as_weak();
-    ui.on_generate_key(move || {
+    ui.on_generate_key(move |host| {
         let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
         match key_mgr.generate_and_store() {
             Ok(pub_key) => {
-                let ip = "0.0.0.0"; // Default or pull from UI host field? The Slint callback doesn't pass the host right now, so we will stub the IP/Port.
+                let ip = if host.trim().is_empty() { "0.0.0.0" } else { host.as_str() };
                 let port = 22;
                 simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key).into()
             },
@@ -453,6 +605,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             if idx < conns.len() {
                 let token = conns[idx].token.to_string();
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(token.clone());
+                }
                 println!("Token copied to clipboard: {}", token);
             }
         }

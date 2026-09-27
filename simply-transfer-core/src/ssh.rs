@@ -78,7 +78,14 @@ impl SshClient for MockSshClient {
         }
     }
 
-    fn upload_file(&self, _local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+        let dest = Path::new(remote_path);
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::copy(local_path, dest) {
+            return Err(SshError::SftpError(format!("Failed to copy file: {}", e)));
+        }
         if let Ok(mut paths) = self.uploaded_paths.lock() {
             paths.push(remote_path.to_string());
         }

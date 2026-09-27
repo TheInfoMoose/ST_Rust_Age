@@ -29,9 +29,10 @@ fn create_many_files(dir: &std::path::Path, count: usize) {
 async fn run_engine_and_measure(source_dir: std::path::PathBuf, expected_success: usize) {
     let (tx, mut rx) = mpsc::channel(1000);
 
+    let remote_dir = tempdir().unwrap();
     let engine = TransferEngine::new(
         source_dir,
-        "/remote/backup".to_string(),
+        remote_dir.path().to_string_lossy().to_string(),
         tx,
         Arc::new(MockSshClient::new()),
         Arc::new(FallbackSnapshotDriver),
