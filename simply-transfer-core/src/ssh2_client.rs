@@ -64,7 +64,7 @@ impl SshClient for Ssh2Client {
         Ok(())
     }
 
-    fn upload_file(&self, local_path: &Path, remote_path: &Path) -> Result<(), SshError> {
+    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError> {
         let session = self
             .session
             .as_ref()
@@ -77,7 +77,7 @@ impl SshClient for Ssh2Client {
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut remote_file = session
-            .scp_send(remote_path, 0o644, metadata.len(), None)
+            .scp_send(Path::new(remote_path), 0o644, metadata.len(), None)
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut buffer = [0u8; 32768];

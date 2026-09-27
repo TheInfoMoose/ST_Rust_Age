@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -28,7 +29,7 @@ pub trait SshClient: Send + Sync {
     ) -> Result<(), SshError>;
 
     /// Open an SFTP session to upload a file.
-    fn upload_file(&self, local_path: &Path, remote_path: &Path) -> Result<(), SshError>;
+    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError>;
 
     /// Execute a remote command and return stdout.
     fn execute_command(&self, command: &str) -> Result<String, SshError>;
@@ -38,6 +39,7 @@ pub trait SshClient: Send + Sync {
 pub struct MockSshClient {
     pub is_connected: bool,
     pub is_authenticated: bool,
+    pub uploaded_paths: Mutex<Vec<String>>,
 }
 
 impl Default for MockSshClient {
@@ -51,6 +53,7 @@ impl MockSshClient {
         Self {
             is_connected: false,
             is_authenticated: false,
+            uploaded_paths: Mutex::new(Vec::new()),
         }
     }
 }
@@ -75,7 +78,10 @@ impl SshClient for MockSshClient {
         }
     }
 
-    fn upload_file(&self, _local_path: &Path, _remote_path: &Path) -> Result<(), SshError> {
+    fn upload_file(&self, _local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+        if let Ok(mut paths) = self.uploaded_paths.lock() {
+            paths.push(remote_path.to_string());
+        }
         Ok(())
     }
 
