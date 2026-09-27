@@ -54,33 +54,32 @@ pub fn get_active_network_info() -> (String, String) {
                     // It's Ethernet
                     if let Ok(speed_out) =
                         std::fs::read_to_string(format!("/sys/class/net/{}/speed", iface))
+                        && let Ok(speed_mbps) = speed_out.trim().parse::<u32>()
                     {
-                        if let Ok(speed_mbps) = speed_out.trim().parse::<u32>() {
-                            match speed_mbps {
-                                10..=100 => {
-                                    link_type = "FE".to_string();
-                                    max_throughput = "~12 MB/s".to_string();
-                                }
-                                101..=1000 => {
-                                    link_type = "GbE".to_string();
-                                    max_throughput = "~125 MB/s".to_string();
-                                }
-                                1001..=2500 => {
-                                    link_type = "2.5 GbE".to_string();
-                                    max_throughput = "~312 MB/s".to_string();
-                                }
-                                2501..=5000 => {
-                                    link_type = "5 GbE".to_string();
-                                    max_throughput = "~625 MB/s".to_string();
-                                }
-                                5001..=10000 => {
-                                    link_type = "10 GbE".to_string();
-                                    max_throughput = "~1250 MB/s".to_string();
-                                }
-                                _ => {
-                                    link_type = format!("{} Mbps Ethernet", speed_mbps);
-                                    max_throughput = format!("~{} MB/s", speed_mbps / 8);
-                                }
+                        match speed_mbps {
+                            10..=100 => {
+                                link_type = "FE".to_string();
+                                max_throughput = "~12 MB/s".to_string();
+                            }
+                            101..=1000 => {
+                                link_type = "GbE".to_string();
+                                max_throughput = "~125 MB/s".to_string();
+                            }
+                            1001..=2500 => {
+                                link_type = "2.5 GbE".to_string();
+                                max_throughput = "~312 MB/s".to_string();
+                            }
+                            2501..=5000 => {
+                                link_type = "5 GbE".to_string();
+                                max_throughput = "~625 MB/s".to_string();
+                            }
+                            5001..=10000 => {
+                                link_type = "10 GbE".to_string();
+                                max_throughput = "~1250 MB/s".to_string();
+                            }
+                            _ => {
+                                link_type = format!("{} Mbps Ethernet", speed_mbps);
+                                max_throughput = format!("~{} MB/s", speed_mbps / 8);
                             }
                         }
                     }

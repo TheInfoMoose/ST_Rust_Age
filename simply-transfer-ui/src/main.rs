@@ -24,10 +24,10 @@ struct SavedConnection {
 }
 
 fn load_connections() -> Vec<SavedConnection> {
-    if let Ok(data) = std::fs::read_to_string("connections.json") {
-        if let Ok(conns) = serde_json::from_str(&data) {
-            return conns;
-        }
+    if let Ok(data) = std::fs::read_to_string("connections.json")
+        && let Ok(conns) = serde_json::from_str(&data)
+    {
+        return conns;
     }
     Vec::new()
 }
@@ -369,7 +369,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     
     let ui_weak = ui.as_weak();
-    ui.on_fetch_directory(move |path, is_remote| {
+    ui.on_fetch_directory(move |path, _is_remote| {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
         
@@ -496,14 +496,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let token = token.to_string();
         tokio::spawn(async move {
             log_event("connection", &format!("Validating remote token: {}", token));
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            let verified = token.len() > 10;
-            let status = if verified { 
-                log_event("connection", "Remote token validated successfully.");
-                "Connection Verified Successfully" 
-            } else { 
-                log_event("connection", "Invalid remote token format.");
-                "Invalid Token Format" 
+            
+            let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                Ok(parsed) => {
+                    // Ingest the public key to authorized_keys
+                    let pub_key_line = format!("ssh-ed25519 {} simply-transfer", parsed.pub_key);
+                    
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    let ssh_dir = std::path::Path::new(&home).join(".ssh");
+                    let _ = std::fs::create_dir_all(&ssh_dir);
+                    let auth_keys = ssh_dir.join("authorized_keys");
+                    
+                    let mut key_exists = false;
+                    if let Ok(content) = std::fs::read_to_string(&auth_keys)
+                        && content.contains(&parsed.pub_key)
+                    {
+                        key_exists = true;
+                    }
+                    
+                    if !key_exists {
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
+                            let _ = writeln!(file, "{}", pub_key_line);
+                            log_event("connection", "Appended public key to authorized_keys.");
+                        }
+                    } else {
+                        log_event("connection", "Public key already in authorized_keys.");
+                    }
+                    
+                    // Trigger remote handshake (TCP connect to source device)
+                    let addr = format!("{}:{}", parsed.ip, parsed.port);
+                    log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
+                    
+                    // Use a short timeout for the handshake
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        tokio::net::TcpStream::connect(&addr)
+                    ).await {
+                        Ok(Ok(_)) => {
+                            log_event("connection", "Remote token validated and handshake succeeded.");
+                            (true, "Connection Verified Successfully".to_string())
+                        }
+                        Ok(Err(e)) => {
+                            log_event("connection", &format!("Handshake failed: {}", e));
+                            // Still return verified true since we ingested the key, but indicate connection issue
+                            (true, format!("Key Ingested, but Handshake Failed: {}", e))
+                        }
+                        Err(_) => {
+                            log_event("connection", "Handshake timed out.");
+                            (true, "Key Ingested, but Handshake Timed Out".to_string())
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_event("connection", &format!("Invalid token format: {}", e));
+                    (false, format!("Invalid Token Format: {}", e))
+                }
             };
             
             slint::invoke_from_event_loop(move || {
@@ -516,11 +564,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let _ui_weak = ui.as_weak();
-    ui.on_generate_key(move || {
+    ui.on_generate_key(move |host| {
         let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
         match key_mgr.generate_and_store() {
             Ok(pub_key) => {
-                let ip = "0.0.0.0"; // Default or pull from UI host field? The Slint callback doesn't pass the host right now, so we will stub the IP/Port.
+                let ip = if host.trim().is_empty() { "0.0.0.0" } else { host.as_str() };
                 let port = 22;
                 simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key).into()
             },

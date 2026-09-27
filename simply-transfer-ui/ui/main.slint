@@ -179,7 +179,7 @@ export component MainWindow inherits Window {
     callback verify_remote_token(string);
     callback copy_token();
     callback open_log_file(string);
-    callback generate_key() -> string;
+    callback generate_key(string) -> string;
     callback remove_key();
     callback pause_transfer();
     callback cancel_transfer();
@@ -356,7 +356,7 @@ export component MainWindow inherits Window {
                         HorizontalBox { 
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                             edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
-                            Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(); } }
+                            Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(edit_host.text); } }
                             Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
                         }
                         
@@ -407,7 +407,7 @@ export component MainWindow inherits Window {
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                                 new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
-                                Button { text: "Generate"; clicked => { new_key.text = root.generate_key(); } }
+                                Button { text: "Generate"; clicked => { new_key.text = root.generate_key(new_host.text); } }
                             }
                             Rectangle { vertical-stretch: 1; }
                             HorizontalBox {
