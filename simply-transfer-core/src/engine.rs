@@ -6,7 +6,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 use walkdir::WalkDir;
 
@@ -36,6 +36,13 @@ pub enum FileTransferStatus {
     Failed(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlSignal {
+    Run,
+    Pause,
+    Cancel,
+}
+
 /// Events emitted by the engine to the UI/consumers.
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
@@ -52,6 +59,7 @@ pub struct TransferEngine {
     event_sender: mpsc::Sender<TransferEvent>,
     ssh_client: Arc<dyn SshClient>,
     snapshot_driver: Arc<dyn SnapshotDriver>,
+    control_rx: Option<watch::Receiver<ControlSignal>>,
 }
 
 impl TransferEngine {
@@ -61,6 +69,7 @@ impl TransferEngine {
         event_sender: mpsc::Sender<TransferEvent>,
         ssh_client: Arc<dyn SshClient>,
         snapshot_driver: Arc<dyn SnapshotDriver>,
+        control_rx: Option<watch::Receiver<ControlSignal>>,
     ) -> Self {
         Self {
             source_dir,
@@ -68,6 +77,7 @@ impl TransferEngine {
             event_sender,
             ssh_client,
             snapshot_driver,
+            control_rx,
         }
     }
 
@@ -120,6 +130,22 @@ impl TransferEngine {
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
         for file in &manifest.to_transfer {
+            if let Some(ref rx) = self.control_rx {
+                let mut rx_clone = rx.clone();
+                let mut current_signal = rx_clone.borrow().clone();
+                while current_signal == ControlSignal::Pause {
+                    tracing::info!("Transfer paused. Waiting for resume or cancel...");
+                    if rx_clone.changed().await.is_err() {
+                        return Err(EngineError::PhaseError("Control channel closed".into()));
+                    }
+                    current_signal = rx_clone.borrow().clone();
+                }
+                if current_signal == ControlSignal::Cancel {
+                    tracing::info!("Transfer cancelled.");
+                    return Err(EngineError::PhaseError("Transfer cancelled by user".into()));
+                }
+            }
+
             let local_path = active_source_dir.join(file);
             let remote_path = Path::new(&self.destination_dir).join(file);
             let size = local_registry.files[file].size;

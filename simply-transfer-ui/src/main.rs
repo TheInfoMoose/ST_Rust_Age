@@ -1,10 +1,10 @@
-use simply_transfer_core::engine::{FileTransferStatus, TransferEngine, TransferEvent};
+use simply_transfer_core::engine::{ControlSignal, FileTransferStatus, TransferEngine, TransferEvent};
 use simply_transfer_core::ssh::MockSshClient;
 use simply_transfer_snapshots::FallbackSnapshotDriver;
 use slint::Model;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, watch};
 slint::include_modules!();
 
 #[tokio::main]
@@ -23,9 +23,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_os_memory_info(format!("RAM: {} MB Available", memory_mb).into());
 
     let ui_handle = ui.as_weak();
+    
+    // Shared control channel for the active transfer
+    let active_control_tx: Arc<Mutex<Option<watch::Sender<ControlSignal>>>> = Arc::new(Mutex::new(None));
+    let start_tx = active_control_tx.clone();
+    let pause_tx = active_control_tx.clone();
+    let cancel_tx = active_control_tx.clone();
 
     ui.on_start_transfer(move || {
         let ui_handle = ui_handle.clone();
+        let control_tx_ref = start_tx.clone();
 
         let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
@@ -40,12 +47,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
 
+            let (control_tx, control_rx) = watch::channel(ControlSignal::Run);
+            if let Ok(mut guard) = control_tx_ref.lock() {
+                *guard = Some(control_tx);
+            }
+
             let engine = TransferEngine::new(
                 PathBuf::from(src),
                 dest,
                 tx,
                 Arc::new(MockSshClient::new()),
                 Arc::new(FallbackSnapshotDriver),
+                Some(control_rx),
             );
 
             let (batch_tx, mut batch_rx) = mpsc::channel(10000);
@@ -425,10 +438,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.on_pause_transfer(move || {
         println!("Transfer paused");
+        if let Ok(guard) = pause_tx.lock() {
+            if let Some(tx) = guard.as_ref() {
+                // Toggle between Pause and Run for simplicity, assuming the button acts as play/pause
+                let current = tx.borrow().clone();
+                let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
+                let _ = tx.send(next);
+            }
+        }
     });
 
     ui.on_cancel_transfer(move || {
         println!("Transfer cancelled");
+        if let Ok(mut guard) = cancel_tx.lock() {
+            if let Some(tx) = guard.take() {
+                let _ = tx.send(ControlSignal::Cancel);
+            }
+        }
     });
 
     ui.run()?;

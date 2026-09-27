@@ -1,0 +1,63 @@
+--- simply-transfer-core/src/engine.rs
++++ simply-transfer-core/src/engine.rs
+@@ -9,6 +9,7 @@
+ use tokio::sync::mpsc;
++use tokio::sync::watch;
+ use tracing::{info, warn};
+ use walkdir::WalkDir;
+ 
+@@ -37,6 +38,13 @@
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum ControlSignal {
++    Run,
++    Pause,
++    Cancel,
++}
++
+ /// Events emitted by the engine to the UI/consumers.
+ #[derive(Debug, Clone)]
+@@ -53,6 +61,7 @@
+     event_sender: mpsc::Sender<TransferEvent>,
+     ssh_client: Arc<dyn SshClient>,
+     snapshot_driver: Arc<dyn SnapshotDriver>,
++    control_rx: Option<watch::Receiver<ControlSignal>>,
+ }
+ 
+@@ -62,11 +71,13 @@
+         event_sender: mpsc::Sender<TransferEvent>,
+         ssh_client: Arc<dyn SshClient>,
+         snapshot_driver: Arc<dyn SnapshotDriver>,
++        control_rx: Option<watch::Receiver<ControlSignal>>,
+     ) -> Self {
+         Self {
+             source_dir,
+             destination_dir,
+             event_sender,
+             ssh_client,
+             snapshot_driver,
++            control_rx,
+         }
+     }
+@@ -120,6 +131,21 @@
+         // Phase 2: Transmission
+         self.emit_phase(2, "Transmission".to_string()).await;
+         for file in &manifest.to_transfer {
++            if let Some(ref mut rx) = self.control_rx.clone() {
++                let mut current_signal = rx.borrow().clone();
++                while current_signal == ControlSignal::Pause {
++                    tracing::info!("Transfer paused. Waiting for resume or cancel...");
++                    if rx.changed().await.is_err() {
++                        return Err(EngineError::PhaseError("Control channel closed".into()));
++                    }
++                    current_signal = rx.borrow().clone();
++                }
++                if current_signal == ControlSignal::Cancel {
++                    tracing::info!("Transfer cancelled.");
++                    return Err(EngineError::PhaseError("Transfer cancelled by user".into()));
++                }
++            }
++
+             let local_path = active_source_dir.join(file);
+             let remote_path = Path::new(&self.destination_dir).join(file);
