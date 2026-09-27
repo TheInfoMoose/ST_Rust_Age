@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arboard = "3.6.1"
 notify-rust = "4.18.0"
 rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 simply-transfer-core = { version = "0.1.0", path = "../simply-transfer-core" }
 simply-transfer-crypto = { version = "0.1.0", path = "../simply-transfer-crypto" }
 simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }

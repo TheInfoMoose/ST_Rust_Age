@@ -9,12 +9,62 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, watch};
 slint::include_modules!();
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SavedConnection {
+    name: String,
+    host: String,
+    state: String,
+    transfer_rate: String,
+    duration: String,
+    eta: String,
+    transfer_type: String,
+    token: String,
+}
+
+fn load_connections() -> Vec<SavedConnection> {
+    if let Ok(data) = std::fs::read_to_string("connections.json") {
+        if let Ok(conns) = serde_json::from_str(&data) {
+            return conns;
+        }
+    }
+    Vec::new()
+}
+
+fn save_connections(conns: &[ConnectionItem]) {
+    let saved: Vec<SavedConnection> = conns.iter().map(|c| SavedConnection {
+        name: c.name.to_string(),
+        host: c.host.to_string(),
+        state: c.state.to_string(),
+        transfer_rate: c.transfer_rate.to_string(),
+        duration: c.duration.to_string(),
+        eta: c.eta.to_string(),
+        transfer_type: c.transfer_type.to_string(),
+        token: c.token.to_string(),
+    }).collect();
+    if let Ok(json) = serde_json::to_string_pretty(&saved) {
+        let _ = std::fs::write("connections.json", json);
+    }
+}
+
 #[tokio::main]
 #[rustfmt::skip]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let ui = MainWindow::new()?;
+
+    let loaded = load_connections();
+    let slint_conns: Vec<ConnectionItem> = loaded.into_iter().map(|c| ConnectionItem {
+        name: c.name.into(),
+        host: c.host.into(),
+        state: c.state.into(),
+        transfer_rate: c.transfer_rate.into(),
+        duration: c.duration.into(),
+        eta: c.eta.into(),
+        transfer_type: c.transfer_type.into(),
+        token: c.token.into(),
+    }).collect();
+    ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
 
     // Fetch system info and push to UI
     let mut sys = sysinfo::System::new_all();
@@ -222,6 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             conns.push(new_conn);
+            save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
         }
@@ -272,23 +323,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         tokio::spawn(async move {
             let mut nodes = Vec::new();
-            if !is_remote {
-                if let Ok(entries) = std::fs::read_dir(&path_str) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                        nodes.push(FileNode {
-                            name: name.into(),
-                            is_dir,
-                            path: entry.path().to_string_lossy().to_string().into(),
-                        });
-                    }
+            if let Ok(entries) = std::fs::read_dir(&path_str) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                    nodes.push(FileNode {
+                        name: name.into(),
+                        is_dir,
+                        path: entry.path().to_string_lossy().to_string().into(),
+                    });
                 }
-            } else {
-                // Mock remote directory
-                nodes.push(FileNode { name: "config".into(), is_dir: true, path: format!("{}/config", path_str).into() });
-                nodes.push(FileNode { name: "data".into(), is_dir: true, path: format!("{}/data", path_str).into() });
-                nodes.push(FileNode { name: "remote_file.txt".into(), is_dir: false, path: format!("{}/remote_file.txt", path_str).into() });
             }
             
             nodes.sort_by(|a, b| {
@@ -387,6 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = key_mgr.delete_key(&parsed.pub_key);
                 }
                 conns.remove(idx);
+                save_connections(&conns);
                 let model = std::rc::Rc::new(slint::VecModel::from(conns));
                 ui.set_connections(model.into());
             }
@@ -453,6 +498,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             if idx < conns.len() {
                 let token = conns[idx].token.to_string();
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    let _ = clipboard.set_text(token.clone());
+                }
                 println!("Token copied to clipboard: {}", token);
             }
         }

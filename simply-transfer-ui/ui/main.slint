@@ -223,7 +223,7 @@ export component MainWindow inherits Window {
     property <int> add_connection_tab: 0;
     in-out property <bool> is_remote_verified: false;
     in-out property <string> remote_verification_status: "";
-    property <bool> show_key: false;
+
 
     // Transfer Setup States
     in-out property <string> transfer_type_val: "Single Transfer";
@@ -318,17 +318,13 @@ export component MainWindow inherits Window {
                         Text { text: "Estimated Completion: " + root.connections[root.selected_connection_idx].eta; }
                         Text { text: "Type of Transfer: " + root.connections[root.selected_connection_idx].transfer_type; }
                         
-                        HorizontalBox {
-                            Text { text: "Key:"; vertical-alignment: center; }
-                            Text { text: root.show_key ? root.connections[root.selected_connection_idx].token : "*******************"; vertical-alignment: center; }
-                            Button { text: root.show_key ? "Hide" : "Show"; clicked => { root.show_key = !root.show_key; } }
-                        }
+
 
                         Rectangle { vertical-stretch: 1; }
 
                         HorizontalBox {
                             Text { text: "Destination Token:"; vertical-alignment: center; }
-                            LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; input-type: password; }
+                            LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
                             Button { text: "Copy"; clicked => { root.copy_token(); } }
                         }
                         Button { 
@@ -355,7 +351,7 @@ export component MainWindow inherits Window {
                         HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { text: root.connections[root.selected_connection_idx].host; } }
                         HorizontalBox { 
                             Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                            edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; input-type: password; }
+                            edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
                             Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(); } }
                             Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
                         }
@@ -406,7 +402,7 @@ export component MainWindow inherits Window {
                             HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                                new_key := LineEdit { placeholder-text: "Click Generate to create key"; input-type: password; }
+                                new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
                                 Button { text: "Generate"; clicked => { new_key.text = root.generate_key(); } }
                             }
                             Rectangle { vertical-stretch: 1; }
@@ -430,7 +426,7 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             HorizontalBox { 
                                 Text { text: "Token:"; width: 100px; vertical-alignment: center; } 
-                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; input-type: password; }
+                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
                                 Button { 
                                     text: "Verify"; 
                                     clicked => { 
@@ -682,7 +678,7 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         Text { text: "Bandwidth Allocation (MB/s):"; font-weight: 700; }
-                        Text { text: "Connection: GbE | Max Throughput: ~125 MB/s"; font-size: 11px; color: gray; }
+                        Text { text: "Link Capability: Dynamic | Max Throughput: Variable"; font-size: 11px; color: gray; }
                         Rectangle { height: 5px; }
                         LineEdit { text: "0 (Unlimited)"; }
                         
