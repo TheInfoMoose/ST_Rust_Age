@@ -291,9 +291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if idx < mappings.len() {
                 if ui.get_browser_is_source() {
-                    mappings[idx].source = path.into();
+                    mappings[idx].source = path.clone();
                 } else {
-                    mappings[idx].destination = path.into();
+                    mappings[idx].destination = path;
                 }
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
             }
@@ -327,7 +327,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
             if idx < mappings.len() {
-                mappings[idx].source = text.into();
+                mappings[idx].source = text;
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
             }
         }
@@ -339,7 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
             if idx < mappings.len() {
-                mappings[idx].destination = text.into();
+                mappings[idx].destination = text;
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
             }
         }
@@ -440,22 +440,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.on_pause_transfer(move || {
         println!("Transfer paused");
-        if let Ok(guard) = pause_tx.lock() {
-            if let Some(tx) = guard.as_ref() {
-                // Toggle between Pause and Run for simplicity, assuming the button acts as play/pause
-                let current = tx.borrow().clone();
-                let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
-                let _ = tx.send(next);
-            }
+        if let Ok(guard) = pause_tx.lock()
+            && let Some(tx) = guard.as_ref()
+        {
+            // Toggle between Pause and Run for simplicity, assuming the button acts as play/pause
+            let current = tx.borrow().clone();
+            let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
+            let _ = tx.send(next);
         }
     });
 
     ui.on_cancel_transfer(move || {
         println!("Transfer cancelled");
-        if let Ok(mut guard) = cancel_tx.lock() {
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(ControlSignal::Cancel);
-            }
+        if let Ok(mut guard) = cancel_tx.lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(ControlSignal::Cancel);
         }
     });
 
