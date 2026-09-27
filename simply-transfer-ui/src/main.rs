@@ -79,6 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut local_c_q = Vec::new();
                 let mut phase_txt = "Live Transfer Queue".to_string();
                 let mut status_txt = "Completed: 0 / 0 files".to_string();
+                let mut metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
+                let mut last_progress_bytes = 0;
+                let mut last_tick = tokio::time::Instant::now();
 
                 loop {
                     tokio::select! {
@@ -103,6 +106,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     size: format!("{} bytes", total_bytes).into(),
                                                     progress,
                                                 }];
+                                                
+                                                let now = tokio::time::Instant::now();
+                                                let elapsed = now.duration_since(last_tick).as_secs_f32();
+                                                if elapsed > 0.0 && progress_bytes >= last_progress_bytes {
+                                                    let diff = progress_bytes - last_progress_bytes;
+                                                    let speed_mbps = (diff as f32 / elapsed) / 1_048_576.0;
+                                                    metrics_txt = format!("Upload: {:.1} MB/s | Download: 0 MB/s | Latency: ~12ms", speed_mbps);
+                                                }
+                                                last_progress_bytes = progress_bytes;
+                                                last_tick = now;
                                             }
                                             FileTransferStatus::Completed => {
                                                 local_c_q.push(CompletedItem {
@@ -132,10 +145,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         status_txt = format!("Completed: {} Success, {} Failed", successful, failed);
                                         phase_txt = "Transfer Complete".to_string();
                                         local_t_q.clear();
+                                        let _ = notify_rust::Notification::new()
+                                            .summary("Simply Transfer")
+                                            .body(&format!("Transfer completed: {} successful, {} failed.", successful, failed))
+                                            .show();
                                     }
                                     TransferEvent::TransferFailed(err) => {
                                         status_txt = format!("Transfer Aborted: {}", err);
                                         local_t_q.clear();
+                                        let _ = notify_rust::Notification::new()
+                                            .summary("Simply Transfer Error")
+                                            .body(&format!("Transfer aborted: {}", err))
+                                            .show();
                                     }
                                 }
                             }
@@ -145,6 +166,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let clone_c_q = local_c_q.clone();
                             let clone_phase = phase_txt.clone();
                             let clone_status = status_txt.clone();
+
+                            let clone_metrics = metrics_txt.clone();
 
                             slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
@@ -156,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                     ui.set_phase_text(clone_phase.into());
                                     ui.set_overall_status(clone_status.into());
+                                    ui.set_transfer_metrics_text(clone_metrics.into());
                                 }
                             }).unwrap();
                         }

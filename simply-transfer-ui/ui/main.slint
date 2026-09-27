@@ -232,6 +232,7 @@ export component MainWindow inherits Window {
     // Active Transfers States
     in property <[string]> active_sessions: [];
     property <int> selected_session_idx: 0;
+    in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
 
     // Settings States
     property <int> selected_setting_idx: 0;
@@ -585,7 +586,7 @@ export component MainWindow inherits Window {
                                         ProgressIndicator { progress: file.progress; }
                                     }
                                 }
-                                Text { text: "Upload: 45 MB/s | Download: 0 MB/s | Latency: 12ms"; }
+                                Text { text: root.transfer_metrics_text; }
                                 
                                 Rectangle { height: 10px; }
                                 Rectangle { height: 1px; background: gray; }
