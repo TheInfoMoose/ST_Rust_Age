@@ -148,7 +148,11 @@ impl TransferEngine {
 
             let local_path = active_source_dir.join(file);
             let normalized_file = file.replace('\\', "/");
-            let remote_path = format!("{}/{}", self.destination_dir.trim_end_matches('/'), normalized_file);
+            let remote_path = format!(
+                "{}/{}",
+                self.destination_dir.trim_end_matches('/'),
+                normalized_file
+            );
             let size = local_registry.files[file].size;
 
             self.emit_file_status(
@@ -192,7 +196,11 @@ impl TransferEngine {
         for file in &successfully_transmitted {
             let entry = &local_registry.files[file];
             let normalized_file = file.replace('\\', "/");
-            let remote_path_str = format!("{}/{}", self.destination_dir.trim_end_matches('/'), normalized_file);
+            let remote_path_str = format!(
+                "{}/{}",
+                self.destination_dir.trim_end_matches('/'),
+                normalized_file
+            );
 
             let cmd = format!("sha256sum '{}'", remote_path_str);
             let ssh_client = self.ssh_client.clone();
