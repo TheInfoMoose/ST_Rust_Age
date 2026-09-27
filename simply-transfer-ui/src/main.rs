@@ -323,21 +323,102 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_commit_connection(move |new_conn| {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-            conns.push(new_conn.clone());
+            let mut conn_to_save = new_conn.clone();
+            
+            if conn_to_save.transfer_type != "Remote Transfer" {
+                let pub_key = conn_to_save.token.to_string();
+                let host = conn_to_save.host.to_string();
+                let ip = if host.trim().is_empty() { "0.0.0.0" } else { host.as_str() };
+                
+                let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+                let port = listener.local_addr().unwrap().port();
+                listener.set_nonblocking(true).unwrap();
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                
+                let pub_key_clone = pub_key.clone();
+                let ui_handle = ui_weak.clone();
+                
+                tokio::spawn(async move {
+                    while let Ok((mut socket, addr)) = listener.accept().await {
+                        let pub_key = pub_key_clone.clone();
+                        let ui_handle = ui_handle.clone();
+                        tokio::spawn(async move {
+                            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+                            let (reader, mut writer) = socket.split();
+                            let mut buf_reader = tokio::io::BufReader::new(reader);
+                            let mut line = String::new();
+                            
+                            if buf_reader.read_line(&mut line).await.is_ok()
+                                && let Ok(req) = serde_json::from_str::<serde_json::Value>(&line)
+                            {
+                                if req["action"] == "verify" {
+                                    let dest_ip = addr.ip().to_string();
+                                    let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                                    if let Ok(priv_pem) = mgr.get_private_key_pem(&pub_key) {
+                                        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                                        let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
+                                        let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
+                                        
+                                        use simply_transfer_core::ssh::SshClient;
+                                        let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
+                                        if ssh_client.connect(&dest_ip, 22).is_ok() {
+                                            let user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
+                                            if ssh_client.authenticate_publickey(&user, tmp_pem.to_str().unwrap(), None).is_ok()
+                                                && let Ok(dest_pub) = ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub")
+                                            {
+                                                let pub_key_line = format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
+                                                let auth_keys = std::path::Path::new(&home).join(".ssh").join("authorized_keys");
+                                                use std::io::Write;
+                                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
+                                                    let _ = writeln!(f, "{}", pub_key_line);
+                                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                                                    slint::invoke_from_event_loop(move || {
+                                                        if let Some(ui) = ui_handle.upgrade() {
+                                                            ui.set_overall_status("Connection Confirmed".into());
+                                                        }
+                                                    }).unwrap();
+                                                    let _ = std::fs::remove_file(&tmp_pem);
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        let _ = std::fs::remove_file(&tmp_pem);
+                                    }
+                                    let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
+                                } else if req["action"] == "commit" {
+                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                                    slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_handle.upgrade() {
+                                            ui.set_overall_status("Bidirectional sync configured".into());
+                                        }
+                                    }).unwrap();
+                                } else if req["action"] == "cancel" {
+                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                                }
+                            }
+                        });
+                    }
+                });
+                
+                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key);
+                conn_to_save.token = generated_token.into();
+            } else {
+                let token = conn_to_save.token.to_string();
+                if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    let addr = format!("{}:{}", parsed.ip, parsed.port);
+                    tokio::spawn(async move {
+                        if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
+                            use tokio::io::AsyncWriteExt;
+                            let _ = stream.write_all(b"{\"action\":\"commit\"}\n").await;
+                        }
+                    });
+                }
+            }
+            
+            conns.push(conn_to_save);
             save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
-            
-            let token = new_conn.token.to_string();
-            if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                let addr = format!("{}:{}", parsed.ip, parsed.port);
-                tokio::spawn(async move {
-                    if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
-                        use tokio::io::AsyncWriteExt;
-                        let _ = stream.write_all(b"{\"action\":\"commit\"}\n").await;
-                    }
-                });
-            }
         }
     });
 
@@ -600,85 +681,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     });
 
-    let _ui_weak = ui.as_weak();
-    ui.on_generate_key(move |host| {
+    ui.on_generate_key(move |_host| {
         let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
         match key_mgr.generate_and_store() {
-            Ok(pub_key) => {
-                let ip = if host.trim().is_empty() { "0.0.0.0" } else { host.as_str() };
-                
-                let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
-                let port = listener.local_addr().unwrap().port();
-                listener.set_nonblocking(true).unwrap();
-                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-                
-                let pub_key_clone = pub_key.clone();
-                let ui_handle = _ui_weak.clone();
-                
-                tokio::spawn(async move {
-                    while let Ok((mut socket, addr)) = listener.accept().await {
-                        let pub_key = pub_key_clone.clone();
-                        let ui_handle = ui_handle.clone();
-                        tokio::spawn(async move {
-                            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-                            let (reader, mut writer) = socket.split();
-                            let mut buf_reader = tokio::io::BufReader::new(reader);
-                            let mut line = String::new();
-                            
-                            if buf_reader.read_line(&mut line).await.is_ok()
-                                && let Ok(req) = serde_json::from_str::<serde_json::Value>(&line)
-                            {
-                                    if req["action"] == "verify" {
-                                        let dest_ip = addr.ip().to_string();
-                                        let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                                        if let Ok(priv_pem) = mgr.get_private_key_pem(&pub_key) {
-                                            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                                            let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
-                                            let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
-                                            
-                                            use simply_transfer_core::ssh::SshClient;
-                                            let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
-                                            if ssh_client.connect(&dest_ip, 22).is_ok() {
-                                                let user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
-                                                if ssh_client.authenticate_publickey(&user, tmp_pem.to_str().unwrap(), None).is_ok()
-                                                    && let Ok(dest_pub) = ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub")
-                                                {
-                                                        let pub_key_line = format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
-                                                        let auth_keys = std::path::Path::new(&home).join(".ssh").join("authorized_keys");
-                                                        use std::io::Write;
-                                                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
-                                                            let _ = writeln!(f, "{}", pub_key_line);
-                                                            let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                                            slint::invoke_from_event_loop(move || {
-                                                                if let Some(ui) = ui_handle.upgrade() {
-                                                                    ui.set_overall_status("Connection Confirmed".into());
-                                                                }
-                                                            }).unwrap();
-                                                            let _ = std::fs::remove_file(&tmp_pem);
-                                                            return;
-                                                        }
-                                                }
-                                            }
-                                            let _ = std::fs::remove_file(&tmp_pem);
-                                        }
-                                        let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
-                                    } else if req["action"] == "commit" {
-                                        let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                        slint::invoke_from_event_loop(move || {
-                                            if let Some(ui) = ui_handle.upgrade() {
-                                                ui.set_overall_status("Bidirectional sync configured".into());
-                                            }
-                                        }).unwrap();
-                                    } else if req["action"] == "cancel" {
-                                        let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                    }
-                                }
-                            });
-                    }
-                });
-
-                simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key).into()
-            },
+            Ok(pub_key) => pub_key.into(),
             Err(e) => {
                 tracing::error!("Failed to generate key: {}", e);
                 "".into()
