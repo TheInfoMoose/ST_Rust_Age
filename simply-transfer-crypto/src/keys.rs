@@ -1,6 +1,7 @@
 use crate::CryptoError;
 use crate::SecureStorage;
-use ed25519_dalek::SigningKey;
+use rand_core::OsRng;
+use ssh_key::PrivateKey;
 
 pub struct KeyPairManager {
     storage: SecureStorage,
@@ -13,31 +14,33 @@ impl KeyPairManager {
         }
     }
 
-    /// Generates a new Ed25519 keypair, securely stores the private key keyed by the public key,
-    /// and returns the public key as a hex string.
+    /// Generates a new Ed25519 keypair, securely stores the OpenSSH private key PEM keyed by the public key,
+    /// and returns the public key as a hex string (or OpenSSH string).
     pub fn generate_and_store(&self) -> Result<String, CryptoError> {
-        let mut csprng = rand::rng();
-        let signing_key = SigningKey::generate(&mut csprng);
-        let verifying_key = signing_key.verifying_key();
+        let mut rng = OsRng;
+        let priv_key = PrivateKey::random(&mut rng, ssh_key::Algorithm::Ed25519)
+            .map_err(|e| CryptoError::Other(e.to_string()))?;
 
-        let priv_hex = hex::encode(signing_key.to_bytes());
-        let pub_hex = hex::encode(verifying_key.to_bytes());
-        self.storage.set_secret(&pub_hex, priv_hex)?;
+        let pub_key = priv_key
+            .public_key()
+            .to_openssh()
+            .map_err(|e| CryptoError::Other(e.to_string()))?;
+        let priv_pem = priv_key
+            .to_openssh(ssh_key::LineEnding::LF)
+            .map_err(|e| CryptoError::Other(e.to_string()))?;
 
-        Ok(pub_hex)
+        // Use the base64 part of the public key as the identifier to store the private key
+        let parts: Vec<&str> = pub_key.split_whitespace().collect();
+        let pub_id = if parts.len() >= 2 { parts[1] } else { &pub_key };
+
+        self.storage.set_secret(pub_id, priv_pem.to_string())?;
+
+        Ok(pub_id.to_string())
     }
 
-    /// Retrieves the signing key for a given connection_id
-    pub fn get_signing_key(&self, connection_id: &str) -> Result<SigningKey, CryptoError> {
-        let priv_hex = self.storage.get_secret(connection_id)?;
-        let bytes = hex::decode(&priv_hex)
-            .map_err(|_| CryptoError::Other("Invalid hex in secure storage".into()))?;
-
-        let bytes_array: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| CryptoError::Other("Invalid key length".into()))?;
-
-        Ok(SigningKey::from_bytes(&bytes_array))
+    /// Retrieves the OpenSSH private key PEM string for a given connection_id (public key base64)
+    pub fn get_private_key_pem(&self, connection_id: &str) -> Result<String, CryptoError> {
+        self.storage.get_secret(connection_id)
     }
 
     /// Removes a keypair for a given connection_id

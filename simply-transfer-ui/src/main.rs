@@ -51,6 +51,35 @@ fn save_connections(conns: &[ConnectionItem]) {
     }
 }
 
+fn log_event(log_type: &str, message: &str) {
+    use std::io::Write;
+    let dir = std::path::Path::new("logs");
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let filepath = dir.join(format!("{}.log", log_type));
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(filepath)
+    {
+        let _ = writeln!(file, "[{}] {}", timestamp, message);
+    }
+}
+
+fn open_log(filename: &str) {
+    let path = format!("logs/{}", filename);
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", &path])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+}
+
 #[tokio::main]
 #[rustfmt::skip]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,6 +111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (net_link, net_throughput) = network::get_active_network_info();
     ui.set_network_link_type(net_link.into());
     ui.set_network_max_throughput(net_throughput.into());
+
+    ui.on_open_log_file(|filename| {
+        open_log(filename.as_str());
+    });
 
     let ui_handle = ui.as_weak();
     
@@ -252,11 +285,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             if transfer_type == "Continuous Sync" || transfer_type == "Scheduled Transfer" {
+                let log_file = if transfer_type == "Continuous Sync" { "sync" } else { "schedule" };
+                log_event(log_file, &format!("Starting background daemon for {}", transfer_type));
                 tracing::info!("Starting background daemon for {}", transfer_type);
                 loop {
+                    log_event(log_file, "Executing background transfer cycle...");
                     tracing::info!("Executing background transfer cycle...");
                     if let Err(e) = engine.execute().await {
+                        log_event(log_file, &format!("Engine execution failed: {:?}", e));
                         tracing::error!("Engine execution failed: {:?}", e);
+                    } else {
+                        log_event(log_file, "Cycle completed successfully, waiting for next interval.");
                     }
                     
                     let sleep_duration = if transfer_type == "Continuous Sync" {
@@ -269,8 +308,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration)).await;
                 }
             } else {
+                log_event("transfers", "Initiating single transfer...");
                 if let Err(e) = engine.execute().await {
+                    log_event("transfers", &format!("Engine execution failed: {:?}", e));
                     tracing::error!("Engine execution failed: {:?}", e);
+                } else {
+                    log_event("transfers", "Transfer and validation completed successfully.");
                 }
             }
         });
@@ -452,9 +495,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui_weak.clone();
         let token = token.to_string();
         tokio::spawn(async move {
+            log_event("connection", &format!("Validating remote token: {}", token));
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             let verified = token.len() > 10;
-            let status = if verified { "Connection Verified Successfully" } else { "Invalid Token Format" };
+            let status = if verified { 
+                log_event("connection", "Remote token validated successfully.");
+                "Connection Verified Successfully" 
+            } else { 
+                log_event("connection", "Invalid remote token format.");
+                "Invalid Token Format" 
+            };
             
             slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
