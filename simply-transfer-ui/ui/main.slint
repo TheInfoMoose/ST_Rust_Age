@@ -184,6 +184,8 @@ export component MainWindow inherits Window {
     callback pause_transfer();
     callback cancel_transfer();
     callback popout_session();
+    callback cancel_key_generation(string);
+    callback purge_orphaned_keys() -> int;
     
     // File browsing callbacks
     callback browse_source(int);
@@ -413,7 +415,7 @@ export component MainWindow inherits Window {
                             HorizontalBox {
                                 alignment: end;
                                 spacing: 10px;
-                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; } }
+                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; root.cancel_key_generation(new_key.text); } }
                                 RustButton { 
                                     text: "Commit"; 
                                     clicked => { 
@@ -720,7 +722,15 @@ export component MainWindow inherits Window {
                         LineEdit { text: "16"; }
 
                         Rectangle { height: 20px; }
+                        
+                        Text { text: "Credential Management:"; font-weight: 700; }
+                        Rectangle { height: 5px; }
+                        RustButton {
+                            text: "Purge Orphaned Keys";
+                            clicked => { root.purge_orphaned_keys(); }
+                        }
 
+                        Rectangle { height: 20px; }
                         Text { text: "Max Memory (MB):"; font-weight: 700; }
                         Text { text: root.os_memory_info + " | Minimum Required: 512 MB"; font-size: 11px; color: gray; }
                         Rectangle { height: 5px; }

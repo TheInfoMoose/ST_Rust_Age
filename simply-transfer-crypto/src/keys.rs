@@ -1,6 +1,6 @@
 use crate::CryptoError;
 use crate::SecureStorage;
-use rand_core::OsRng;
+use rand_core_06::OsRng;
 use ssh_key::PrivateKey;
 
 pub struct KeyPairManager {
