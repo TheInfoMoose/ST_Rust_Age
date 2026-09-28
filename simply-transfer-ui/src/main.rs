@@ -261,7 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let clone_metrics = metrics_txt.clone();
 
-                            slint::invoke_from_event_loop(move || {
+                            let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
                                     let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
                                     ui.set_transfer_queue(t_model.into());
@@ -273,7 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     ui.set_overall_status(clone_status.into());
                                     ui.set_transfer_metrics_text(clone_metrics.into());
                                 }
-                            }).unwrap();
+                            });
                         }
                         n = batch_rx.recv_many(&mut buffer, 5000) => {
                             if n == 0 {
@@ -325,15 +325,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let mut conn_to_save = new_conn.clone();
             
+            tokio::spawn(async move {
+                if !simply_transfer_core::ssh_server::SshServer::is_installed() {
+                    log_event("connection", "SSH server is not installed. Prompting for privileges to install it...");
+                    if let Err(e) = simply_transfer_core::ssh_server::SshServer::install_server() {
+                        log_event("connection", &format!("Failed to install SSH server: {}", e));
+                    } else {
+                        log_event("connection", "SSH server installed successfully.");
+                    }
+                }
+                
+                if !simply_transfer_core::ssh_server::SshServer::is_running() {
+                    log_event("connection", "SSH server is not running. Prompting for privileges to start it...");
+                    if let Err(e) = simply_transfer_core::ssh_server::SshServer::start_server() {
+                        log_event("connection", &format!("Failed to start SSH server: {}", e));
+                    } else {
+                        log_event("connection", "SSH server started successfully.");
+                    }
+                }
+            });
+
             if conn_to_save.transfer_type != "Remote Transfer" {
                 let pub_key = conn_to_save.token.to_string();
-                let host = conn_to_save.host.to_string();
-                let ip = if host.trim().is_empty() { "0.0.0.0" } else { host.as_str() };
+                
+                // We must embed OUR local IP in the token so the remote device knows where to reach us.
+                // The 'host' field here is the destination IP, so we should NOT use it for the token.
+                let mut local_ip = String::new();
+                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
+                    && socket.connect("8.8.8.8:80").is_ok()
+                    && let Ok(addr) = socket.local_addr()
+                {
+                    local_ip = addr.ip().to_string();
+                }
+                
+                if local_ip.trim().is_empty() || local_ip == "0.0.0.0" {
+                    local_ip = "127.0.0.1".to_string();
+                }
                 
                 let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
                 let port = listener.local_addr().unwrap().port();
                 listener.set_nonblocking(true).unwrap();
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                
+                if let Err(e) = simply_transfer_core::firewall::Firewall::open_port(port) {
+                    log_event("connection", &format!("Warning: Failed to automatically open firewall port {}: {}", port, e));
+                } else {
+                    log_event("connection", &format!("Opened firewall port {} for OOB trigger.", port));
+                }
                 
                 let pub_key_clone = pub_key.clone();
                 let ui_handle = ui_weak.clone();
@@ -353,45 +391,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             {
                                 if req["action"] == "verify" {
                                     let dest_ip = addr.ip().to_string();
+                                    let dest_user = req["user"].as_str().unwrap_or("simply-transfer").to_string();
+                                    tracing::info!("Received verify request from {}@{}", dest_user, dest_ip);
                                     let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                                    if let Ok(priv_pem) = mgr.get_private_key_pem(&pub_key) {
-                                        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                                        let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
-                                        let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
-                                        
-                                        use simply_transfer_core::ssh::SshClient;
-                                        let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
-                                        if ssh_client.connect(&dest_ip, 22).is_ok() {
-                                            let user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
-                                            if ssh_client.authenticate_publickey(&user, tmp_pem.to_str().unwrap(), None).is_ok()
-                                                && let Ok(dest_pub) = ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub")
-                                            {
-                                                let pub_key_line = format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
-                                                let auth_keys = std::path::Path::new(&home).join(".ssh").join("authorized_keys");
-                                                use std::io::Write;
-                                                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
-                                                    let _ = writeln!(f, "{}", pub_key_line);
-                                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                                    slint::invoke_from_event_loop(move || {
-                                                        if let Some(ui) = ui_handle.upgrade() {
-                                                            ui.set_overall_status("Connection Confirmed".into());
-                                                        }
-                                                    }).unwrap();
-                                                    let _ = std::fs::remove_file(&tmp_pem);
-                                                    return;
+                                    match mgr.get_private_key_pem(&pub_key) {
+                                        Ok(priv_pem) => {
+                                            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                                            let ssh_dir = std::path::Path::new(&home).join(".ssh");
+                                            let _ = std::fs::create_dir_all(&ssh_dir);
+                                            let tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
+                                            
+                                            if let Err(e) = std::fs::write(&tmp_pem, priv_pem.as_bytes()) {
+                                                tracing::error!("Failed to write tmp_pem: {}", e);
+                                            } else {
+                                                #[cfg(unix)]
+                                                {
+                                                    use std::os::unix::fs::PermissionsExt;
+                                                    let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
                                                 }
+                                                use simply_transfer_core::ssh::SshClient;
+                                                let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
+                                                match ssh_client.connect(&dest_ip, 22) {
+                                                    Ok(_) => {
+                                                        tracing::info!("SSH connected to {}", dest_ip);
+                                                        match ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap(), None) {
+                                                            Ok(_) => {
+                                                                tracing::info!("SSH authenticated with {}", dest_ip);
+                                                                match ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub") {
+                                                                    Ok(dest_pub) => {
+                                                                        tracing::info!("Fetched dest_pub");
+                                                                        let pub_key_line = format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
+                                                                        let auth_keys = ssh_dir.join("authorized_keys");
+                                                                        use std::io::Write;
+                                                                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
+                                                                            let _ = writeln!(f, "{}", pub_key_line);
+                                                                            let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                                                                            let _ = slint::invoke_from_event_loop(move || {
+                                                                                if let Some(ui) = ui_handle.upgrade() {
+                                                                                    ui.set_overall_status("Connection Confirmed".into());
+                                                                                }
+                                                                            });
+                                                                            let _ = std::fs::remove_file(&tmp_pem);
+                                                                            return;
+                                                                        } else {
+                                                                            tracing::error!("Failed to open authorized_keys for append");
+                                                                        }
+                                                                    }
+                                                                    Err(e) => tracing::error!("SSH execute_command failed: {}", e),
+                                                                }
+                                                            }
+                                                            Err(e) => tracing::error!("SSH auth failed: {:?}", e),
+                                                        }
+                                                    }
+                                                    Err(e) => tracing::error!("SSH connect failed: {:?}", e),
+                                                }
+                                                let _ = std::fs::remove_file(&tmp_pem);
                                             }
                                         }
-                                        let _ = std::fs::remove_file(&tmp_pem);
+                                        Err(e) => tracing::error!("Failed to get private key for token pub_key: {:?}", e),
                                     }
                                     let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
                                 } else if req["action"] == "commit" {
                                     let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                    slint::invoke_from_event_loop(move || {
+                                    let _ = slint::invoke_from_event_loop(move || {
                                         if let Some(ui) = ui_handle.upgrade() {
                                             ui.set_overall_status("Bidirectional sync configured".into());
                                         }
-                                    }).unwrap();
+                                    });
                                 } else if req["action"] == "cancel" {
                                     let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
                                 }
@@ -400,11 +466,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 });
                 
-                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(ip, port, &pub_key);
+                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key);
                 conn_to_save.token = generated_token.into();
             } else {
                 let token = conn_to_save.token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    conn_to_save.host = parsed.ip.clone().into();
+                    if conn_to_save.name == "Remote" {
+                        conn_to_save.name = format!("Remote ({})", parsed.ip).into();
+                    }
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
                     tokio::spawn(async move {
                         if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
@@ -485,13 +555,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 else { a.name.cmp(&b.name) }
             });
             
-            slint::invoke_from_event_loop(move || {
+            let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let model = std::rc::Rc::new(slint::VecModel::from(nodes));
                     ui.set_browser_nodes(model.into());
                     ui.set_browser_current_path(path_str.into());
                 }
-            }).unwrap();
+            });
         });
     });
 
@@ -595,6 +665,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui_weak.clone();
         let token = token.to_string();
         tokio::spawn(async move {
+            if !simply_transfer_core::ssh_server::SshServer::is_installed() {
+                log_event("connection", "SSH server is not installed. Prompting for privileges to install it...");
+                if let Err(e) = simply_transfer_core::ssh_server::SshServer::install_server() {
+                    log_event("connection", &format!("Failed to install SSH server: {}", e));
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_is_remote_verified(false);
+                            ui.set_remote_verification_status(format!("Failed to install SSH: {}", e).into());
+                        }
+                    });
+                    return;
+                }
+                log_event("connection", "SSH server installed successfully.");
+            }
+
+            if !simply_transfer_core::ssh_server::SshServer::is_running() {
+                log_event("connection", "SSH server is not running. Prompting for privileges to start it...");
+                if let Err(e) = simply_transfer_core::ssh_server::SshServer::start_server() {
+                    log_event("connection", &format!("Failed to start SSH server: {}", e));
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_is_remote_verified(false);
+                            ui.set_remote_verification_status(format!("Failed to start SSH: {}", e).into());
+                        }
+                    });
+                    return;
+                }
+                log_event("connection", "SSH server started successfully.");
+            }
+            
             log_event("connection", &format!("Validating remote token: {}", token));
             
             let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
@@ -624,6 +724,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         log_event("connection", "Public key already in authorized_keys.");
                     }
                     
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&ssh_dir, std::fs::Permissions::from_mode(0o700));
+                        let _ = std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600));
+                    }
+                    
                     // Trigger remote handshake (TCP connect to source device)
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
                     log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
@@ -634,7 +741,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                         let ssh_dir = std::path::Path::new(&home).join(".ssh");
                         let _ = std::fs::create_dir_all(&ssh_dir);
-                        let _ = std::fs::write(ssh_dir.join("simply-transfer.pub"), pub_b.as_bytes());
+                        let dest_pub = ssh_dir.join("simply-transfer.pub");
+                        let _ = std::fs::write(&dest_pub, pub_b.as_bytes());
+                        
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(&ssh_dir, std::fs::Permissions::from_mode(0o700));
+                            let _ = std::fs::set_permissions(&dest_pub, std::fs::Permissions::from_mode(0o644));
+                        }
                     }
                     
                     // Use a short timeout for the handshake
@@ -644,7 +759,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ).await {
                         Ok(Ok(mut stream)) => {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-                            let _ = stream.write_all(b"{\"action\":\"verify\"}\n").await;
+                            let dest_user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
+                            let req = format!("{{\"action\":\"verify\",\"user\":\"{}\"}}\n", dest_user);
+                            let _ = stream.write_all(req.as_bytes()).await;
                             let mut reader = tokio::io::BufReader::new(stream);
                             let mut line = String::new();
                             if reader.read_line(&mut line).await.is_ok() && line.contains("\"ok\"") {
@@ -672,12 +789,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
             
-            slint::invoke_from_event_loop(move || {
+            let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_is_remote_verified(verified);
                     ui.set_remote_verification_status(status.into());
                 }
-            }).unwrap();
+            });
         });
     });
 
@@ -709,6 +826,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    });
+
+    ui.on_cancel_key_generation(move |pub_key| {
+        let pub_key = pub_key.to_string();
+        if !pub_key.is_empty() {
+            let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+            if let Err(e) = key_mgr.delete_key(&pub_key) {
+                tracing::warn!("Failed to delete cancelled key: {}", e);
+            } else {
+                tracing::info!("Purged cancelled key from keyring.");
+            }
+        }
+    });
+
+    ui.on_purge_orphaned_keys(move || {
+        tracing::warn!("Purging orphaned keys from OS keyring requires manual intervention via secret-tool currently.");
+        0
     });
 
     let ui_weak = ui.as_weak();
