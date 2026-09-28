@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 pub struct Firewall;
@@ -45,6 +46,7 @@ impl Firewall {
         }
         #[cfg(not(target_os = "linux"))]
         {
+            let _ = port;
             Ok(())
         }
     }
@@ -79,6 +81,7 @@ impl Firewall {
         }
         #[cfg(not(target_os = "linux"))]
         {
+            let _ = port;
             Ok(())
         }
     }
