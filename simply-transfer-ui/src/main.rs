@@ -531,21 +531,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     
     let ui_weak = ui.as_weak();
-    ui.on_fetch_directory(move |path, _is_remote| {
+    ui.on_fetch_directory(move |path, is_remote| {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
         
+        let mut dest_ip = String::new();
+        let mut dest_user = "simply-transfer".to_string();
+        
+        if is_remote {
+            if let Some(ui) = ui_weak.upgrade() {
+                let conns: Vec<_> = ui.get_connections().iter().collect();
+                let idx = ui.get_selected_connection_idx() as usize;
+                if idx < conns.len() {
+                    let host = conns[idx].host.to_string();
+                    let token = conns[idx].token.to_string();
+                    
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                        dest_ip = parsed.ip;
+                    } else if host != "Remote" {
+                        if host.contains('@') {
+                            let parts: Vec<&str> = host.split('@').collect();
+                            dest_user = parts[0].to_string();
+                            dest_ip = parts[1].to_string();
+                        } else {
+                            dest_ip = host;
+                        }
+                    }
+                }
+            }
+        }
+        
         tokio::spawn(async move {
             let mut nodes = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&path_str) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                    nodes.push(FileNode {
-                        name: name.into(),
-                        is_dir,
-                        path: entry.path().to_string_lossy().to_string().into(),
-                    });
+            
+            if is_remote && !dest_ip.is_empty() {
+                use simply_transfer_core::ssh::SshClient;
+                use simply_transfer_core::ssh2_client::Ssh2Client;
+                
+                let mut ssh_client = Ssh2Client::new();
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
+                
+                if ssh_client.connect(&dest_ip, 22).is_ok() {
+                    if ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
+                        let cmd = format!("ls -1p \"{}\"", path_str);
+                        if let Ok(output) = ssh_client.execute_command(&cmd) {
+                            for line in output.lines() {
+                                let line = line.trim();
+                                if line.is_empty() { continue; }
+                                let is_dir = line.ends_with('/');
+                                let name = if is_dir { &line[..line.len()-1] } else { line };
+                                let full_path = if path_str.ends_with('/') {
+                                    format!("{}{}", path_str, name)
+                                } else {
+                                    format!("{}/{}", path_str, name)
+                                };
+                                nodes.push(FileNode {
+                                    name: name.into(),
+                                    is_dir,
+                                    path: full_path.into(),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if !is_remote {
+                if let Ok(entries) = std::fs::read_dir(&path_str) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                        nodes.push(FileNode {
+                            name: name.into(),
+                            is_dir,
+                            path: entry.path().to_string_lossy().to_string().into(),
+                        });
+                    }
                 }
             }
             
