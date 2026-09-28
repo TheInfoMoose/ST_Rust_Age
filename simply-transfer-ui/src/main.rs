@@ -538,8 +538,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut dest_ip = String::new();
         let mut dest_user = "simply-transfer".to_string();
         
-        if is_remote {
-            if let Some(ui) = ui_weak.upgrade() {
+        if is_remote
+            && let Some(ui) = ui_weak.upgrade() {
                 let conns: Vec<_> = ui.get_connections().iter().collect();
                 let idx = ui.get_selected_connection_idx() as usize;
                 if idx < conns.len() {
@@ -559,7 +559,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-        }
         
         tokio::spawn(async move {
             let mut nodes = Vec::new();
@@ -572,8 +571,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                 let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
                 
-                if ssh_client.connect(&dest_ip, 22).is_ok() {
-                    if ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
+                if ssh_client.connect(&dest_ip, 22).is_ok()
+                    && ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
                         let cmd = format!("ls -1p \"{}\"", path_str);
                         if let Ok(output) = ssh_client.execute_command(&cmd) {
                             for line in output.lines() {
@@ -594,9 +593,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                }
-            } else if !is_remote {
-                if let Ok(entries) = std::fs::read_dir(&path_str) {
+            } else if !is_remote
+                && let Ok(entries) = std::fs::read_dir(&path_str) {
                     for entry in entries.flatten() {
                         let name = entry.file_name().to_string_lossy().to_string();
                         let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
@@ -607,7 +605,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
-            }
             
             nodes.sort_by(|a, b| {
                 if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
