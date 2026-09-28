@@ -489,6 +489,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
+            
+            let token = new_conn.token.to_string();
+            if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                let addr = format!("{}:{}", parsed.ip, parsed.port);
+                tokio::spawn(async move {
+                    if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
+                        use tokio::io::AsyncWriteExt;
+                        let _ = stream.write_all(b"{\"action\":\"commit\"}\n").await;
+                    }
+                });
+            }
         }
     });
 
