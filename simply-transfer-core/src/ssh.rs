@@ -28,8 +28,13 @@ pub trait SshClient: Send + Sync {
         passphrase: Option<&str>,
     ) -> Result<(), SshError>;
 
-    /// Open an SFTP session to upload a file.
-    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError>;
+    /// Open an SFTP session to upload a file, optionally reporting progress in bytes.
+    fn upload_file(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+    ) -> Result<(), SshError>;
 
     /// Execute a remote command and return stdout.
     fn execute_command(&self, command: &str) -> Result<String, SshError>;
@@ -78,7 +83,12 @@ impl SshClient for MockSshClient {
         }
     }
 
-    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+    fn upload_file(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        _progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+    ) -> Result<(), SshError> {
         let dest = Path::new(remote_path);
         if let Some(parent) = dest.parent() {
             let _ = std::fs::create_dir_all(parent);

@@ -273,6 +273,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
+            
+            let mut sessions: Vec<slint::SharedString> = ui.get_active_sessions().iter().collect();
+            let session_name = format!("Transfer to {}", dest_ip);
+            if !sessions.contains(&session_name.clone().into()) {
+                sessions.push(session_name.into());
+                ui.set_active_sessions(std::rc::Rc::new(slint::VecModel::from(sessions)).into());
+                ui.set_selected_session_idx(0);
+            }
+            
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
             let t_type = ui.get_transfer_type_val().to_string();

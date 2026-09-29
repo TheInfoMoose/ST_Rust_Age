@@ -238,7 +238,7 @@ export component MainWindow inherits Window {
 
     // Active Transfers States
     in property <[string]> active_sessions: [];
-    property <int> selected_session_idx: 0;
+    in-out property <int> selected_session_idx: 0;
     in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
     in-out property <string> current_phase: "Idle";
     property <int> tick: 0;

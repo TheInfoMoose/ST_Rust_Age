@@ -64,7 +64,12 @@ impl SshClient for Ssh2Client {
         Ok(())
     }
 
-    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+    fn upload_file(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+    ) -> Result<(), SshError> {
         let session = self
             .session
             .as_ref()
@@ -95,6 +100,7 @@ impl SshClient for Ssh2Client {
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut buffer = [0u8; 32768];
+        let mut total_written: u64 = 0;
         loop {
             let bytes_read = local_file
                 .read(&mut buffer)
@@ -105,6 +111,11 @@ impl SshClient for Ssh2Client {
             remote_file
                 .write_all(&buffer[..bytes_read])
                 .map_err(|e| SshError::SftpError(e.to_string()))?;
+
+            total_written += bytes_read as u64;
+            if let Some(ref cb) = progress_callback {
+                cb(total_written);
+            }
         }
 
         // Close the channel

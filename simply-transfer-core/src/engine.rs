@@ -167,10 +167,22 @@ impl TransferEngine {
             let ssh_client = self.ssh_client.clone();
             let lp = local_path.clone();
             let rp = remote_path.clone();
+            let sender = self.event_sender.clone();
+            let file_clone = file.clone();
             let transfer_result =
                 tokio::task::spawn_blocking(move || -> Result<(), EngineError> {
+                    let progress_cb = Box::new(move |progress: u64| {
+                        let _ = sender.blocking_send(TransferEvent::FileStatusChanged(
+                            file_clone.clone(),
+                            FileTransferStatus::Transferring {
+                                progress_bytes: progress,
+                                total_bytes: size,
+                            },
+                        ));
+                    });
+
                     ssh_client
-                        .upload_file(&lp, &rp)
+                        .upload_file(&lp, &rp, Some(progress_cb))
                         .map_err(|e| EngineError::Network(e.to_string()))
                 })
                 .await
@@ -271,11 +283,17 @@ impl TransferEngine {
                 if entry.file_type().is_file() {
                     let path = entry.path().to_path_buf();
 
-                    let rel_path = path
-                        .strip_prefix(&source_dir)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .replace('\\', "/"); // Normalize to unix path for registry
+                    let rel_path = if path == source_dir {
+                        path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    } else {
+                        path.strip_prefix(&source_dir)
+                            .unwrap_or(&path)
+                            .to_string_lossy()
+                            .replace('\\', "/")
+                    };
 
                     let metadata = match std::fs::metadata(&path) {
                         Ok(m) => m,
