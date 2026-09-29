@@ -1,18 +1,8 @@
 [
   {
-    "name": "Test-i",
-    "host": "172.17.2.156",
-    "state": "Pending Verification",
-    "transfer_rate": "-",
-    "duration": "-",
-    "eta": "-",
-    "transfer_type": "Single Transfer",
-    "token": "st:Yl5fXl1OekBPWUIaUUBnBX4eJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOi83OQYZKykAIydTLgMbKRp1LAAGVTIdAD0-UmBDFVsbUy8WOXEHViQGHjY"
-  },
-  {
     "name": "Test-j",
     "host": "zak@172.17.2.156",
-    "state": "Pending Verification",
+    "state": "Authenticated (Idle)",
     "transfer_rate": "-",
     "duration": "-",
     "eta": "-",

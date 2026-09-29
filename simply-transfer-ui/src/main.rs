@@ -692,7 +692,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 let token = conn_to_save.token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                    conn_to_save.host = parsed.ip.clone().into();
+                    if conn_to_save.host.trim().is_empty() || conn_to_save.host == "Remote" {
+                        conn_to_save.host = parsed.ip.clone().into();
+                    }
                     if conn_to_save.name == "Remote" {
                         conn_to_save.name = format!("Remote ({})", parsed.ip).into();
                     }
@@ -1105,6 +1107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let token_clone = token.clone();
                                     let _ = slint::invoke_from_event_loop(move || {
                                         if let Some(ui) = clone_ui.upgrade() {
+                                            ui.set_remote_verified_host(new_host.clone().into());
                                             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                             for conn in &mut conns {
                                                 if conn.token == token_clone {
