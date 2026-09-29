@@ -1,0 +1,47 @@
+name: Sync to Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '*.md'
+
+permissions:
+  contents: write
+
+jobs:
+  update-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Sync Markdown Files to Wiki
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Clone the wiki repository
+          git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git /tmp/wiki
+          
+          # Copy WIKI.md as the Home page
+          if [ -f "WIKI.md" ]; then
+            cp WIKI.md /tmp/wiki/Home.md
+          fi
+          
+          # Copy other relevant documentation files
+          for file in DEPLOYMENT.md FUTURE_ISSUE_*.md; do
+            if [ -f "$file" ]; then
+              cp "$file" /tmp/wiki/
+            fi
+          done
+          
+          cd /tmp/wiki
+          git add .
+          if git diff-index --quiet HEAD; then
+            echo "No changes to wiki."
+          else
+            git commit -m "Auto-sync documentation from main repo"
+            git push origin master
+          fi

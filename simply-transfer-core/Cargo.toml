@@ -8,7 +8,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 simply-transfer-crypto = { version = "0.1.0", path = "../simply-transfer-crypto" }
 simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }
-ssh2 = "0.9.6"
+ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"

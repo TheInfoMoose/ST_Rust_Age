@@ -163,10 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         
                                         let mut ssh = simply_transfer_core::ssh2_client::Ssh2Client::new();
                                         use simply_transfer_core::ssh::SshClient;
-                                        if ssh.connect(&target_ip, 22).is_ok() {
-                                            if ssh.authenticate_publickey(dest_user, tmp_pem.to_str().unwrap(), None).is_ok() {
-                                                is_authenticated = true;
-                                            }
+                                        if ssh.connect(&target_ip, 22).is_ok()
+                                            && ssh.authenticate_publickey(dest_user, tmp_pem.to_str().unwrap(), None).is_ok()
+                                        {
+                                            is_authenticated = true;
                                         }
                                         let _ = std::fs::remove_file(&tmp_pem);
                                     }
