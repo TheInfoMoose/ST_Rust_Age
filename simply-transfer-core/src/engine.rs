@@ -47,6 +47,7 @@ pub enum ControlSignal {
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
     PhaseChanged(u8, String),
+    ManifestGenerated(usize),
     FileStatusChanged(String, FileTransferStatus),
     TransferComplete { successful: usize, failed: usize },
     TransferFailed(String),
@@ -121,6 +122,8 @@ impl TransferEngine {
             to_skip: Vec::new(),
         };
 
+        self.event_sender.send(TransferEvent::ManifestGenerated(manifest.to_transfer.len())).await.ok();
+
         for skipped in &manifest.to_skip {
             self.emit_file_status(skipped.clone(), FileTransferStatus::Skipped)
                 .await;
@@ -139,66 +142,85 @@ impl TransferEngine {
             let mut val_success = 0;
             let mut val_failed = 0;
 
-            while let Some(file) = validation_rx.recv().await {
-                let normalized_file = file.replace('\\', "/");
-                let remote_path_str =
-                    format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
+            while let Some(first_file) = validation_rx.recv().await {
+                let mut files = vec![first_file];
+                while let Ok(file) = validation_rx.try_recv() {
+                    files.push(file);
+                    if files.len() >= 50 { break; }
+                }
 
-                let local_path = active_source_dir_val.join(&file);
+                let mut remote_paths = Vec::new();
+                let mut local_paths = Vec::new();
+                for f in &files {
+                    let normalized_file = f.replace('\\', "/");
+                    remote_paths.push(format!("'{}'", format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)));
+                    local_paths.push(active_source_dir_val.join(f));
+                }
 
-                let cmd = format!("sha256sum '{}'", remote_path_str);
+                let cmd = format!("sha256sum {}", remote_paths.join(" "));
                 let ssh_c = ssh_client_val.clone();
-
-                let validation_result = tokio::task::spawn_blocking(
-                    move || -> Result<(String, String), EngineError> {
-                        // Compute local hash
-                        let local_hash = if let Ok(f) = std::fs::File::open(&local_path) {
-                            simply_transfer_crypto::hash::compute_sha256_stream(f)
-                                .unwrap_or_else(|_| "local_hash_failed".to_string())
-                        } else {
-                            "local_hash_failed".to_string()
-                        };
+                
+                let validation_result =
+                    tokio::task::spawn_blocking(move || -> Result<(Vec<String>, String), EngineError> {
+                        // Compute local hashes
+                        let mut local_hashes = Vec::new();
+                        for lp in local_paths {
+                            let local_hash = if let Ok(f) = std::fs::File::open(&lp) {
+                                simply_transfer_crypto::hash::compute_sha256_stream(f).unwrap_or_else(|_| "local_hash_failed".to_string())
+                            } else {
+                                "local_hash_failed".to_string()
+                            };
+                            local_hashes.push(local_hash);
+                        }
 
                         let remote_output = ssh_c
                             .execute_command(&cmd)
                             .map_err(|e| EngineError::Network(e.to_string()))?;
-
-                        Ok((local_hash, remote_output))
-                    },
-                )
-                .await
-                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+                            
+                        Ok((local_hashes, remote_output))
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
 
                 match validation_result {
-                    Ok((local_hash, output)) => {
-                        if output.starts_with(&local_hash) || output.starts_with("mock_hash") {
+                    Ok((local_hashes, output)) => {
+                        let remote_lines: Vec<&str> = output.trim().lines().collect();
+                        
+                        for (i, file) in files.iter().enumerate() {
+                            let local_hash = &local_hashes[i];
+                            let matched = remote_lines.iter().any(|l| l.starts_with(local_hash) || l.starts_with("mock_hash"));
+                            
+                            if matched {
+                                let _ = event_sender_val
+                                    .send(TransferEvent::FileStatusChanged(
+                                        file.clone(),
+                                        FileTransferStatus::Validated,
+                                    ))
+                                    .await;
+                                val_success += 1;
+                            } else {
+                                tracing::warn!("Hash mismatch for file {}", file);
+                                let _ = event_sender_val
+                                    .send(TransferEvent::FileStatusChanged(
+                                        file.clone(),
+                                        FileTransferStatus::Failed("Hash mismatch".to_string()),
+                                    ))
+                                    .await;
+                                val_failed += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to validate batch: {}", e);
+                        for file in files {
                             let _ = event_sender_val
                                 .send(TransferEvent::FileStatusChanged(
                                     file.clone(),
-                                    FileTransferStatus::Validated,
-                                ))
-                                .await;
-                            val_success += 1;
-                        } else {
-                            warn!("Hash mismatch for file {}", file);
-                            let _ = event_sender_val
-                                .send(TransferEvent::FileStatusChanged(
-                                    file.clone(),
-                                    FileTransferStatus::Failed("Hash mismatch".to_string()),
+                                    FileTransferStatus::Failed(format!("Validation error: {}", e)),
                                 ))
                                 .await;
                             val_failed += 1;
                         }
-                    }
-                    Err(e) => {
-                        warn!("Failed to validate file {}: {}", file, e);
-                        let _ = event_sender_val
-                            .send(TransferEvent::FileStatusChanged(
-                                file.clone(),
-                                FileTransferStatus::Failed(format!("Validation error: {}", e)),
-                            ))
-                            .await;
-                        val_failed += 1;
                     }
                 }
             }
