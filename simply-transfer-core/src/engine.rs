@@ -1,8 +1,6 @@
 use crate::registry::{FileEntry, Registry, TransferManifest};
 use crate::ssh::SshClient;
-use simply_transfer_crypto::hash::compute_sha256_stream;
 use simply_transfer_snapshots::SnapshotDriver;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -153,7 +151,10 @@ impl TransferEngine {
                 let mut local_paths = Vec::new();
                 for f in &files {
                     let normalized_file = f.replace('\\', "/");
-                    remote_paths.push(format!("'{}'", format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)));
+                    let full_remote_path = format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
+                    // properly escape single quotes for shell: replace ' with '\''
+                    let escaped_path = full_remote_path.replace("'", "'\\''");
+                    remote_paths.push(format!("'{}'", escaped_path));
                     local_paths.push(active_source_dir_val.join(f));
                 }
 

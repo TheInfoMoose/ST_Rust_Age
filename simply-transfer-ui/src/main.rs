@@ -273,28 +273,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
 
-        let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
+        let (src, dest, transfer_type, session_name) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
             
             let mut sessions: Vec<slint::SharedString> = ui.get_active_sessions().iter().collect();
             let session_name = if conn_name.trim().is_empty() { format!("Transfer to {}", dest_ip) } else { conn_name.clone() };
             if !sessions.contains(&session_name.clone().into()) {
-                sessions.push(session_name.into());
+                sessions.push(session_name.clone().into());
                 ui.set_active_sessions(std::rc::Rc::new(slint::VecModel::from(sessions)).into());
                 ui.set_selected_session_idx(0);
             }
             
+            ui.set_remote_verified_host(format!("{}@{}", dest_user, dest_ip).into());
+            
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
             let t_type = ui.get_transfer_type_val().to_string();
-            (mappings[0].source.to_string(), mappings[0].destination.to_string(), t_type)
+            (mappings[0].source.to_string(), mappings[0].destination.to_string(), t_type, session_name)
         } else {
             return;
         };
 
-        let mut dest_ip = dest_ip.clone();
-        let mut dest_user = dest_user.clone();
-        let mut token_str = token_str.clone();
+        let dest_ip = dest_ip.clone();
+        let dest_user = dest_user.clone();
+        let token_str = token_str.clone();
 
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
@@ -371,6 +373,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: calculating...".to_string();
                 let mut last_progress_bytes = 0;
                 let mut last_tick = tokio::time::Instant::now();
+                let transfer_start_time = tokio::time::Instant::now();
                 let mut total_files = 0;
                 let mut current_completed_files = 0;
 
@@ -420,6 +423,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             FileTransferStatus::Completed => {
                                                 current_completed_files += 1;
                                                 status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
+                                                log_event("transfer", &format!("Transferred: {}", file));
                                                 local_c_q.push(CompletedItem {
                                                     name: file.into(),
                                                     status: "Completed".into(),
@@ -427,6 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 });
                                             }
                                             FileTransferStatus::Validated => {
+                                                log_event("transfer", &format!("Validated Hash: {}", file));
                                                 local_c_q.push(CompletedItem {
                                                     name: file.into(),
                                                     status: "Validated".into(),
@@ -434,6 +439,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 });
                                             }
                                             FileTransferStatus::Failed(err) => {
+                                                log_event("transfer", &format!("Failed: {} ({})", file, err));
                                                 local_c_q.push(CompletedItem {
                                                     name: file.into(),
                                                     status: format!("Failed: {}", err).into(),
@@ -477,19 +483,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let clone_metrics = metrics_txt.clone();
                             let clone_active_phase = active_phase.clone();
+                            let session_name_clone = session_name.clone();
+                            let elapsed_secs = transfer_start_time.elapsed().as_secs();
+                            let clone_duration = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
+                            let clone_eta = if current_completed_files > 0 && total_files > current_completed_files {
+                                let secs_per_file = elapsed_secs as f32 / current_completed_files as f32;
+                                let remaining_secs = (secs_per_file * (total_files - current_completed_files) as f32) as u64;
+                                format!("{:02}:{:02}:{:02}", remaining_secs / 3600, (remaining_secs % 3600) / 60, remaining_secs % 60)
+                            } else if total_files == 0 {
+                                "N/A".to_string()
+                            } else {
+                                "Calculating...".to_string()
+                            };
 
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
-                                    let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
-                                    ui.set_transfer_queue(t_model.into());
+                                    let active_sessions: Vec<_> = ui.get_active_sessions().iter().collect();
+                                    let selected_idx = ui.get_selected_session_idx() as usize;
+                                    let is_active = selected_idx < active_sessions.len() && active_sessions[selected_idx] == session_name_clone.as_str();
+                                    
+                                    if is_active {
+                                        let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
+                                        ui.set_transfer_queue(t_model.into());
 
-                                    let c_model = std::rc::Rc::new(slint::VecModel::from(clone_c_q));
-                                    ui.set_completed_queue(c_model.into());
+                                        let c_model = std::rc::Rc::new(slint::VecModel::from(clone_c_q));
+                                        ui.set_completed_queue(c_model.into());
 
-                                    ui.set_phase_text(clone_phase.into());
-                                    ui.set_overall_status(clone_status.into());
-                                    ui.set_transfer_metrics_text(clone_metrics.clone().into());
-                                    ui.set_current_phase(clone_active_phase.clone().into());
+                                        ui.set_phase_text(clone_phase.into());
+                                        ui.set_overall_status(clone_status.into());
+                                        ui.set_transfer_metrics_text(clone_metrics.clone().into());
+                                        ui.set_current_phase(clone_active_phase.clone().into());
+                                    }
                                     
                                     if clone_active_phase != "Idle" && clone_active_phase != "Transfer Complete" {
                                         let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
@@ -497,6 +521,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         if idx < conns.len() {
                                             conns[idx].state = clone_active_phase.into();
                                             conns[idx].state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                            conns[idx].duration = clone_duration.into();
+                                            conns[idx].eta = clone_eta.into();
                                             if let Some(rate) = clone_metrics.split(" | ").next() {
                                                 conns[idx].transfer_rate = rate.replace("Upload: ", "").into();
                                             }

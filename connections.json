@@ -2,11 +2,21 @@
   {
     "name": "Test-k",
     "host": "zak@172.17.2.156",
+    "state": "Authenticated (Idle)",
+    "transfer_rate": "8671.9 MB/s",
+    "duration": "-",
+    "eta": "-",
+    "transfer_type": "Single Transfer",
+    "token": "st:Yl5fXl1OekBPWUIaVkRiAXweJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOiohBzVjAVdRO0VaC0QlRAE9NgchGDICBSU8QGQ8Jh4CTQoxNUs8O1QQRAI"
+  },
+  {
+    "name": "Test -a1",
+    "host": "zak@172.17.2.156",
     "state": "Pending Verification",
     "transfer_rate": "-",
     "duration": "-",
     "eta": "-",
     "transfer_type": "Single Transfer",
-    "token": "st:Yl5fXl1OekBPWUIaVkRiAXweJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOiohBzVjAVdRO0VaC0QlRAE9NgchGDICBSU8QGQ8Jh4CTQoxNUs8O1QQRAI"
+    "token": "st:Yl5fXl1OekBPWUIaUUJnAXgeJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOikyShBgPVISBTULFTwzXQwpWD4IRgo6WwE4H2YCDAlDVQcYN38ZLjABQSQ"
   }
 ]
