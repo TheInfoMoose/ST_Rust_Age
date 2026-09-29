@@ -137,14 +137,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     
                     if !target_ip.is_empty() {
-                        let is_connected = tokio::time::timeout(
+                        let is_tcp_open = tokio::time::timeout(
                             std::time::Duration::from_secs(2),
                             tokio::net::TcpStream::connect(format!("{}:22", target_ip))
                         ).await.map(|res| res.is_ok()).unwrap_or(false);
                         
-                        let new_state = if is_connected { "Idle (Connected)" } else { "Disconnected" };
+                        let mut is_authenticated = false;
+                        if is_tcp_open && host.contains('@') {
+                            let parts: Vec<&str> = host.split('@').collect();
+                            let dest_user = parts[0];
+                            
+                            if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                                let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                                if let Ok(priv_pem) = mgr.get_private_key_pem(&parsed.pub_key) {
+                                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                                    let ssh_dir = std::path::Path::new(&home).join(".ssh");
+                                    let tmp_pem = ssh_dir.join(format!("hb-{}.pem", parsed.ip));
+                                    
+                                    if std::fs::write(&tmp_pem, priv_pem.as_bytes()).is_ok() {
+                                        #[cfg(unix)]
+                                        {
+                                            use std::os::unix::fs::PermissionsExt;
+                                            let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
+                                        }
+                                        
+                                        let mut ssh = simply_transfer_core::ssh2_client::Ssh2Client::new();
+                                        use simply_transfer_core::ssh::SshClient;
+                                        if ssh.connect(&target_ip, 22).is_ok() {
+                                            if ssh.authenticate_publickey(dest_user, tmp_pem.to_str().unwrap(), None).is_ok() {
+                                                is_authenticated = true;
+                                            }
+                                        }
+                                        let _ = std::fs::remove_file(&tmp_pem);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        let new_state = if is_authenticated {
+                            "Authenticated (Idle)"
+                        } else if is_tcp_open {
+                            "Pending Verification"
+                        } else {
+                            "Disconnected"
+                        };
+                        
                         if new_state != state {
-                            updates.push((i, new_state.to_string(), is_connected));
+                            updates.push((i, new_state.to_string(), is_authenticated));
                         }
                     }
                 }
@@ -197,7 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let control_tx_ref = start_tx.clone();
 
         let mut dest_ip = String::new();
-        let mut dest_user = "simply-transfer".to_string();
+        let mut dest_user = String::new();
         let mut token_str = String::new();
         if let Some(ui) = ui_handle.upgrade() {
             let conns: Vec<_> = ui.get_connections().iter().collect();
@@ -212,11 +251,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if host == "Remote" {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
                         dest_ip = parsed.ip;
+                        dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                     }
                 } else {
                     dest_ip = host.clone();
                 }
             }
+        }
+        
+        if dest_user.is_empty() {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_overall_status("Pending Remote Verification: Please verify token or use user@IP".into());
+                ui.set_current_phase("Idle".into());
+            }
+            let _ = notify_rust::Notification::new()
+                .summary("Verification Pending")
+                .body("Pending Remote Verification: Please verify the token on the destination device, or explicitly provide a username (user@IP).")
+                .show();
+            return;
         }
 
         let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
@@ -697,7 +749,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let mut token_str = String::new();
         let mut dest_ip = String::new();
-        let mut dest_user = "simply-transfer".to_string();
+        let mut dest_user = String::new();
         
         if is_remote
             && let Some(ui) = ui_weak.upgrade() {
@@ -715,12 +767,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if host == "Remote" {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_ip = parsed.ip;
+                            dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                         }
                     } else {
                         dest_ip = host.clone();
                     }
                 }
             }
+            
+        if is_remote && dest_user.is_empty() {
+            let _ = notify_rust::Notification::new()
+                .summary("Verification Pending")
+                .body("Pending Remote Verification: Please verify the token on the destination device, or explicitly provide a username (user@IP).")
+                .show();
+            return;
+        }
         tokio::spawn(async move {
             let mut nodes = Vec::new();
             let mut success = false;

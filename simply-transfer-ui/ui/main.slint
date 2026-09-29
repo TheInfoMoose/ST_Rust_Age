@@ -421,7 +421,7 @@ export component MainWindow inherits Window {
                             Rectangle { height: 10px; }
                             spacing: 8px;
                             HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } new_name := LineEdit { placeholder-text: "Connection Name"; } }
-                            HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "IP Address / Hostname"; } }
+                            HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "e.g. user@IP or IP"; } }
                             HorizontalBox { 
                                 Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
                                 new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
