@@ -1,12 +1,12 @@
 [
   {
-    "name": "Test-d",
-    "host": "172.17.2.156",
+    "name": "Test-f",
+    "host": "zak@172.17.2.156",
     "state": "Idle",
     "transfer_rate": "-",
     "duration": "-",
     "eta": "-",
     "transfer_type": "Single Transfer",
-    "token": "st:Yl5fXl1OekBPWUIaUUZgAXoeJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOiUDEwFRJi4rHScJMycTPl17NgYxbhReCEdeEhsxEwcKUgswHwI-VTwBGAI"
+    "token": "st:Yl5fXl1OekBPWUIaVkZhB3oeJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOi0WFgVcKgMAH0IKKBAMJzw8KiY6WxsGDDsWG2Q-WS8DLwAFG1AIWxA8RDE"
   }
 ]

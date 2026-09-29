@@ -573,7 +573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                         use std::io::Write;
                                                                         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
                                                                             let _ = writeln!(f, "{}", pub_key_line);
-                                                                            let my_user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
+                                                                            let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                                                                             let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
                                                                             let _ = writer.write_all(res.as_bytes()).await;
                                                                             let new_host = format!("{}@{}", dest_user, dest_ip);
@@ -586,8 +586,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                                             conn.host = new_host.clone().into();
                                                                                         }
                                                                                     }
-                                                                                    ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                                                                    ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
                                                                                     ui.set_overall_status("Connection Confirmed".into());
+                                                                                    
+                                                                                    save_connections(&conns);
                                                                                 }
                                                                             });
                                                                             return;
@@ -1019,7 +1021,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ).await {
                         Ok(Ok(mut stream)) => {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-                            let dest_user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
+                            let dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                             let req = format!("{{\"action\":\"verify\",\"user\":\"{}\"}}\n", dest_user);
                             let _ = stream.write_all(req.as_bytes()).await;
                             let mut reader = tokio::io::BufReader::new(stream);
