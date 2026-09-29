@@ -196,6 +196,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_handle = ui_handle.clone();
         let control_tx_ref = start_tx.clone();
 
+        let mut dest_ip = String::new();
+        let mut dest_user = "simply-transfer".to_string();
+        let mut token_str = String::new();
+        if let Some(ui) = ui_handle.upgrade() {
+            let conns: Vec<_> = ui.get_connections().iter().collect();
+            let idx = ui.get_selected_connection_idx() as usize;
+            if idx < conns.len() {
+                let host = conns[idx].host.to_string();
+                token_str = conns[idx].token.to_string();
+                if host.contains('@') {
+                    let parts: Vec<&str> = host.split('@').collect();
+                    dest_user = parts[0].to_string();
+                    dest_ip = parts[1].to_string();
+                } else if host == "Remote" {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
+                        dest_ip = parsed.ip;
+                    }
+                } else {
+                    dest_ip = host.clone();
+                }
+            }
+        }
+
         let (src, dest, transfer_type) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
@@ -206,35 +229,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         };
 
+        let mut dest_ip = dest_ip.clone();
+        let mut dest_user = dest_user.clone();
+        let mut token_str = token_str.clone();
+
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
 
             let (control_tx, control_rx) = watch::channel(ControlSignal::Run);
             if let Ok(mut guard) = control_tx_ref.lock() {
                 *guard = Some(control_tx);
-            }
-
-            let mut dest_ip = String::new();
-            let mut dest_user = "simply-transfer".to_string();
-            let mut token_str = String::new();
-            if let Some(ui) = ui_handle.upgrade() {
-                let conns: Vec<_> = ui.get_connections().iter().collect();
-                let idx = ui.get_selected_connection_idx() as usize;
-                if idx < conns.len() {
-                    let host = conns[idx].host.to_string();
-                    token_str = conns[idx].token.to_string();
-                    if host.contains('@') {
-                        let parts: Vec<&str> = host.split('@').collect();
-                        dest_user = parts[0].to_string();
-                        dest_ip = parts[1].to_string();
-                    } else if host == "Remote" {
-                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
-                            dest_ip = parsed.ip;
-                        }
-                    } else {
-                        dest_ip = host.clone();
-                    }
-                }
             }
 
             let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
@@ -689,6 +693,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
         
+        let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = "simply-transfer".to_string();
         
@@ -699,6 +704,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if idx < conns.len() {
                     let host = conns[idx].host.to_string();
                     let token = conns[idx].token.to_string();
+                    token_str = token.clone();
                     
                     if host.contains('@') {
                         let parts: Vec<&str> = host.split('@').collect();
@@ -718,14 +724,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut success = false;
             
             if is_remote {
-                let mut token_str = String::new();
-                if let Some(ui) = ui_weak.upgrade() {
-                    let conns: Vec<_> = ui.get_connections().iter().collect();
-                    let idx = ui.get_selected_connection_idx() as usize;
-                    if idx < conns.len() {
-                        token_str = conns[idx].token.to_string();
-                    }
-                }
                 
                 if !dest_ip.is_empty() {
                     use simply_transfer_core::ssh::SshClient;
