@@ -92,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: c.name.into(),
         host: c.host.into(),
         state: c.state.into(),
+        state_color: slint::Color::from_rgb_u8(150, 150, 150),
         transfer_rate: c.transfer_rate.into(),
         duration: c.duration.into(),
         eta: c.eta.into(),
@@ -99,6 +100,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token: c.token.into(),
     }).collect();
     ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
+
+    let ui_weak_hb = ui.as_weak();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let ui_weak_clone = ui_weak_hb.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak_clone.upgrade() {
+                    let conns: Vec<_> = ui.get_connections().iter().collect();
+                    let mut conn_data = Vec::new();
+                    for (i, c) in conns.iter().enumerate() {
+                        conn_data.push((i, c.host.to_string(), c.token.to_string(), c.state.to_string()));
+                    }
+                    let _ = tx.send(conn_data);
+                }
+            });
+            
+            if let Ok(conn_data) = rx.await {
+                let mut updates = Vec::new();
+                for (i, host, token, state) in conn_data {
+                    if state.starts_with("Transmitting") {
+                        continue;
+                    }
+                    let mut target_ip = String::new();
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                        target_ip = parsed.ip;
+                    } else if host != "Remote" {
+                        target_ip = if host.contains('@') { host.split('@').nth(1).unwrap_or("").to_string() } else { host };
+                    }
+                    
+                    if !target_ip.is_empty() {
+                        let is_connected = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            tokio::net::TcpStream::connect(format!("{}:22", target_ip))
+                        ).await.map(|res| res.is_ok()).unwrap_or(false);
+                        
+                        let new_state = if is_connected { "Idle (Connected)" } else { "Disconnected" };
+                        if new_state != state {
+                            updates.push((i, new_state.to_string(), is_connected));
+                        }
+                    }
+                }
+                
+                if !updates.is_empty() {
+                    let ui_weak_clone = ui_weak_hb.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak_clone.upgrade() {
+                            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                            for (i, new_state, is_connected) in updates {
+                                if i < conns.len() {
+                                    conns[i].state = new_state.into();
+                                    conns[i].state_color = if is_connected { slint::Color::from_rgb_u8(50, 200, 50) } else { slint::Color::from_rgb_u8(200, 50, 50) };
+                                }
+                            }
+                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                        }
+                    });
+                }
+            }
+        }
+    });
 
     // Fetch system info and push to UI
     let mut sys = sysinfo::System::new_all();
@@ -170,6 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut local_t_q = Vec::new();
                 let mut local_c_q = Vec::new();
                 let mut phase_txt = "Live Transfer Queue".to_string();
+                let mut active_phase = "Idle".to_string();
                 let mut status_txt = "Completed: 0 / 0 files".to_string();
                 let mut metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
                 let mut last_progress_bytes = 0;
@@ -188,6 +254,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match event {
                                     TransferEvent::PhaseChanged(phase, name) => {
                                         phase_txt = format!("Phase {}: {}", phase, name);
+                                        active_phase = match name.as_str() {
+                                            "Snapshot Discovery" => "Preparing Snapshots...",
+                                            "Delta Calculation" => "Comparing Files...",
+                                            "Data Transfer" => "Transmitting...",
+                                            "Integrity Verification" => "Checking Integrity...",
+                                            _ => name.as_str(),
+                                        }.to_string();
                                     }
                                     TransferEvent::FileStatusChanged(file, status) => {
                                         match status {
@@ -236,6 +309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     TransferEvent::TransferComplete { successful, failed } => {
                                         status_txt = format!("Completed: {} Success, {} Failed", successful, failed);
                                         phase_txt = "Transfer Complete".to_string();
+                                        active_phase = "Transfer Complete".to_string();
                                         local_t_q.clear();
                                         let _ = notify_rust::Notification::new()
                                             .summary("Simply Transfer")
@@ -244,6 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                     TransferEvent::TransferFailed(err) => {
                                         status_txt = format!("Transfer Aborted: {}", err);
+                                        active_phase = "Transfer Complete".to_string();
                                         local_t_q.clear();
                                         let _ = notify_rust::Notification::new()
                                             .summary("Simply Transfer Error")
@@ -260,6 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let clone_status = status_txt.clone();
 
                             let clone_metrics = metrics_txt.clone();
+                            let clone_active_phase = active_phase.clone();
 
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_handle.upgrade() {
@@ -271,7 +347,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                     ui.set_phase_text(clone_phase.into());
                                     ui.set_overall_status(clone_status.into());
-                                    ui.set_transfer_metrics_text(clone_metrics.into());
+                                    ui.set_transfer_metrics_text(clone_metrics.clone().into());
+                                    ui.set_current_phase(clone_active_phase.clone().into());
+                                    
+                                    if clone_active_phase != "Idle" && clone_active_phase != "Transfer Complete" {
+                                        let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                                        let idx = ui.get_selected_connection_idx() as usize;
+                                        if idx < conns.len() {
+                                            conns[idx].state = clone_active_phase.into();
+                                            conns[idx].state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                            if let Some(rate) = clone_metrics.split(" | ").next() {
+                                                conns[idx].transfer_rate = rate.replace("Upload: ", "").into();
+                                            }
+                                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                        }
+                                    }
                                 }
                             });
                         }
@@ -563,48 +653,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             let mut nodes = Vec::new();
             
-            if is_remote && !dest_ip.is_empty() {
-                use simply_transfer_core::ssh::SshClient;
-                use simply_transfer_core::ssh2_client::Ssh2Client;
-                
-                let mut ssh_client = Ssh2Client::new();
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
-                
-                if ssh_client.connect(&dest_ip, 22).is_ok()
-                    && ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
-                        let cmd = format!("ls -1p \"{}\"", path_str);
-                        if let Ok(output) = ssh_client.execute_command(&cmd) {
-                            for line in output.lines() {
-                                let line = line.trim();
-                                if line.is_empty() { continue; }
-                                let is_dir = line.ends_with('/');
-                                let name = if is_dir { &line[..line.len()-1] } else { line };
-                                let full_path = if path_str.ends_with('/') {
-                                    format!("{}{}", path_str, name)
-                                } else {
-                                    format!("{}/{}", path_str, name)
-                                };
-                                nodes.push(FileNode {
-                                    name: name.into(),
-                                    is_dir,
-                                    path: full_path.into(),
-                                });
+            let mut success = false;
+            
+            if is_remote {
+                if !dest_ip.is_empty() {
+                    use simply_transfer_core::ssh::SshClient;
+                    use simply_transfer_core::ssh2_client::Ssh2Client;
+                    
+                    let mut ssh_client = Ssh2Client::new();
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
+                    
+                    if ssh_client.connect(&dest_ip, 22).is_ok()
+                        && ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
+                            let cmd = format!("ls -1p \"{}\"", path_str);
+                            if let Ok(output) = ssh_client.execute_command(&cmd) {
+                                success = true;
+                                for line in output.lines() {
+                                    let line = line.trim();
+                                    if line.is_empty() { continue; }
+                                    let is_dir = line.ends_with('/');
+                                    let name = if is_dir { &line[..line.len()-1] } else { line };
+                                    let full_path = if path_str.ends_with('/') {
+                                        format!("{}{}", path_str, name)
+                                    } else {
+                                        format!("{}/{}", path_str, name)
+                                    };
+                                    nodes.push(FileNode {
+                                        name: name.into(),
+                                        is_dir,
+                                        path: full_path.into(),
+                                    });
+                                }
                             }
                         }
-                    }
-            } else if !is_remote
-                && let Ok(entries) = std::fs::read_dir(&path_str) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                        nodes.push(FileNode {
-                            name: name.into(),
-                            is_dir,
-                            path: entry.path().to_string_lossy().to_string().into(),
-                        });
-                    }
                 }
+                
+                if !success {
+                    nodes.push(FileNode {
+                        name: if dest_ip.is_empty() { "[Invalid Remote Configuration]".into() } else { "[Remote Connection Failed]".into() },
+                        is_dir: false,
+                        path: path_str.clone().into(),
+                    });
+                }
+            } else if let Ok(entries) = std::fs::read_dir(&path_str) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                    nodes.push(FileNode {
+                        name: name.into(),
+                        is_dir,
+                        path: entry.path().to_string_lossy().to_string().into(),
+                    });
+                }
+            }
             
             nodes.sort_by(|a, b| {
                 if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }

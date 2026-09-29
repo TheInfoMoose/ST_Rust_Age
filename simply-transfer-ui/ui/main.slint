@@ -27,6 +27,7 @@ export struct ConnectionItem {
     name: string,
     host: string,
     state: string,
+    state_color: color,
     transfer_rate: string,
     duration: string,
     eta: string,
@@ -239,6 +240,17 @@ export component MainWindow inherits Window {
     in property <[string]> active_sessions: [];
     property <int> selected_session_idx: 0;
     in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
+    in-out property <string> current_phase: "Idle";
+    property <int> tick: 0;
+    property <string> ellipsis: root.tick == 0 ? "" : (root.tick == 1 ? "." : (root.tick == 2 ? ".." : "..."));
+    
+    Timer {
+        interval: 500ms;
+        running: root.current_phase != "Idle" && root.current_phase != "Transfer Complete" && root.current_phase != "";
+        triggered => {
+            root.tick = Math.mod(root.tick + 1, 4);
+        }
+    }
 
     // Settings States
     property <int> selected_setting_idx: 0;
@@ -278,7 +290,7 @@ export component MainWindow inherits Window {
                                 HorizontalBox {
                                     padding-left: 16px; padding-right: 16px;
                                     Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 110px; font-weight: 700; overflow: elide; }
-                                    Text { text: item.state; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
+                                    Text { text: item.state; color: item.state_color; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
                                     Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 60px; font-weight: 700; }
                                 }
                             }
@@ -318,7 +330,11 @@ export component MainWindow inherits Window {
                         spacing: 8px;
                         Text { text: "Name: " + root.connections[root.selected_connection_idx].name; }
                         Text { text: "Host: " + root.connections[root.selected_connection_idx].host; }
-                        Text { text: "State: " + root.connections[root.selected_connection_idx].state; }
+                        HorizontalBox { 
+                            padding: 0; spacing: 0;
+                            Text { text: "State: "; } 
+                            Text { text: root.connections[root.selected_connection_idx].state; color: root.connections[root.selected_connection_idx].state_color; }
+                        }
                         Text { text: "Transfer Rate: " + root.connections[root.selected_connection_idx].transfer_rate; }
                         Text { text: "Duration: " + root.connections[root.selected_connection_idx].duration; }
                         Text { text: "Estimated Completion: " + root.connections[root.selected_connection_idx].eta; }
@@ -420,7 +436,7 @@ export component MainWindow inherits Window {
                                     text: "Commit"; 
                                     clicked => { 
                                         root.is_adding_connection = false; 
-                                        root.commit_connection({ name: new_name.text, host: new_host.text, state: "Idle", transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Single Transfer", token: new_key.text }); 
+                                        root.commit_connection({ name: new_name.text, host: new_host.text, state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Single Transfer", token: new_key.text }); 
                                     } 
                                 }
                             }
@@ -460,7 +476,7 @@ export component MainWindow inherits Window {
                                         clicked => {
                                             if root.is_remote_verified {
                                                 root.is_adding_connection = false;
-                                                root.commit_connection({ name: "Remote", host: "Remote", state: "Idle", transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
+                                                root.commit_connection({ name: "Remote", host: "Remote", state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
                                             }
                                         }
                                     }
@@ -588,7 +604,12 @@ export component MainWindow inherits Window {
                                         ProgressIndicator { progress: file.progress; }
                                     }
                                 }
-                                Text { text: root.transfer_metrics_text; }
+                                HorizontalBox {
+                                    padding: 0; spacing: 0;
+                                    Text { text: root.transfer_metrics_text; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Text { text: root.current_phase + root.ellipsis; }
+                                }
                                 
                                 Rectangle { height: 10px; }
                                 Rectangle { height: 1px; background: gray; }
