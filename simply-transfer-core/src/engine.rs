@@ -125,7 +125,69 @@ impl TransferEngine {
 
         let mut successful_count = 0;
         let mut failed_count = 0;
-        let mut successfully_transmitted = Vec::new();
+
+        let (validation_tx, mut validation_rx) = mpsc::channel::<String>(100);
+        let dest_dir = self.destination_dir.clone();
+        let ssh_client_val = self.ssh_client.clone();
+        let event_sender_val = self.event_sender.clone();
+        let local_registry_val = Arc::new(local_registry.clone());
+
+        let validation_handle = tokio::spawn(async move {
+            let mut val_success = 0;
+            let mut val_failed = 0;
+
+            while let Some(file) = validation_rx.recv().await {
+                let entry = &local_registry_val.files[&file];
+                let normalized_file = file.replace('\\', "/");
+                let remote_path_str =
+                    format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
+
+                let cmd = format!("sha256sum '{}'", remote_path_str);
+                let ssh_c = ssh_client_val.clone();
+                let validation_result =
+                    tokio::task::spawn_blocking(move || -> Result<String, EngineError> {
+                        ssh_c
+                            .execute_command(&cmd)
+                            .map_err(|e| EngineError::Network(e.to_string()))
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+
+                match validation_result {
+                    Ok(output) => {
+                        if output.starts_with(&entry.hash) || output.starts_with("mock_hash") {
+                            let _ = event_sender_val
+                                .send(TransferEvent::FileStatusChanged(
+                                    file.clone(),
+                                    FileTransferStatus::Validated,
+                                ))
+                                .await;
+                            val_success += 1;
+                        } else {
+                            warn!("Hash mismatch for file {}", file);
+                            let _ = event_sender_val
+                                .send(TransferEvent::FileStatusChanged(
+                                    file.clone(),
+                                    FileTransferStatus::Failed("Hash mismatch".to_string()),
+                                ))
+                                .await;
+                            val_failed += 1;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to validate file {}: {}", file, e);
+                        let _ = event_sender_val
+                            .send(TransferEvent::FileStatusChanged(
+                                file.clone(),
+                                FileTransferStatus::Failed(format!("Validation error: {}", e)),
+                            ))
+                            .await;
+                        val_failed += 1;
+                    }
+                }
+            }
+            (val_success, val_failed)
+        });
 
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
@@ -192,7 +254,7 @@ impl TransferEngine {
                 Ok(_) => {
                     self.emit_file_status(file.clone(), FileTransferStatus::Completed)
                         .await;
-                    successfully_transmitted.push(file.clone());
+                    validation_tx.send(file.clone()).await.ok();
                 }
                 Err(e) => {
                     warn!("Failed to transfer file {}: {}", file, e);
@@ -203,54 +265,14 @@ impl TransferEngine {
             }
         }
 
-        // Phase 3: Integrity Validation
-        self.emit_phase(3, "Integrity Validation".to_string()).await;
-        for file in &successfully_transmitted {
-            let entry = &local_registry.files[file];
-            let normalized_file = file.replace('\\', "/");
-            let remote_path_str = format!(
-                "{}/{}",
-                self.destination_dir.trim_end_matches('/'),
-                normalized_file
-            );
+        drop(validation_tx);
 
-            let cmd = format!("sha256sum '{}'", remote_path_str);
-            let ssh_client = self.ssh_client.clone();
-            let validation_result =
-                tokio::task::spawn_blocking(move || -> Result<String, EngineError> {
-                    ssh_client
-                        .execute_command(&cmd)
-                        .map_err(|e| EngineError::Network(e.to_string()))
-                })
-                .await
-                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
-
-            match validation_result {
-                Ok(output) => {
-                    if output.starts_with(&entry.hash) || output.starts_with("mock_hash") {
-                        self.emit_file_status(file.clone(), FileTransferStatus::Validated)
-                            .await;
-                        successful_count += 1;
-                    } else {
-                        warn!("Hash mismatch for file {}", file);
-                        self.emit_file_status(
-                            file.clone(),
-                            FileTransferStatus::Failed("Hash mismatch".to_string()),
-                        )
-                        .await;
-                        failed_count += 1;
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to validate file {}: {}", file, e);
-                    self.emit_file_status(
-                        file.clone(),
-                        FileTransferStatus::Failed(format!("Validation error: {}", e)),
-                    )
-                    .await;
-                    failed_count += 1;
-                }
-            }
+        // Wait for Phase 3 to complete
+        self.emit_phase(3, "Integrity Validation (Finishing)".to_string())
+            .await;
+        if let Ok((val_success, val_failed)) = validation_handle.await {
+            successful_count += val_success;
+            failed_count += val_failed;
         }
 
         // Cleanup snapshot
