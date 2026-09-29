@@ -534,7 +534,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let dest_user = req["user"].as_str().unwrap_or("simply-transfer").to_string();
                                     tracing::info!("Received verify request from {}@{}", dest_user, dest_ip);
                                     let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                                    match mgr.get_private_key_pem(&pub_key) {
+                                    let mut actual_pub_key = pub_key.clone();
+                                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&pub_key) {
+                                        actual_pub_key = parsed.pub_key;
+                                    }
+                                    match mgr.get_private_key_pem(&actual_pub_key) {
                                         Ok(priv_pem) => {
                                             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                                             let ssh_dir = std::path::Path::new(&home).join(".ssh");
@@ -742,16 +746,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
                             }
                         } else {
+                            tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", parsed.pub_key);
                             tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                         }
                     } else {
+                        tracing::error!("on_fetch_directory: Failed to parse token {}", token_str);
                         tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                     }
                     
-                    if ssh_client.connect(&dest_ip, 22).is_ok()
-                        && ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None).is_ok() {
-                            let cmd = format!("ls -1p \"{}\"", path_str);
-                            if let Ok(output) = ssh_client.execute_command(&cmd) {
+                    if let Err(e) = ssh_client.connect(&dest_ip, 22) {
+                        tracing::error!("on_fetch_directory: SSH connect to {} failed: {}", dest_ip, e);
+                    } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
+                        tracing::error!("on_fetch_directory: SSH auth for {}@{} with key {:?} failed: {}", dest_user, dest_ip, tmp_pem, e);
+                    } else {
+                        let cmd = format!("ls -1p \"{}\"", path_str);
+                        if let Ok(output) = ssh_client.execute_command(&cmd) {
                                 success = true;
                                 for line in output.lines() {
                                     let line = line.trim();

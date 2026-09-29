@@ -465,7 +465,11 @@ export component MainWindow inherits Window {
                             HorizontalBox {
                                 alignment: end;
                                 spacing: 10px;
-                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; } }
+                                Button { text: "Cancel"; clicked => { 
+                                    root.is_adding_connection = false; 
+                                    root.is_remote_verified = false;
+                                    root.remote_verification_status = "";
+                                } }
                                 Rectangle {
                                     width: max(100px, btn_txt.preferred-width + 24px);
                                     height: 30px;
