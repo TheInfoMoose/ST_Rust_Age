@@ -608,7 +608,8 @@ export component MainWindow inherits Window {
                                     padding: 0; spacing: 0;
                                     Text { text: root.transfer_metrics_text; }
                                     Rectangle { horizontal-stretch: 1; }
-                                    Text { text: root.current_phase + root.ellipsis; }
+                                    Text { text: root.current_phase; }
+                                    Text { text: root.ellipsis; width: 15px; horizontal-alignment: left; }
                                 }
                                 
                                 Rectangle { height: 10px; }
