@@ -44,3 +44,6 @@ $RECYCLE.BIN/
 ## Rust Artifacts
 /target/
 
+connections.json
+settings.json
+events.log
