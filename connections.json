@@ -1,12 +1,12 @@
 [
   {
-    "name": "Test",
+    "name": "Test-a",
     "host": "172.17.2.156",
     "state": "Idle",
     "transfer_rate": "-",
     "duration": "-",
     "eta": "-",
     "transfer_type": "Single Transfer",
-    "token": "st:Yl5fXl1OekBPWUIaUUFuA3weJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOioBOGVGOBE0BQoSUyFfCghmFUAobQQaG0MBATYmVgNEVxYbJlsBMkkCIzo"
+    "token": "st:Yl5fXl1OekBPWUIaVkFlC3YeJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOiUxFDpUdgouTQEKDzUaHFcuVQsKTR0CIgEhI3sTEyFcDyAYBnQkAzA8OxU"
   }
 ]

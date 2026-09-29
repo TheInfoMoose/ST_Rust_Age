@@ -132,6 +132,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             target_ip = parsed.ip;
                         }
+                    } else {
+                        target_ip = host.clone();
                     }
                     
                     if !target_ip.is_empty() {
@@ -229,6 +231,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
                             dest_ip = parsed.ip;
                         }
+                    } else {
+                        dest_ip = host.clone();
                     }
                 }
             }
@@ -700,6 +704,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_ip = parsed.ip;
                         }
+                    } else {
+                        dest_ip = host.clone();
                     }
                 }
             }
