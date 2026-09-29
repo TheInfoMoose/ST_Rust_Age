@@ -238,11 +238,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
         let mut token_str = String::new();
+        let mut conn_name = String::new();
         if let Some(ui) = ui_handle.upgrade() {
             let conns: Vec<_> = ui.get_connections().iter().collect();
             let idx = ui.get_selected_connection_idx() as usize;
             if idx < conns.len() {
                 let host = conns[idx].host.to_string();
+                conn_name = conns[idx].name.to_string();
                 token_str = conns[idx].token.to_string();
                 if host.contains('@') {
                     let parts: Vec<&str> = host.split('@').collect();
@@ -275,7 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_tab(1);
             
             let mut sessions: Vec<slint::SharedString> = ui.get_active_sessions().iter().collect();
-            let session_name = format!("Transfer to {}", dest_ip);
+            let session_name = if conn_name.trim().is_empty() { format!("Transfer to {}", dest_ip) } else { conn_name.clone() };
             if !sessions.contains(&session_name.clone().into()) {
                 sessions.push(session_name.into());
                 ui.set_active_sessions(std::rc::Rc::new(slint::VecModel::from(sessions)).into());
