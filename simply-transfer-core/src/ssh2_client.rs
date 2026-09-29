@@ -76,17 +76,16 @@ impl SshClient for Ssh2Client {
             .ok_or_else(|| SshError::ConnectionFailed("Not connected".to_string()))?;
 
         // Create remote parent directory
-        if let Some(parent) = Path::new(remote_path).parent() {
-            if let Some(parent_str) = parent.to_str() {
-                if !parent_str.is_empty() {
-                    let mut channel = session
-                        .channel_session()
-                        .map_err(|e| SshError::SftpError(e.to_string()))?;
-                    let mkdir_cmd = format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"));
-                    let _ = channel.exec(&mkdir_cmd);
-                    let _ = channel.wait_close();
-                }
-            }
+        if let Some(parent) = Path::new(remote_path).parent()
+            && let Some(parent_str) = parent.to_str()
+            && !parent_str.is_empty()
+        {
+            let mut channel = session
+                .channel_session()
+                .map_err(|e| SshError::SftpError(e.to_string()))?;
+            let mkdir_cmd = format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"));
+            let _ = channel.exec(&mkdir_cmd);
+            let _ = channel.wait_close();
         }
 
         let mut local_file =
