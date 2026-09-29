@@ -58,6 +58,7 @@ pub struct TransferEngine {
     destination_dir: String, // Remote path
     event_sender: mpsc::Sender<TransferEvent>,
     ssh_client: Arc<dyn SshClient>,
+    validation_ssh_client: Arc<dyn SshClient>,
     snapshot_driver: Arc<dyn SnapshotDriver>,
     control_rx: Option<watch::Receiver<ControlSignal>>,
 }
@@ -68,6 +69,7 @@ impl TransferEngine {
         destination_dir: String,
         event_sender: mpsc::Sender<TransferEvent>,
         ssh_client: Arc<dyn SshClient>,
+        validation_ssh_client: Arc<dyn SshClient>,
         snapshot_driver: Arc<dyn SnapshotDriver>,
         control_rx: Option<watch::Receiver<ControlSignal>>,
     ) -> Self {
@@ -76,6 +78,7 @@ impl TransferEngine {
             destination_dir,
             event_sender,
             ssh_client,
+            validation_ssh_client,
             snapshot_driver,
             control_rx,
         }
@@ -128,34 +131,47 @@ impl TransferEngine {
 
         let (validation_tx, mut validation_rx) = mpsc::channel::<String>(100);
         let dest_dir = self.destination_dir.clone();
-        let ssh_client_val = self.ssh_client.clone();
+        let ssh_client_val = self.validation_ssh_client.clone();
         let event_sender_val = self.event_sender.clone();
-        let local_registry_val = Arc::new(local_registry.clone());
+        let active_source_dir_val = active_source_dir.clone();
 
         let validation_handle = tokio::spawn(async move {
             let mut val_success = 0;
             let mut val_failed = 0;
 
             while let Some(file) = validation_rx.recv().await {
-                let entry = &local_registry_val.files[&file];
                 let normalized_file = file.replace('\\', "/");
                 let remote_path_str =
                     format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
 
+                let local_path = active_source_dir_val.join(&file);
+
                 let cmd = format!("sha256sum '{}'", remote_path_str);
                 let ssh_c = ssh_client_val.clone();
-                let validation_result =
-                    tokio::task::spawn_blocking(move || -> Result<String, EngineError> {
-                        ssh_c
+
+                let validation_result = tokio::task::spawn_blocking(
+                    move || -> Result<(String, String), EngineError> {
+                        // Compute local hash
+                        let local_hash = if let Ok(f) = std::fs::File::open(&local_path) {
+                            simply_transfer_crypto::hash::compute_sha256_stream(f)
+                                .unwrap_or_else(|_| "local_hash_failed".to_string())
+                        } else {
+                            "local_hash_failed".to_string()
+                        };
+
+                        let remote_output = ssh_c
                             .execute_command(&cmd)
-                            .map_err(|e| EngineError::Network(e.to_string()))
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+                            .map_err(|e| EngineError::Network(e.to_string()))?;
+
+                        Ok((local_hash, remote_output))
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
 
                 match validation_result {
-                    Ok(output) => {
-                        if output.starts_with(&entry.hash) || output.starts_with("mock_hash") {
+                    Ok((local_hash, output)) => {
+                        if output.starts_with(&local_hash) || output.starts_with("mock_hash") {
                             let _ = event_sender_val
                                 .send(TransferEvent::FileStatusChanged(
                                     file.clone(),
@@ -326,21 +342,7 @@ impl TransferEngine {
                     };
                     let size = metadata.len();
 
-                    let file = match File::open(&path) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            tracing::warn!("Failed to open file {:?}: {}", path, e);
-                            continue;
-                        }
-                    };
-
-                    let hash = match compute_sha256_stream(file) {
-                        Ok(h) => h,
-                        Err(e) => {
-                            tracing::warn!("Failed to hash file {:?}: {}", path, e);
-                            continue;
-                        }
-                    };
+                    let hash = "pending".to_string();
 
                     results.push(FileEntry {
                         relative_path: rel_path,
@@ -399,6 +401,7 @@ mod tests {
             dir.path().to_path_buf(),
             remote_dir.path().to_string_lossy().to_string(),
             tx,
+            Arc::new(MockSshClient::new()),
             Arc::new(MockSshClient::new()),
             Arc::new(FallbackSnapshotDriver),
             None,

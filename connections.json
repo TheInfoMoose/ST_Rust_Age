@@ -1,12 +1,12 @@
 [
   {
-    "name": "Test-j",
+    "name": "Test-k",
     "host": "zak@172.17.2.156",
-    "state": "Authenticated (Idle)",
+    "state": "Pending Verification",
     "transfer_rate": "-",
     "duration": "-",
     "eta": "-",
     "transfer_type": "Single Transfer",
-    "token": "st:Yl5fXl1OekBPWUIaUURiAngeJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOi8UK2UHfiUpJCNXMDIiDSsmNEEtcyYFGRI-HhtAOCsnHBY3FGAsJigWPBs"
+    "token": "st:Yl5fXl1OekBPWUIaVkRiAXweJzQyIiJHJxUPDlAfMWUaWCMkKUwVMyAvOiohBzVjAVdRO0VaC0QlRAE9NgchGDICBSU8QGQ8Jh4CTQoxNUs8O1QQRAI"
   }
 ]

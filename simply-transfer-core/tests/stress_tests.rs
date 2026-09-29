@@ -35,6 +35,7 @@ async fn run_engine_and_measure(source_dir: std::path::PathBuf, expected_success
         remote_dir.path().to_string_lossy().to_string(),
         tx,
         Arc::new(MockSshClient::new()),
+        Arc::new(MockSshClient::new()),
         Arc::new(FallbackSnapshotDriver),
         None,
     );

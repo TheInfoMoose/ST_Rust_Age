@@ -36,6 +36,7 @@ async fn test_cross_platform_pathing_normalization() {
         remote_dest.clone(),
         tx,
         ssh_client.clone(),
+        ssh_client.clone(),
         Arc::new(FallbackSnapshotDriver),
         None,
     );

@@ -305,6 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
+            let mut val_ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
             if !dest_ip.is_empty() {
                 use simply_transfer_core::ssh::SshClient;
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -332,6 +333,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
                     tracing::error!("Failed to authenticate SSH client in start_transfer: {}", e);
                 }
+
+                if let Err(e) = val_ssh_client.connect(&dest_ip, 22) {
+                    tracing::error!("Failed to connect Validation SSH client: {}", e);
+                } else if let Err(e) = val_ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
+                    tracing::error!("Failed to authenticate Validation SSH client: {}", e);
+                }
             }
 
             let engine = TransferEngine::new(
@@ -339,6 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dest,
                 tx,
                 Arc::new(ssh_client),
+                Arc::new(val_ssh_client),
                 Arc::new(FallbackSnapshotDriver),
                 Some(control_rx),
             );
