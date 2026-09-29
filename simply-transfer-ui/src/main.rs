@@ -1,7 +1,6 @@
 use simply_transfer_core::engine::{
     ControlSignal, FileTransferStatus, TransferEngine, TransferEvent,
 };
-use simply_transfer_core::ssh::MockSshClient;
 use simply_transfer_snapshots::FallbackSnapshotDriver;
 use slint::Model;
 use std::path::PathBuf;
@@ -127,10 +126,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     let mut target_ip = String::new();
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                        target_ip = parsed.ip;
-                    } else if host != "Remote" {
-                        target_ip = if host.contains('@') { host.split('@').nth(1).unwrap_or("").to_string() } else { host };
+                    if host.contains('@') {
+                        target_ip = host.split('@').nth(1).unwrap_or("").to_string();
+                    } else if host == "Remote" {
+                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                            target_ip = parsed.ip;
+                        }
                     }
                     
                     if !target_ip.is_empty() {
@@ -211,11 +212,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *guard = Some(control_tx);
             }
 
+            let mut dest_ip = String::new();
+            let mut dest_user = "simply-transfer".to_string();
+            if let Some(ui) = ui_handle.upgrade() {
+                let conns: Vec<_> = ui.get_connections().iter().collect();
+                let idx = ui.get_selected_connection_idx() as usize;
+                if idx < conns.len() {
+                    let host = conns[idx].host.to_string();
+                    let token = conns[idx].token.to_string();
+                    if host.contains('@') {
+                        let parts: Vec<&str> = host.split('@').collect();
+                        dest_user = parts[0].to_string();
+                        dest_ip = parts[1].to_string();
+                    } else if host == "Remote" {
+                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                            dest_ip = parsed.ip;
+                        }
+                    }
+                }
+            }
+
+            let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
+            if !dest_ip.is_empty() {
+                use simply_transfer_core::ssh::SshClient;
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let tmp_pem = std::path::Path::new(&home).join(".ssh").join("simply-transfer-tmp.pem");
+                let _ = ssh_client.connect(&dest_ip, 22);
+                let _ = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None);
+            }
+
             let engine = TransferEngine::new(
                 PathBuf::from(src),
                 dest,
                 tx,
-                Arc::new(MockSshClient::new()),
+                Arc::new(ssh_client),
                 Arc::new(FallbackSnapshotDriver),
                 Some(control_rx),
             );
@@ -257,8 +287,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         active_phase = match name.as_str() {
                                             "Snapshot Discovery" => "Preparing Snapshots...",
                                             "Delta Calculation" => "Comparing Files...",
-                                            "Data Transfer" => "Transmitting...",
-                                            "Integrity Verification" => "Checking Integrity...",
+                                            "Data Transfer" => "Transmitting",
+                                            "Integrity Verification" => "Checking Integrity",
                                             _ => name.as_str(),
                                         }.to_string();
                                     }
@@ -457,12 +487,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 listener.set_nonblocking(true).unwrap();
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
                 
-                if let Err(e) = simply_transfer_core::firewall::Firewall::open_port(port) {
-                    log_event("connection", &format!("Warning: Failed to automatically open firewall port {}: {}", port, e));
-                } else {
-                    log_event("connection", &format!("Opened firewall port {} for OOB trigger.", port));
-                }
-                
                 let pub_key_clone = pub_key.clone();
                 let ui_handle = ui_weak.clone();
                 
@@ -515,9 +539,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                         use std::io::Write;
                                                                         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
                                                                             let _ = writeln!(f, "{}", pub_key_line);
-                                                                            let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                                                                            let my_user = std::env::var("USER").unwrap_or_else(|_| "simply-transfer".to_string());
+                                                                            let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
+                                                                            let _ = writer.write_all(res.as_bytes()).await;
+                                                                            let new_host = format!("{}@{}", dest_user, dest_ip);
+                                                                            let pub_key_clone2 = pub_key.clone();
                                                                             let _ = slint::invoke_from_event_loop(move || {
                                                                                 if let Some(ui) = ui_handle.upgrade() {
+                                                                                    let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                                                                                    for conn in &mut conns {
+                                                                                        if conn.token == pub_key_clone2 {
+                                                                                            conn.host = new_host.clone().into();
+                                                                                        }
+                                                                                    }
+                                                                                    ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
                                                                                     ui.set_overall_status("Connection Confirmed".into());
                                                                                 }
                                                                             });
@@ -636,15 +671,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let host = conns[idx].host.to_string();
                     let token = conns[idx].token.to_string();
                     
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                        dest_ip = parsed.ip;
-                    } else if host != "Remote" {
-                        if host.contains('@') {
-                            let parts: Vec<&str> = host.split('@').collect();
-                            dest_user = parts[0].to_string();
-                            dest_ip = parts[1].to_string();
-                        } else {
-                            dest_ip = host;
+                    if host.contains('@') {
+                        let parts: Vec<&str> = host.split('@').collect();
+                        dest_user = parts[0].to_string();
+                        dest_ip = parts[1].to_string();
+                    } else if host == "Remote" {
+                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                            dest_ip = parsed.ip;
                         }
                     }
                 }
@@ -925,6 +958,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut line = String::new();
                             if reader.read_line(&mut line).await.is_ok() && line.contains("\"ok\"") {
                                 log_event("connection", "Remote token validated and handshake succeeded.");
+                                if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
+                                    let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
+                                    let new_host = format!("{}@{}", remote_user, parsed.ip);
+                                    let clone_ui = ui_weak.clone();
+                                    let token_clone = token.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = clone_ui.upgrade() {
+                                            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                                            for conn in &mut conns {
+                                                if conn.token == token_clone {
+                                                    conn.host = new_host.clone().into();
+                                                }
+                                            }
+                                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                        }
+                                    });
+                                }
                                 (true, "Connection Verified Successfully".to_string())
                             } else {
                                 log_event("connection", "Handshake failed to return OK.");
