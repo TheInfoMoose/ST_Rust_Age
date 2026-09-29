@@ -64,11 +64,29 @@ impl SshClient for Ssh2Client {
         Ok(())
     }
 
-    fn upload_file(&self, local_path: &Path, remote_path: &str) -> Result<(), SshError> {
+    fn upload_file(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+    ) -> Result<(), SshError> {
         let session = self
             .session
             .as_ref()
             .ok_or_else(|| SshError::ConnectionFailed("Not connected".to_string()))?;
+
+        // Create remote parent directory
+        if let Some(parent) = Path::new(remote_path).parent()
+            && let Some(parent_str) = parent.to_str()
+            && !parent_str.is_empty()
+        {
+            let mut channel = session
+                .channel_session()
+                .map_err(|e| SshError::SftpError(e.to_string()))?;
+            let mkdir_cmd = format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"));
+            let _ = channel.exec(&mkdir_cmd);
+            let _ = channel.wait_close();
+        }
 
         let mut local_file =
             File::open(local_path).map_err(|e| SshError::SftpError(e.to_string()))?;
@@ -81,6 +99,7 @@ impl SshClient for Ssh2Client {
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut buffer = [0u8; 32768];
+        let mut total_written: u64 = 0;
         loop {
             let bytes_read = local_file
                 .read(&mut buffer)
@@ -91,6 +110,11 @@ impl SshClient for Ssh2Client {
             remote_file
                 .write_all(&buffer[..bytes_read])
                 .map_err(|e| SshError::SftpError(e.to_string()))?;
+
+            total_written += bytes_read as u64;
+            if let Some(ref cb) = progress_callback {
+                cb(total_written);
+            }
         }
 
         // Close the channel
