@@ -95,13 +95,15 @@ impl SshClient for Ssh2Client {
 
         let mut local_file =
             File::open(local_path).map_err(|e| SshError::SftpError(e.to_string()))?;
-
-        let sftp = session.sftp().map_err(|e| SshError::SftpError(e.to_string()))?;
-        let mut remote_file = sftp
-            .create(Path::new(remote_path))
+        let metadata = local_file
+            .metadata()
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
-        let mut buffer = [0u8; 32768];
+        let mut remote_file = session
+            .scp_send(Path::new(remote_path), 0o644, metadata.len(), None)
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
+
+        let mut buffer = [0u8; 65536];
         let mut total_written: u64 = 0;
         loop {
             let bytes_read = local_file
@@ -119,6 +121,19 @@ impl SshClient for Ssh2Client {
                 cb(total_written);
             }
         }
+
+        remote_file
+            .send_eof()
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
+        remote_file
+            .wait_eof()
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
+        remote_file
+            .close()
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
+        remote_file
+            .wait_close()
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         Ok(())
     }
