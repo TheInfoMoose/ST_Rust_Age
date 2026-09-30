@@ -71,6 +71,8 @@ This section serves as a living document to track the current state of features,
 - **Network Resiliency & Reconnection:** Logic to handle spotty network drops and resume a transfer exactly where it left off.
 - **Strict Pre-flight Checks:** Comprehensive checks before transferring (e.g., checking destination disk space, checking if host `sshd` is actually running and accessible).
 - **Cryptographic Heartbeat:** Continuous verification during the transfer to ensure the connection hasn't been hijacked.
+- **[Multi-transfer Setup](FUTURE_ISSUE_MULTITRANSFER_SETUP.md):** Decouple UI state so the setup screen can be mapped to specific connections, allowing setup while another transfer is active.
+- **[Transport Efficiency Profiling](FUTURE_ISSUE_TRANSPORT_EFFICIENCY.md):** Identify bottleneck in SSH chunking/writes that caps Gigabit speeds at 2-3MB/s and implement pipeline optimizations.
 
 ### ❓ Clarifications & Verifications Needed
 1. **OS Permissions for `~/.ssh`:** We need to verify that the application has the necessary permissions to write to `~/.ssh/authorized_keys` across all target OS environments (especially Windows/macOS strict sandbox modes) without requiring the user to manually intervene or run as root/Administrator.

@@ -4722,6 +4722,7 @@ name = "simply-transfer-ui"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "bytemuck",
  "chrono",
  "notify-rust",
  "rfd",
@@ -4732,6 +4733,7 @@ dependencies = [
  "simply-transfer-snapshots",
  "slint",
  "slint-build",
+ "strict-num",
  "sysinfo",
  "tokio",
  "tracing",

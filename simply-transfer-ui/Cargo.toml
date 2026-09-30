@@ -1,7 +1,7 @@
 [package]
 name = "simply-transfer-ui"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 arboard = "3.6.1"
@@ -18,6 +18,8 @@ sysinfo = "0.39.6"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+bytemuck = { version = "1.21.0", features = ["derive"] }
+strict-num = "0.1"
 
 [build-dependencies]
 slint-build = "1.18.1"

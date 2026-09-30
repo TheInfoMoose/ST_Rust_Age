@@ -7,11 +7,16 @@ pub struct ConnectionToken {
     pub ip: String,
     pub port: u16,
     pub pub_key: String,
+    pub user: Option<String>,
 }
 
 impl ConnectionToken {
-    pub fn generate(ip: &str, port: u16, pub_key: &str) -> String {
-        let raw = format!("{}|{}|{}", ip, port, pub_key);
+    pub fn generate(ip: &str, port: u16, pub_key: &str, user: Option<&str>) -> String {
+        let raw = if let Some(u) = user {
+            format!("{}|{}|{}|{}", ip, port, pub_key, u)
+        } else {
+            format!("{}|{}|{}", ip, port, pub_key)
+        };
         // XOR obfuscation to prevent casual Base64 decoding from revealing the IP
         let xored: Vec<u8> = raw
             .bytes()
@@ -42,7 +47,7 @@ impl ConnectionToken {
         let raw = String::from_utf8(unxored).map_err(|_| "Invalid UTF-8 in decoded token")?;
 
         let parts: Vec<&str> = raw.split('|').collect();
-        if parts.len() != 3 {
+        if parts.len() < 3 {
             return Err("Malformed token data structure");
         }
 
@@ -50,10 +55,17 @@ impl ConnectionToken {
             .parse::<u16>()
             .map_err(|_| "Invalid port number in token")?;
 
+        let user = if parts.len() >= 4 {
+            Some(parts[3].to_string())
+        } else {
+            None
+        };
+
         Ok(Self {
             ip: parts[0].to_string(),
             port,
             pub_key: parts[2].to_string(),
+            user,
         })
     }
 }

@@ -47,3 +47,10 @@ $RECYCLE.BIN/
 connections.json
 settings.json
 events.log
+logs_linux/
+logs_macos/
+logs_windows/
+connections_linux.json
+connections_macos.json
+connections_windows.json
+.ssh/
