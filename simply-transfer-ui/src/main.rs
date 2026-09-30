@@ -23,7 +23,8 @@ struct SavedConnection {
 }
 
 fn load_connections() -> Vec<SavedConnection> {
-    if let Ok(data) = std::fs::read_to_string("connections.json")
+    let filename = format!("connections_{}.json", std::env::consts::OS);
+    if let Ok(data) = std::fs::read_to_string(&filename)
         && let Ok(conns) = serde_json::from_str(&data)
     {
         return conns;
@@ -46,13 +47,15 @@ fn save_connections(conns: &[ConnectionItem]) {
         })
         .collect();
     if let Ok(json) = serde_json::to_string_pretty(&saved) {
-        let _ = std::fs::write("connections.json", json);
+        let filename = format!("connections_{}.json", std::env::consts::OS);
+        let _ = std::fs::write(&filename, json);
     }
 }
 
 fn log_event(log_type: &str, message: &str) {
     use std::io::Write;
-    let dir = std::path::Path::new("logs");
+    let dir_name = format!("logs_{}", std::env::consts::OS);
+    let dir = std::path::Path::new(&dir_name);
     if !dir.exists() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -253,7 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if host == "Remote" {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
                         dest_ip = parsed.ip;
-                        dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
+                        dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
                     }
                 } else {
                     dest_ip = host.clone();
@@ -282,7 +285,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sessions.push(session_name.clone().into());
                 ui.set_active_sessions(std::rc::Rc::new(slint::VecModel::from(sessions)).into());
                 ui.set_selected_session_idx(0);
+            } else {
+                // If it already exists, select it
+                if let Some(pos) = sessions.iter().position(|x| x == &slint::SharedString::from(session_name.clone())) {
+                    ui.set_selected_session_idx(pos as i32);
+                }
             }
+            
+            // Clear previous transfer state
+            ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+            ui.set_completed_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+            ui.set_phase_text("Live Transfer Queue".into());
+            ui.set_overall_status("Preparing...".into());
+            ui.set_current_phase("Idle".into());
+            ui.set_is_transfer_paused(false);
             
             ui.set_remote_verified_host(format!("{}@{}", dest_user, dest_ip).into());
             
@@ -365,8 +381,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
                 let mut buffer = Vec::with_capacity(5000);
 
-                let mut local_t_q = Vec::new();
-                let mut local_c_q = Vec::new();
+                let mut local_t_q: Vec<TransferQueueItem> = Vec::new();
+                let mut local_c_q: Vec<CompletedItem> = Vec::new();
                 let mut phase_txt = "Live Transfer Queue".to_string();
                 let mut active_phase = "Idle".to_string();
                 let mut status_txt = "Preparing...".to_string();
@@ -376,6 +392,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transfer_start_time = tokio::time::Instant::now();
                 let mut total_files = 0;
                 let mut current_completed_files = 0;
+                let mut bytes_transferred_in_interval = 0;
 
                 loop {
                     tokio::select! {
@@ -394,7 +411,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Snapshot Discovery" => "Preparing Snapshots...",
                                             "Delta Calculation" => "Comparing Files...",
                                             "Data Transfer" => "Transmitting",
-                                            "Integrity Verification" => "Checking Integrity",
+                                            "Integrity Validation (Finishing)" => {
+                                                local_t_q.clear();
+                                                metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
+                                                "Checking Integrity"
+                                            },
                                             _ => name.as_str(),
                                         }.to_string();
                                     }
@@ -408,43 +429,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     progress,
                                                 }];
                                                 
-                                                let now = tokio::time::Instant::now();
-                                                let elapsed = now.duration_since(last_tick).as_secs_f32();
-                                                if elapsed > 0.0 && progress_bytes >= last_progress_bytes {
-                                                    let diff = progress_bytes - last_progress_bytes;
-                                                    let speed_mbps = (diff as f32 / elapsed) / 1_048_576.0;
-                                                    // Without a real ICMP ping, we simulate it based on bandwidth, or just report "<1ms" if fast
-                                                    let dyn_latency = if speed_mbps > 5.0 { "<1ms" } else { "2-4ms" };
-                                                    metrics_txt = format!("Upload: {:.1} MB/s | Download: 0 MB/s | Latency: {}", speed_mbps, dyn_latency);
+                                                if progress_bytes > last_progress_bytes {
+                                                    bytes_transferred_in_interval += progress_bytes - last_progress_bytes;
+                                                } else if progress_bytes < last_progress_bytes {
+                                                    bytes_transferred_in_interval += progress_bytes;
                                                 }
                                                 last_progress_bytes = progress_bytes;
-                                                last_tick = now;
                                             }
                                             FileTransferStatus::Completed => {
+                                                local_t_q.clear();
                                                 current_completed_files += 1;
                                                 status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
                                                 log_event("transfer", &format!("Transferred: {}", file));
-                                                local_c_q.push(CompletedItem {
-                                                    name: file.into(),
-                                                    status: "Completed".into(),
-                                                    status_color: slint::Color::from_rgb_u8(200, 200, 50),
-                                                });
+                                                
+                                                if let Some(existing) = local_c_q.iter_mut().find(|i| i.name.as_str() == file.as_str()) {
+                                                    existing.status = "Completed".into();
+                                                    existing.status_color = slint::Color::from_rgb_u8(200, 200, 50);
+                                                } else {
+                                                    local_c_q.push(CompletedItem {
+                                                        name: file.into(),
+                                                        status: "Completed".into(),
+                                                        status_color: slint::Color::from_rgb_u8(200, 200, 50),
+                                                    });
+                                                }
                                             }
                                             FileTransferStatus::Validated => {
                                                 log_event("transfer", &format!("Validated Hash: {}", file));
-                                                local_c_q.push(CompletedItem {
-                                                    name: file.into(),
-                                                    status: "Validated".into(),
-                                                    status_color: slint::Color::from_rgb_u8(50, 200, 50),
-                                                });
+                                                if let Some(existing) = local_c_q.iter_mut().find(|i| i.name.as_str() == file.as_str()) {
+                                                    existing.status = "Validated".into();
+                                                    existing.status_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                                } else {
+                                                    local_c_q.push(CompletedItem {
+                                                        name: file.into(),
+                                                        status: "Validated".into(),
+                                                        status_color: slint::Color::from_rgb_u8(50, 200, 50),
+                                                    });
+                                                }
                                             }
                                             FileTransferStatus::Failed(err) => {
                                                 log_event("transfer", &format!("Failed: {} ({})", file, err));
-                                                local_c_q.push(CompletedItem {
-                                                    name: file.into(),
-                                                    status: format!("Failed: {}", err).into(),
-                                                    status_color: slint::Color::from_rgb_u8(200, 50, 50),
-                                                });
+                                                if let Some(existing) = local_c_q.iter_mut().find(|i| i.name.as_str() == file.as_str()) {
+                                                    existing.status = format!("Failed: {}", err).into();
+                                                    existing.status_color = slint::Color::from_rgb_u8(200, 50, 50);
+                                                } else {
+                                                    local_c_q.push(CompletedItem {
+                                                        name: file.into(),
+                                                        status: format!("Failed: {}", err).into(),
+                                                        status_color: slint::Color::from_rgb_u8(200, 50, 50),
+                                                    });
+                                                }
                                             }
                                             _ => {}
                                         }
@@ -472,6 +505,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .body(&format!("Transfer aborted: {}", err))
                                             .show();
                                     }
+                                }
+                            }
+                            
+                            let now = tokio::time::Instant::now();
+                            let elapsed = now.duration_since(last_tick).as_secs_f32();
+                            if elapsed >= 0.1 {
+                                if bytes_transferred_in_interval > 0 {
+                                    let speed_mbps = (bytes_transferred_in_interval as f32 / elapsed) / 1_048_576.0;
+                                    let dyn_latency = if speed_mbps > 5.0 { "<1ms" } else { "2-4ms" };
+                                    metrics_txt = format!("Upload: {:.1} MB/s | Download: 0 MB/s | Latency: {}", speed_mbps, dyn_latency);
+                                    bytes_transferred_in_interval = 0;
+                                } else if elapsed >= 1.0 {
+                                    metrics_txt = "Upload: 0.0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
+                                }
+                                if bytes_transferred_in_interval > 0 || elapsed >= 1.0 {
+                                    last_tick = now;
                                 }
                             }
 
@@ -515,7 +564,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ui.set_current_phase(clone_active_phase.clone().into());
                                     }
                                     
-                                    if clone_active_phase != "Idle" && clone_active_phase != "Transfer Complete" {
+                                    if clone_active_phase != "Idle" {
                                         let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                         let idx = ui.get_selected_connection_idx() as usize;
                                         if idx < conns.len() {
@@ -526,7 +575,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(rate) = clone_metrics.split(" | ").next() {
                                                 conns[idx].transfer_rate = rate.replace("Upload: ", "").into();
                                             }
-                                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                            
+                                            let model = ui.get_connections();
+                                            if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<ConnectionItem>>() {
+                                                vec_model.set_row_data(idx, conns[idx].clone());
+                                            } else {
+                                                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                            }
                                         }
                                     }
                                 }
@@ -680,6 +735,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                         use std::io::Write;
                                                                         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
                                                                             let _ = writeln!(f, "{}", pub_key_line);
+                                                                        
+                                                                            #[cfg(target_os = "windows")]
+                                                                            {
+                                                                                let admin_keys = "C:\\ProgramData\\ssh\\administrators_authorized_keys";
+                                                                                let mut admin_key_exists = false;
+                                                                                if let Ok(content) = std::fs::read_to_string(admin_keys) {
+                                                                                    if content.contains(dest_pub.trim()) {
+                                                                                        admin_key_exists = true;
+                                                                                    }
+                                                                                }
+                                                                                if !admin_key_exists {
+                                                                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(admin_keys) {
+                                                                                        let _ = writeln!(file, "{}", pub_key_line);
+                                                                                    } else {
+                                                                                        let script = format!(
+                                                                                            "Add-Content -Path \\\"{}\\\" -Value \\\"{}\\\"",
+                                                                                            admin_keys, pub_key_line
+                                                                                        );
+                                                                                        let _ = std::process::Command::new("powershell")
+                                                                                            .arg("-NoProfile")
+                                                                                            .arg("-Command")
+                                                                                            .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -Wait", script))
+                                                                                            .status();
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            
                                                                             let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                                                                             let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
                                                                             let _ = writer.write_all(res.as_bytes()).await;
@@ -733,7 +815,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 });
                 
-                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key);
+                let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
+                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key, Some(&my_user));
                 conn_to_save.token = generated_token.into();
             } else {
                 let token = conn_to_save.token.to_string();
@@ -820,11 +903,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if host.contains('@') {
                         let parts: Vec<&str> = host.split('@').collect();
                         dest_user = parts[0].to_string();
-                        dest_ip = parts[1].to_string();
+                        dest_ip = parts[1].trim().to_string();
                     } else if host == "Remote" {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_ip = parsed.ip;
-                            dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
+                            dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
                         }
                     } else {
                         dest_ip = host.clone();
@@ -877,27 +960,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
                         tracing::error!("on_fetch_directory: SSH auth for {}@{} with key {:?} failed: {}", dest_user, dest_ip, tmp_pem, e);
                     } else {
-                        let cmd = format!("ls -1p \"{}\"", path_str);
+                        let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
+                            .map(|out| out.trim() == "Windows")
+                            .unwrap_or(false);
+                            
+                        let cmd = if is_windows {
+                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", path_str)
+                        } else {
+                            format!("ls -1p \"{}\"", path_str)
+                        };
+
                         if let Ok(output) = ssh_client.execute_command(&cmd) {
-                                success = true;
-                                for line in output.lines() {
-                                    let line = line.trim();
-                                    if line.is_empty() { continue; }
-                                    let is_dir = line.ends_with('/');
-                                    let name = if is_dir { &line[..line.len()-1] } else { line };
-                                    let full_path = if path_str.ends_with('/') {
-                                        format!("{}{}", path_str, name)
-                                    } else {
-                                        format!("{}/{}", path_str, name)
-                                    };
-                                    nodes.push(FileNode {
-                                        name: name.into(),
-                                        is_dir,
-                                        path: full_path.into(),
-                                    });
-                                }
+                            success = true;
+                            for line in output.lines() {
+                                let line = line.trim();
+                                if line.is_empty() { continue; }
+                                let is_dir = line.ends_with('/');
+                                let name = if is_dir { &line[..line.len()-1] } else { line };
+                                let full_path = if path_str.ends_with('/') || path_str.ends_with('\\') {
+                                    format!("{}{}", path_str, name)
+                                } else {
+                                    let sep = if is_windows { "\\" } else { "/" };
+                                    format!("{}{}{}", path_str, sep, name)
+                                };
+                                nodes.push(FileNode {
+                                    name: name.into(),
+                                    is_dir,
+                                    path: full_path.into(),
+                                });
                             }
                         }
+                    }
                 }
                 
                 if !success {
@@ -1092,6 +1185,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     } else {
                         log_event("connection", "Public key already in authorized_keys.");
+                    }
+                    
+                    #[cfg(target_os = "windows")]
+                    {
+                        let admin_keys = "C:\\ProgramData\\ssh\\administrators_authorized_keys";
+                        let mut admin_key_exists = false;
+                        if let Ok(content) = std::fs::read_to_string(admin_keys) {
+                            if content.contains(&parsed.pub_key) {
+                                admin_key_exists = true;
+                            }
+                        }
+                        if !admin_key_exists {
+                            use std::io::Write;
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(admin_keys) {
+                                let _ = writeln!(file, "{}", pub_key_line);
+                                log_event("connection", "Appended public key to administrators_authorized_keys.");
+                            } else {
+                                let script = format!(
+                                    "Add-Content -Path \\\"{}\\\" -Value \\\"{}\\\"",
+                                    admin_keys, pub_key_line
+                                );
+                                let _ = std::process::Command::new("powershell")
+                                    .arg("-NoProfile")
+                                    .arg("-Command")
+                                    .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -Wait", script))
+                                    .status();
+                                log_event("connection", "Appended public key to administrators_authorized_keys via elevated PowerShell.");
+                            }
+                        }
                     }
                     
                     #[cfg(unix)]

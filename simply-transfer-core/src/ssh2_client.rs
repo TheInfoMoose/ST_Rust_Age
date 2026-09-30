@@ -80,22 +80,25 @@ impl SshClient for Ssh2Client {
             && let Some(parent_str) = parent.to_str()
             && !parent_str.is_empty()
         {
-            let mut channel = session
-                .channel_session()
-                .map_err(|e| SshError::SftpError(e.to_string()))?;
-            let mkdir_cmd = format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"));
-            let _ = channel.exec(&mkdir_cmd);
-            let _ = channel.wait_close();
+            let is_windows = self.execute_command("cmd.exe /c echo Windows")
+                .map(|out| out.trim() == "Windows")
+                .unwrap_or(false);
+
+            let mkdir_cmd = if is_windows {
+                format!("powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"", parent_str)
+            } else {
+                format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"))
+            };
+            
+            let _ = self.execute_command(&mkdir_cmd);
         }
 
         let mut local_file =
             File::open(local_path).map_err(|e| SshError::SftpError(e.to_string()))?;
-        let metadata = local_file
-            .metadata()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
 
-        let mut remote_file = session
-            .scp_send(Path::new(remote_path), 0o644, metadata.len(), None)
+        let sftp = session.sftp().map_err(|e| SshError::SftpError(e.to_string()))?;
+        let mut remote_file = sftp
+            .create(Path::new(remote_path))
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut buffer = [0u8; 32768];
@@ -117,20 +120,6 @@ impl SshClient for Ssh2Client {
             }
         }
 
-        // Close the channel
-        remote_file
-            .send_eof()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .wait_eof()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .close()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .wait_close()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-
         Ok(())
     }
 
@@ -150,6 +139,18 @@ impl SshClient for Ssh2Client {
         let mut s = String::new();
         channel
             .read_to_string(&mut s)
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        // Drain stderr to prevent command from blocking if stderr fills up
+        let mut err = String::new();
+        channel.stderr().read_to_string(&mut err).ok();
+
+        channel
+            .wait_eof()
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        channel
+            .close()
             .map_err(|e| SshError::CommandFailed(e.to_string()))?;
 
         channel

@@ -120,7 +120,10 @@ impl TransferEngine {
             to_skip: Vec::new(),
         };
 
-        self.event_sender.send(TransferEvent::ManifestGenerated(manifest.to_transfer.len())).await.ok();
+        self.event_sender
+            .send(TransferEvent::ManifestGenerated(manifest.to_transfer.len()))
+            .await
+            .ok();
 
         for skipped in &manifest.to_skip {
             self.emit_file_status(skipped.clone(), FileTransferStatus::Skipped)
@@ -144,30 +147,48 @@ impl TransferEngine {
                 let mut files = vec![first_file];
                 while let Ok(file) = validation_rx.try_recv() {
                     files.push(file);
-                    if files.len() >= 50 { break; }
+                    if files.len() >= 50 {
+                        break;
+                    }
                 }
 
                 let mut remote_paths = Vec::new();
                 let mut local_paths = Vec::new();
                 for f in &files {
                     let normalized_file = f.replace('\\', "/");
-                    let full_remote_path = format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
+                    let full_remote_path =
+                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
                     // properly escape single quotes for shell: replace ' with '\''
                     let escaped_path = full_remote_path.replace("'", "'\\''");
                     remote_paths.push(format!("'{}'", escaped_path));
-                    local_paths.push(active_source_dir_val.join(f));
+                    
+                    let lp = if active_source_dir_val.is_file() {
+                        active_source_dir_val.clone()
+                    } else {
+                        active_source_dir_val.join(f)
+                    };
+                    local_paths.push(lp);
                 }
 
-                let cmd = format!("sha256sum {}", remote_paths.join(" "));
                 let ssh_c = ssh_client_val.clone();
-                
-                let validation_result =
-                    tokio::task::spawn_blocking(move || -> Result<(Vec<String>, String), EngineError> {
+                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows")
+                    .map(|out| out.trim() == "Windows")
+                    .unwrap_or(false);
+
+                let cmd = if is_windows_dest {
+                    format!("powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"", remote_paths.join(","))
+                } else {
+                    format!("sha256sum {}", remote_paths.join(" "))
+                };
+
+                let validation_result = tokio::task::spawn_blocking(
+                    move || -> Result<(Vec<String>, String), EngineError> {
                         // Compute local hashes
                         let mut local_hashes = Vec::new();
                         for lp in local_paths {
                             let local_hash = if let Ok(f) = std::fs::File::open(&lp) {
-                                simply_transfer_crypto::hash::compute_sha256_stream(f).unwrap_or_else(|_| "local_hash_failed".to_string())
+                                simply_transfer_crypto::hash::compute_sha256_stream(f)
+                                    .unwrap_or_else(|_| "local_hash_failed".to_string())
                             } else {
                                 "local_hash_failed".to_string()
                             };
@@ -177,20 +198,23 @@ impl TransferEngine {
                         let remote_output = ssh_c
                             .execute_command(&cmd)
                             .map_err(|e| EngineError::Network(e.to_string()))?;
-                            
+
                         Ok((local_hashes, remote_output))
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+                    },
+                )
+                .await
+                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
 
                 match validation_result {
                     Ok((local_hashes, output)) => {
                         let remote_lines: Vec<&str> = output.trim().lines().collect();
-                        
+
                         for (i, file) in files.iter().enumerate() {
                             let local_hash = &local_hashes[i];
-                            let matched = remote_lines.iter().any(|l| l.starts_with(local_hash) || l.starts_with("mock_hash"));
-                            
+                            let matched = remote_lines
+                                .iter()
+                                .any(|l| l.starts_with(local_hash) || l.starts_with("mock_hash"));
+
                             if matched {
                                 let _ = event_sender_val
                                     .send(TransferEvent::FileStatusChanged(
@@ -247,7 +271,11 @@ impl TransferEngine {
                 }
             }
 
-            let local_path = active_source_dir.join(file);
+            let local_path = if active_source_dir.is_file() {
+                active_source_dir.clone()
+            } else {
+                active_source_dir.join(file)
+            };
             let normalized_file = file.replace('\\', "/");
             let remote_path = format!(
                 "{}/{}",
@@ -407,6 +435,7 @@ mod tests {
     use super::*;
     use crate::ssh::MockSshClient;
     use simply_transfer_snapshots::FallbackSnapshotDriver;
+    use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
 

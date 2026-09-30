@@ -242,6 +242,7 @@ export component MainWindow inherits Window {
     in-out property <int> selected_session_idx: 0;
     in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
     in-out property <string> current_phase: "Idle";
+    in-out property <bool> is_transfer_paused: false;
     property <int> tick: 0;
     property <string> ellipsis: root.tick == 0 ? "" : (root.tick == 1 ? "." : (root.tick == 2 ? ".." : "..."));
     
@@ -633,7 +634,13 @@ export component MainWindow inherits Window {
                                 Text { text: root.overall_status; }
 
                                 HorizontalBox {
-                                    Button { text: "Pause Transfer"; clicked => { root.pause_transfer(); } }
+                                    Button {
+                                        text: root.is_transfer_paused ? "Resume Transfer" : "Pause Transfer";
+                                        clicked => {
+                                            root.is_transfer_paused = !root.is_transfer_paused;
+                                            root.pause_transfer();
+                                        }
+                                    }
                                     Button { text: "Cancel Transfer"; clicked => { root.cancel_transfer(); } }
                                 }
                             }
