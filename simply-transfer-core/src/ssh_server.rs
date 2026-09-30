@@ -127,9 +127,13 @@ impl SshServer {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(output) = Command::new("systemsetup").arg("-getremotelogin").output() {
-                let status = String::from_utf8_lossy(&output.stdout);
-                return status.contains("On");
+            // systemsetup -getremotelogin requires sudo, which will fail silently here.
+            // Checking if port 22 is listening is a robust alternative.
+            if std::net::TcpStream::connect("127.0.0.1:22").is_ok() {
+                return true;
+            }
+            if std::net::TcpStream::connect("[::1]:22").is_ok() {
+                return true;
             }
             false
         }
@@ -184,7 +188,7 @@ impl SshServer {
         #[cfg(target_os = "macos")]
         {
             let script =
-                "do shell script \"systemsetup -setremotelogin on\" with administrator privileges";
+                "do shell script \"systemsetup -f -setremotelogin on || /bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist\" with administrator privileges";
             let status = Command::new("osascript")
                 .arg("-e")
                 .arg(script)
