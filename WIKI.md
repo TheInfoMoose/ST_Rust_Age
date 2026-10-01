@@ -61,7 +61,8 @@ This section serves as a living document to track the current state of features,
 - **UI Persistence & State:** Connections list is now successfully saving/loading locally, overcoming the previous UI state issues.
 - **Out-Of-Band (OOB) Handshake:** Token generation, token parsing, and initial cryptographic handshake between peers over a temporary TCP port.
 - **SSH Keypair Management:** The application can generate Ed25519 keys, obfuscate them into tokens, and store the keys.
-
+- **Strict Pre-flight Checks:** Destination disk space and active `sshd` socket reachability tests are enforced before transmission.
+- **Cryptographic Heartbeat:** Continuous background polling and bidirectional P2P key ingestion to maintain active verified state across devices.
 ### 🚧 Started, but Needing Work (In Progress)
 - **Data Transmission (Transfer Engine):** The scaffolding for the chunked file hashing and transmission exists, but the core data streaming needs further optimization and hardening.
 - **UI Progress Streaming:** Passing real-time transfer stats (MB/s, ETA) from the background `TransferEngine` to the Slint UI safely without blocking the main event loop.
@@ -69,8 +70,6 @@ This section serves as a living document to track the current state of features,
 
 ### 🛑 Scaffolded, but Not Implemented
 - **Network Resiliency & Reconnection:** Logic to handle spotty network drops and resume a transfer exactly where it left off.
-- **Strict Pre-flight Checks:** Comprehensive checks before transferring (e.g., checking destination disk space, checking if host `sshd` is actually running and accessible).
-- **Cryptographic Heartbeat:** Continuous verification during the transfer to ensure the connection hasn't been hijacked.
 - **[Multi-transfer Setup](FUTURE_ISSUE_MULTITRANSFER_SETUP.md):** Decouple UI state so the setup screen can be mapped to specific connections, allowing setup while another transfer is active.
 - **[Transport Efficiency Profiling](FUTURE_ISSUE_TRANSPORT_EFFICIENCY.md):** Identify bottleneck in SSH chunking/writes that caps Gigabit speeds at 2-3MB/s and implement pipeline optimizations.
 

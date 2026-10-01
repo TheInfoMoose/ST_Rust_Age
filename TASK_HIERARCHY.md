@@ -46,12 +46,12 @@ flowchart TD
 
 ---
 
-### Phase 1: Pre-flight Safety & Session Security
+### Phase 1: Pre-flight Safety & Session Security (✅ Complete)
 * **Objective:** Fail-fast before allocating transmission memory or pushing bytes over the wire.
 * **Dependencies:** Working Out-Of-Band (OOB) TCP handshake and Ed25519 key ingestion.
 * **Deliverables:**
-  1. **Strict Pre-flight Checks:** Query destination disk space before file transfer begins; test destination `sshd` socket reachability on port 22.
-  2. **Cryptographic Heartbeat:** Continuous peer verification during active sessions to ensure connection health and detect network disconnects or socket hijacking.
+  1. ~~**Strict Pre-flight Checks:** Query destination disk space before file transfer begins; test destination `sshd` socket reachability on port 22.~~
+  2. ~~**Cryptographic Heartbeat:** Continuous peer verification during active sessions to ensure connection health and detect network disconnects or socket hijacking.~~
 * **Resource Expenditure:** Low (standard socket probes and SSH credential checks).
 
 ---

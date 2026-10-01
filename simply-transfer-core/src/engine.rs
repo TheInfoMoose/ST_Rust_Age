@@ -107,10 +107,43 @@ impl TransferEngine {
             self.source_dir.clone()
         };
 
+        let local_registry = self.build_local_registry(&active_source_dir).await?;
+
+        self.emit_phase(1, "Pre-flight Checks & Heartbeat".to_string())
+            .await;
+        let total_size: u64 = local_registry.files.values().map(|f| f.size).sum();
+        self.perform_preflight_checks(total_size).await?;
+
+        let heartbeat_ssh = self.validation_ssh_client.clone();
+        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<()>(1);
+        let _heartbeat_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let ssh = heartbeat_ssh.clone();
+                        let res = tokio::task::spawn_blocking(move || {
+                            ssh.execute_command("echo heartbeat")
+                        }).await;
+
+                        match res {
+                            Ok(Ok(out)) if out.trim() == "heartbeat" => {},
+                            _ => {
+                                tracing::error!("Cryptographic heartbeat failed or socket hijacked!");
+                                break;
+                            }
+                        }
+                    }
+                    _ = heartbeat_rx.recv() => {
+                        break;
+                    }
+                }
+            }
+        });
+
         // Phase 1: Destination Validation
         self.emit_phase(1, "Destination Validation".to_string())
             .await;
-        let local_registry = self.build_local_registry(&active_source_dir).await?;
 
         // TODO: In a full implementation, send `local_registry` to the remote peer,
         // and receive a `TransferManifest` back. For now, we mock the manifest
@@ -161,7 +194,7 @@ impl TransferEngine {
                     // properly escape single quotes for shell: replace ' with '\''
                     let escaped_path = full_remote_path.replace("'", "'\\''");
                     remote_paths.push(format!("'{}'", escaped_path));
-                    
+
                     let lp = if active_source_dir_val.is_file() {
                         active_source_dir_val.clone()
                     } else {
@@ -171,12 +204,16 @@ impl TransferEngine {
                 }
 
                 let ssh_c = ssh_client_val.clone();
-                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows")
+                let is_windows_dest = ssh_c
+                    .execute_command("cmd.exe /c echo Windows")
                     .map(|out| out.trim() == "Windows")
                     .unwrap_or(false);
 
                 let cmd = if is_windows_dest {
-                    format!("powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"", remote_paths.join(","))
+                    format!(
+                        "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"",
+                        remote_paths.join(",")
+                    )
                 } else {
                     format!("sha256sum {}", remote_paths.join(" "))
                 };
@@ -356,6 +393,64 @@ impl TransferEngine {
             })
             .await
             .ok();
+
+        // Stop heartbeat
+        let _ = heartbeat_tx.send(()).await;
+        Ok(())
+    }
+
+    async fn perform_preflight_checks(&self, total_size: u64) -> Result<(), EngineError> {
+        let ssh_c = self.ssh_client.clone();
+        let is_windows = tokio::task::spawn_blocking({
+            let ssh_c = ssh_c.clone();
+            move || {
+                ssh_c
+                    .execute_command("cmd.exe /c echo Windows")
+                    .map(|out| out.trim() == "Windows")
+                    .unwrap_or(false)
+            }
+        })
+        .await
+        .unwrap_or(false);
+
+        let dest_dir = self.destination_dir.clone();
+        let check_cmd = if is_windows {
+            format!(
+                "powershell -NoProfile -Command \"$path = '{}'; while (-not (Test-Path $path) -and $path) {{ $path = Split-Path $path -Parent }}; if ($path) {{ (Get-Item $path).PSDrive.Free }} else {{ 0 }}\"",
+                dest_dir
+            )
+        } else {
+            format!(
+                "DIR='{}'; while [ ! -d \"$DIR\" ] && [ \"$DIR\" != \"/\" ]; do DIR=$(dirname \"$DIR\"); done; df -k \"$DIR\" | awk 'NR==2 {{print $4}}'",
+                dest_dir.replace("'", "'\\''")
+            )
+        };
+
+        let ssh_c2 = self.ssh_client.clone();
+        let output = tokio::task::spawn_blocking(move || ssh_c2.execute_command(&check_cmd))
+            .await
+            .map_err(|e| EngineError::Network(e.to_string()))?
+            .map_err(|e| EngineError::Network(e.to_string()))?;
+
+        let free_space_bytes: u64 = if is_windows {
+            output.trim().parse().unwrap_or(0)
+        } else {
+            let kb: u64 = output.trim().parse().unwrap_or(0);
+            kb * 1024
+        };
+
+        if free_space_bytes < total_size {
+            tracing::warn!(
+                "Insufficient disk space: free {} bytes, required {} bytes",
+                free_space_bytes,
+                total_size
+            );
+            return Err(EngineError::PhaseError(format!(
+                "Insufficient disk space. Required: {} bytes, Available: {} bytes",
+                total_size, free_space_bytes
+            )));
+        }
+
         Ok(())
     }
 

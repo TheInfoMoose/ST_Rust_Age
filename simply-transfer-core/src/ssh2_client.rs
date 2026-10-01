@@ -80,16 +80,20 @@ impl SshClient for Ssh2Client {
             && let Some(parent_str) = parent.to_str()
             && !parent_str.is_empty()
         {
-            let is_windows = self.execute_command("cmd.exe /c echo Windows")
+            let is_windows = self
+                .execute_command("cmd.exe /c echo Windows")
                 .map(|out| out.trim() == "Windows")
                 .unwrap_or(false);
 
             let mkdir_cmd = if is_windows {
-                format!("powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"", parent_str)
+                format!(
+                    "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"",
+                    parent_str
+                )
             } else {
                 format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"))
             };
-            
+
             let _ = self.execute_command(&mkdir_cmd);
         }
 
