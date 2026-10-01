@@ -31,7 +31,7 @@ jobs:
           fi
           
           # Copy other relevant documentation files
-          for file in DEPLOYMENT.md FUTURE_ISSUE_*.md; do
+          for file in DEPLOYMENT.md FUTURE_ISSUE_*.md TASK_HIERARCHY.md; do
             if [ -f "$file" ]; then
               cp "$file" /tmp/wiki/
             fi

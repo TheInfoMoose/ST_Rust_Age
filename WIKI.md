@@ -53,7 +53,7 @@ Responsible for calculating changes between directories to minimize data transfe
 
 ## 6. Project Tracker & Implementation Steps
 
-This section serves as a living document to track the current state of features, what needs work, and what remains to be implemented.
+This section serves as a living document to track the current state of features, what needs work, and what remains to be implemented. For a detailed breakdown of items prioritized by dependency, necessity, and resource expenditure across our 5-phase roadmap, see the [Task Hierarchy & Phase Progression](TASK_HIERARCHY.md).
 
 ### ✅ Features Enabled and Functioning
 - **Cross-Platform Automated CI/CD:** Fully operational GitHub Actions pipelines (`release.yml` and `clear-cache.yml`), including matrix builds for Windows, macOS (Silicon & Intel), and Linux.
