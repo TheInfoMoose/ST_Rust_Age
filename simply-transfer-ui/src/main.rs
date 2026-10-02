@@ -409,7 +409,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut phase_txt = "Live Transfer Queue".to_string();
                 let mut active_phase = "Idle".to_string();
                 let mut status_txt = "Preparing...".to_string();
-                let mut metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: calculating...".to_string();
+                let mut metric_upload_txt = "0.0 MB/s".to_string();
                 let mut last_progress_bytes = 0;
                 let mut last_tick = tokio::time::Instant::now();
                 let transfer_start_time = tokio::time::Instant::now();
@@ -436,7 +436,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Data Transfer" => "Transmitting",
                                             "Integrity Validation (Finishing)" => {
                                                 local_t_q.clear();
-                                                metrics_txt = "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
+                                                metric_upload_txt = "0.0 MB/s".to_string();
                                                 "Checking Integrity"
                                             },
                                             _ => name.as_str(),
@@ -536,11 +536,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if elapsed >= 0.1 {
                                 if bytes_transferred_in_interval > 0 {
                                     let speed_mbps = (bytes_transferred_in_interval as f32 / elapsed) / 1_048_576.0;
-                                    let dyn_latency = if speed_mbps > 5.0 { "<1ms" } else { "2-4ms" };
-                                    metrics_txt = format!("Upload: {:.1} MB/s | Download: 0 MB/s | Latency: {}", speed_mbps, dyn_latency);
+                                    metric_upload_txt = format!("{:.1} MB/s", speed_mbps);
                                     bytes_transferred_in_interval = 0;
                                 } else if elapsed >= 1.0 {
-                                    metrics_txt = "Upload: 0.0 MB/s | Download: 0 MB/s | Latency: 0ms".to_string();
+                                    metric_upload_txt = "0.0 MB/s".to_string();
                                 }
                                 if bytes_transferred_in_interval > 0 || elapsed >= 1.0 {
                                     last_tick = now;
@@ -553,7 +552,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let clone_phase = phase_txt.clone();
                             let clone_status = status_txt.clone();
 
-                            let clone_metrics = metrics_txt.clone();
+                            let clone_mu = metric_upload_txt.clone();
                             let clone_active_phase = active_phase.clone();
                             let session_name_clone = session_name.clone();
                             let elapsed_secs = transfer_start_time.elapsed().as_secs();
@@ -583,7 +582,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                         ui.set_phase_text(clone_phase.into());
                                         ui.set_overall_status(clone_status.into());
-                                        ui.set_transfer_metrics_text(clone_metrics.clone().into());
+                                        ui.set_metric_upload(clone_mu.clone().into());
+                                        ui.set_metric_download("0.0 MB/s".into());
+                                        ui.set_metric_eta(clone_eta.clone().into());
                                         ui.set_current_phase(clone_active_phase.clone().into());
                                     }
                                     
@@ -595,9 +596,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             conns[idx].state_color = slint::Color::from_rgb_u8(50, 200, 50);
                                             conns[idx].duration = clone_duration.into();
                                             conns[idx].eta = clone_eta.into();
-                                            if let Some(rate) = clone_metrics.split(" | ").next() {
-                                                conns[idx].transfer_rate = rate.replace("Upload: ", "").into();
-                                            }
+                                            conns[idx].transfer_rate = clone_mu.clone().into();
                                             
                                             let model = ui.get_connections();
                                             if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<ConnectionItem>>() {

@@ -146,6 +146,40 @@ component RustCheckBox inherits Rectangle {
     }
 }
 
+export component TransferQueueRow inherits Rectangle {
+    in property <TransferQueueItem> file;
+    height: 25px;
+    HorizontalBox {
+        padding: 0; spacing: 10px;
+        Rectangle { width: 50%; Text { text: root.file.name; overflow: elide; } }
+        Rectangle { width: 20%; Text { text: root.file.size; horizontal-alignment: right; } }
+        Rectangle { width: 30%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
+    }
+}
+
+export component CompletedQueueRow inherits Rectangle {
+    in property <CompletedItem> file;
+    height: 25px;
+    HorizontalBox {
+        padding: 0; spacing: 10px;
+        Rectangle { width: 60%; Text { text: root.file.name; overflow: elide; } }
+        Rectangle { width: 40%; Text { text: root.file.status; color: root.file.status_color; horizontal-alignment: right; } }
+    }
+}
+
+export component MetricsGrid inherits Rectangle {
+    in property <string> upload_speed: "0 MB/s";
+    in property <string> download_speed: "0 MB/s";
+    in property <string> eta: "0s";
+
+    HorizontalBox {
+        padding: 0; spacing: 0;
+        Rectangle { width: 33%; Text { text: "Upload: " + root.upload_speed; horizontal-alignment: left; } }
+        Rectangle { width: 33%; Text { text: "Download: " + root.download_speed; horizontal-alignment: center; } }
+        Rectangle { width: 34%; Text { text: "ETA: " + root.eta; horizontal-alignment: right; } }
+    }
+}
+
 export component SessionPopout inherits Window {
     title: "Session Monitor";
     width: 600px;
@@ -240,7 +274,9 @@ export component MainWindow inherits Window {
     // Active Transfers States
     in property <[string]> active_sessions: [];
     in-out property <int> selected_session_idx: 0;
-    in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
+    in-out property <string> metric_upload: "0.0 MB/s";
+    in-out property <string> metric_download: "0.0 MB/s";
+    in-out property <string> metric_eta: "0s";
     in-out property <string> current_phase: "Idle";
     in-out property <bool> is_transfer_paused: false;
     property <int> tick: 0;
@@ -605,16 +641,18 @@ export component MainWindow inherits Window {
                                 Text { text: root.phase_text; font-weight: 700; }
                                 ListView {
                                     height: 150px;
-                                    for file in root.transfer_queue : HorizontalBox {
-                                        Text { text: file.name; }
-                                        Text { text: file.size; }
-                                        ProgressIndicator { progress: file.progress; }
+                                    for file in root.transfer_queue : TransferQueueRow {
+                                        file: file;
                                     }
                                 }
                                 HorizontalBox {
                                     padding: 0; spacing: 0;
-                                    Text { text: root.transfer_metrics_text; }
-                                    Rectangle { horizontal-stretch: 1; }
+                                    MetricsGrid {
+                                        upload_speed: root.metric_upload;
+                                        download_speed: root.metric_download;
+                                        eta: root.metric_eta;
+                                        horizontal-stretch: 1;
+                                    }
                                     Text { text: root.current_phase; }
                                     Text { text: root.ellipsis; width: 15px; horizontal-alignment: left; }
                                 }
@@ -626,9 +664,8 @@ export component MainWindow inherits Window {
                                 Text { text: "Integrity Validation"; font-weight: 700; }
                                 ListView {
                                     height: 150px;
-                                    for file in root.completed_queue : HorizontalBox {
-                                        Text { text: file.name; }
-                                        Text { text: file.status; color: file.status_color; }
+                                    for file in root.completed_queue : CompletedQueueRow {
+                                        file: file;
                                     }
                                 }
                                 Text { text: root.overall_status; }
