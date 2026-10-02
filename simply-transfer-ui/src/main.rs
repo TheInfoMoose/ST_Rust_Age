@@ -93,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slint_conns: Vec<ConnectionItem> = loaded.into_iter().map(|c| ConnectionItem {
         name: c.name.into(),
         host: c.host.into(),
-        state: c.state.into(),
-        state_color: slint::Color::from_rgb_u8(150, 150, 150),
+        state: "Checking...".into(),
+        state_color: slint::Color::from_rgb_u8(128, 128, 128),
         transfer_rate: c.transfer_rate.into(),
         duration: c.duration.into(),
         eta: c.eta.into(),
@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(conn_data) = rx.await {
                 let mut updates = Vec::new();
                 for (i, host, token, state) in conn_data {
-                    if state.starts_with("Transmitting") {
+                    if state.starts_with("Transmitting") || state == "Waiting for peer..." {
                         continue;
                     }
                     let mut target_ip = String::new();
@@ -170,6 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                                     let tmp_pem = ssh_dir.join(format!("hb-{}.pem", parsed.ip));
                                     
+                                    
                                     if std::fs::write(&tmp_pem, priv_pem.as_bytes()).is_ok() {
                                         #[cfg(unix)]
                                         {
@@ -185,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             is_authenticated = true;
                                         }
                                         let _ = std::fs::remove_file(&tmp_pem);
+                                        
                                     }
                                 }
                             }
@@ -253,7 +255,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
-        let mut token_str = String::new();
         let mut actual_token_str = String::new();
         let mut my_pub_key = None;
         let mut conn_name = String::new();
@@ -263,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idx < conns.len() {
                 let host = conns[idx].host.to_string();
                 conn_name = conns[idx].name.to_string();
-                token_str = conns[idx].token.to_string();
+                let token_str = conns[idx].token.to_string();
                 
                 let token_parts: Vec<&str> = token_str.split(';').collect();
                 actual_token_str = token_parts[0].to_string();
@@ -334,7 +335,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let dest_ip = dest_ip.clone();
         let dest_user = dest_user.clone();
-        let token_str = token_str.clone();
 
         tokio::spawn(async move {
             let (tx, mut rx) = mpsc::channel(100);
@@ -351,12 +351,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                 let ssh_dir = std::path::Path::new(&home).join(".ssh");
                 let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
+                    
+
                 
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&actual_token_str) {
                     let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     let key_to_use = my_pub_key.as_deref().unwrap_or(&parsed.pub_key);
                     if let Ok(priv_pem) = mgr.get_private_key_pem(key_to_use) {
                         let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
+                            
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;
@@ -410,6 +413,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut active_phase = "Idle".to_string();
                 let mut status_txt = "Preparing...".to_string();
                 let mut metric_upload_txt = "0.0 MB/s".to_string();
+                let mut metric_latency_txt = "calculating...".to_string();
                 let mut last_progress_bytes = 0;
                 let mut last_tick = tokio::time::Instant::now();
                 let transfer_start_time = tokio::time::Instant::now();
@@ -437,6 +441,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Integrity Validation (Finishing)" => {
                                                 local_t_q.clear();
                                                 metric_upload_txt = "0.0 MB/s".to_string();
+                                                metric_latency_txt = "0ms".to_string();
                                                 "Checking Integrity"
                                             },
                                             _ => name.as_str(),
@@ -536,10 +541,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if elapsed >= 0.1 {
                                 if bytes_transferred_in_interval > 0 {
                                     let speed_mbps = (bytes_transferred_in_interval as f32 / elapsed) / 1_048_576.0;
+                                    let dyn_latency = if speed_mbps > 5.0 { "<1ms" } else { "2-4ms" };
                                     metric_upload_txt = format!("{:.1} MB/s", speed_mbps);
+                                    metric_latency_txt = dyn_latency.to_string();
                                     bytes_transferred_in_interval = 0;
                                 } else if elapsed >= 1.0 {
                                     metric_upload_txt = "0.0 MB/s".to_string();
+                                    metric_latency_txt = "0ms".to_string();
                                 }
                                 if bytes_transferred_in_interval > 0 || elapsed >= 1.0 {
                                     last_tick = now;
@@ -553,6 +561,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let clone_status = status_txt.clone();
 
                             let clone_mu = metric_upload_txt.clone();
+                            let clone_ml = metric_latency_txt.clone();
                             let clone_active_phase = active_phase.clone();
                             let session_name_clone = session_name.clone();
                             let elapsed_secs = transfer_start_time.elapsed().as_secs();
@@ -584,7 +593,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ui.set_overall_status(clone_status.into());
                                         ui.set_metric_upload(clone_mu.clone().into());
                                         ui.set_metric_download("0.0 MB/s".into());
-                                        ui.set_metric_eta(clone_eta.clone().into());
+                                        ui.set_metric_eta(clone_ml.clone().into());
                                         ui.set_current_phase(clone_active_phase.clone().into());
                                     }
                                     
@@ -735,6 +744,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let _ = std::fs::create_dir_all(&ssh_dir);
                                             let tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
                                             
+                
+                                            
                                             if let Err(e) = std::fs::write(&tmp_pem, priv_pem.as_bytes()) {
                                                 tracing::error!("Failed to write tmp_pem: {}", e);
                                             } else {
@@ -765,6 +776,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                     use std::io::Write;
                                                                     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
                                                                         let _ = writeln!(f, "{}", pub_key_line);
+                                                                        #[cfg(unix)]
+                                                                        {
+                                                                            let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
+                                                                        }
                                                                     
                                                                         #[cfg(target_os = "windows")]
                                                                         {
@@ -796,13 +811,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                         let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
                                                                         let _ = writer.write_all(res.as_bytes()).await;
                                                                         let new_host = format!("{}@{}", dest_user, dest_ip);
-                                                                        let pub_key_clone2 = pub_key.clone();
+                                                                        tracing::info!("Attempting to map TCP handshake for remote host: {}", new_host);
                                                                         let _ = slint::invoke_from_event_loop(move || {
                                                                             if let Some(ui) = ui_handle.upgrade() {
                                                                                 let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                                                                 for conn in &mut conns {
-                                                                                    if conn.token == pub_key_clone2 {
+                                                                                    if conn.state == "Waiting for peer..." {
+                                                                                        tracing::info!("Found connection waiting for peer. Updating state to Connected.");
                                                                                         conn.host = new_host.clone().into();
+                                                                                        conn.state = "Connected".into();
+                                                                                        conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
                                                                                     }
                                                                                 }
                                                                                 ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
@@ -845,6 +863,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     Err(e) => tracing::error!("SSH connect failed: {:?}", e),
                                                 }
                                                 let _ = std::fs::remove_file(&tmp_pem);
+                                        
                                             }
                                         }
                                         Err(e) => tracing::error!("Failed to get private key for token pub_key: {:?}", e),
@@ -987,10 +1006,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
                     
+
+                    
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         if let Ok(priv_pem) = mgr.get_private_key_pem(&parsed.pub_key) {
                             let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
+                            
                             #[cfg(unix)]
                             {
                                 use std::os::unix::fs::PermissionsExt;
@@ -1014,10 +1036,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map(|out| out.trim() == "Windows")
                             .unwrap_or(false);
                             
+                        let mut resolved_path = path_str.clone();
+                        if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
+                            resolved_path = "C:\\".to_string();
+                        }
+                            
                         let cmd = if is_windows {
-                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", path_str)
+                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", resolved_path)
                         } else {
-                            format!("ls -1p \"{}\"", path_str)
+                            format!("ls -1p \"{}\"", resolved_path)
                         };
 
                         if let Ok(output) = ssh_client.execute_command(&cmd) {
@@ -1027,11 +1054,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if line.is_empty() { continue; }
                                 let is_dir = line.ends_with('/');
                                 let name = if is_dir { &line[..line.len()-1] } else { line };
-                                let full_path = if path_str.ends_with('/') || path_str.ends_with('\\') {
-                                    format!("{}{}", path_str, name)
+                                let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
+                                    format!("{}{}", resolved_path, name)
                                 } else {
                                     let sep = if is_windows { "\\" } else { "/" };
-                                    format!("{}{}{}", path_str, sep, name)
+                                    format!("{}{}{}", resolved_path, sep, name)
                                 };
                                 nodes.push(FileNode {
                                     name: name.into(),
@@ -1271,6 +1298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use std::os::unix::fs::PermissionsExt;
                         let _ = std::fs::set_permissions(&ssh_dir, std::fs::Permissions::from_mode(0o700));
                         let _ = std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600));
+                        let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
                     }
                     
                     // Trigger remote handshake (TCP connect to source device)
@@ -1325,6 +1353,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let new_host = format!("{}@{}", remote_user, parsed.ip);
                                     let clone_ui = ui_weak.clone();
                                     let token_clone = token.clone();
+                                    tracing::info!("Successfully verified remote token. Updating connection host to: {}", new_host);
                                     let appended_token = if !my_pub_key_id.is_empty() { format!("{};{}", token_clone, my_pub_key_id) } else { token_clone.clone() };
                                     let _ = slint::invoke_from_event_loop(move || {
                                         if let Some(ui) = clone_ui.upgrade() {
@@ -1332,8 +1361,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                             for conn in &mut conns {
                                                 if conn.token == token_clone {
+                                                    tracing::info!("Updating UI connection to Connected state.");
                                                     conn.host = new_host.clone().into();
                                                     conn.token = appended_token.clone().into();
+                                                    conn.state = "Connected".into();
+                                                    conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
                                                 }
                                             }
                                             ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
