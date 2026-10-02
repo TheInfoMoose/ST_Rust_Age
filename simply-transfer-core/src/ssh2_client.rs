@@ -61,40 +61,15 @@ impl SshClient for Ssh2Client {
         let public_key = private_key.public_key();
         let public_key_pem = public_key.to_openssh()
             .map_err(|e| SshError::AuthenticationFailed(format!("Failed to derive public key: {}", e)))?;
-
-        #[cfg(target_os = "windows")]
-        {
-            let temp_dir = std::env::temp_dir();
-            let session_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-            let temp_priv = temp_dir.join(format!("st_{}.pem", session_id));
-            let temp_pub = temp_dir.join(format!("st_{}.pub", session_id));
-
-            let _ = std::fs::write(&temp_priv, &priv_pem);
-            let _ = std::fs::write(&temp_pub, format!("{} simply-transfer", public_key_pem.trim()));
-
-            let res = sess.userauth_pubkey_file(
-                username,
-                Some(&temp_pub),
-                &temp_priv,
-                passphrase,
-            );
-
-            // Cleanup
-            let _ = std::fs::remove_file(&temp_priv);
-            let _ = std::fs::remove_file(&temp_pub);
-
-            res.map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            sess.userauth_pubkey_memory(
-                username,
-                Some(&format!("{} simply-transfer", public_key_pem.trim())),
-                &priv_pem,
-                passphrase,
-            ).map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
-        }
+            
+        // Authenticate purely via memory, bypassing libssh2 file path issues on Windows
+        // Now unified using OpenSSL backend via Cargo features
+        sess.userauth_pubkey_memory(
+            username,
+            Some(&format!("{} simply-transfer", public_key_pem.trim())),
+            &priv_pem,
+            passphrase,
+        ).map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
         Ok(())
     }

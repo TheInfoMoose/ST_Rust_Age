@@ -9,17 +9,11 @@ serde_json = "1.0.151"
 simply-transfer-crypto = { version = "0.1.0", path = "../simply-transfer-crypto" }
 simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }
 ssh-key = { version = "0.6.7", features = ["ed25519", "alloc"] }
-ssh2 = "0.9.6"
+ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 walkdir = "2.5.0"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-ssh2 = "0.9.6"
-
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
