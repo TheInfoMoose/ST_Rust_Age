@@ -29,7 +29,6 @@ impl SshClient for Ssh2Client {
 
         let mut session = Session::new().map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
         session.set_tcp_stream(tcp);
-        session.set_timeout(15000);
         session
             .handshake()
             .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
@@ -88,20 +87,16 @@ impl SshClient for Ssh2Client {
             && let Some(parent_str) = parent.to_str()
             && !parent_str.is_empty()
         {
-            let is_windows = self
-                .execute_command("cmd.exe /c echo Windows")
+            let is_windows = self.execute_command("cmd.exe /c echo Windows")
                 .map(|out| out.trim() == "Windows")
                 .unwrap_or(false);
 
             let mkdir_cmd = if is_windows {
-                format!(
-                    "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"",
-                    parent_str
-                )
+                format!("powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"", parent_str)
             } else {
-                format!("mkdir -p \"{}\"", parent_str.replace("\"", "\\\""))
+                format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"))
             };
-
+            
             let _ = self.execute_command(&mkdir_cmd);
         }
 
@@ -111,27 +106,11 @@ impl SshClient for Ssh2Client {
             .metadata()
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
-        if metadata.len() == 0 {
-            tracing::info!("File is empty, skipping SCP transfer.");
-            return Ok(());
-        }
+        let mut remote_file = session
+            .scp_send(Path::new(remote_path), 0o644, metadata.len(), None)
+            .map_err(|e| SshError::SftpError(e.to_string()))?;
 
-        tracing::info!("Setting session to blocking and 30s timeout.");
-        session.set_blocking(true);
-        session.set_timeout(30000); // 30 seconds
-
-        tracing::info!("Calling scp_send for {} with size: {} and mode: {:#o}", remote_path, metadata.len(), 0o644);
-        let mut remote_file = match session.scp_send(Path::new(remote_path), 0o644, metadata.len(), None) {
-                Ok(rf) => rf,
-                Err(e) => {
-                    tracing::error!("scp_send failed immediately with error: {}", e);
-                    return Err(SshError::SftpError(e.to_string()));
-                }
-            };
-        tracing::info!("scp_send channel opened successfully. Beginning chunk transfer...");
-
-        // Use smaller buffer chunks to prevent stalling on large transfers
-        let mut buffer = [0u8; 16384]; // Reduced from 65536 to 16KB
+        let mut buffer = [0u8; 65536];
         let mut total_written: u64 = 0;
         loop {
             let bytes_read = local_file
