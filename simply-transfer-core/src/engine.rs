@@ -189,8 +189,12 @@ impl TransferEngine {
                 let mut local_paths = Vec::new();
                 for f in &files {
                     let normalized_file = f.replace('\\', "/");
-                    let full_remote_path = format!("{}/{}", dest_dir.trim_end_matches(&['/', '\\'][..]), normalized_file);
-// properly escape single quotes for shell: replace ' with '\''
+                    let full_remote_path = format!(
+                        "{}/{}",
+                        dest_dir.trim_end_matches(&['/', '\\'][..]),
+                        normalized_file
+                    );
+                    // properly escape single quotes for shell: replace ' with '\''
                     let escaped_path = full_remote_path.replace("'", "'\\''");
                     remote_paths.push(format!("'{}'", escaped_path));
 
@@ -313,23 +317,11 @@ impl TransferEngine {
                 active_source_dir.join(file)
             };
             let normalized_file = file.replace('\\', "/");
-            let remote_path = if active_source_dir.is_file() {
-                if self.destination_dir.ends_with('/') {
-                    format!(
-                        "{}/{}",
-                        self.destination_dir.trim_end_matches('/'),
-                        normalized_file
-                    )
-                } else {
-                    self.destination_dir.clone()
-                }
-            } else {
-                format!(
-                    "{}/{}",
-                    self.destination_dir.trim_end_matches('/'),
-                    normalized_file
-                )
-            };
+            let remote_path = format!(
+                "{}/{}",
+                self.destination_dir.trim_end_matches(&['/', '\\'][..]),
+                normalized_file
+            );
             let size = local_registry.files[file].size;
 
             self.emit_file_status(
