@@ -51,25 +51,23 @@ impl SshClient for Ssh2Client {
 
         let priv_path = std::path::Path::new(private_key_path);
         let pub_path = priv_path.with_extension("pub");
-        
+
         // Dynamically ensure the public key file exists and matches the private key perfectly
         if let Ok(priv_pem) = std::fs::read_to_string(priv_path) {
             if let Ok(private_key) = ssh_key::PrivateKey::from_openssh(&priv_pem) {
                 let public_key = private_key.public_key();
                 if let Ok(public_key_pem) = public_key.to_openssh() {
                     // Write it in OpenSSH format: "ssh-ed25519 <base64> simply-transfer"
-                    let _ = std::fs::write(&pub_path, format!("{} simply-transfer", public_key_pem.trim()));
+                    let _ = std::fs::write(
+                        &pub_path,
+                        format!("{} simply-transfer", public_key_pem.trim()),
+                    );
                 }
             }
         }
 
-        sess.userauth_pubkey_file(
-            username,
-            Some(&pub_path),
-            priv_path,
-            passphrase,
-        )
-        .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
+        sess.userauth_pubkey_file(username, Some(&pub_path), priv_path, passphrase)
+            .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
         Ok(())
     }
@@ -130,14 +128,21 @@ impl SshClient for Ssh2Client {
             }
         }
 
-        tracing::info!("Calling scp_send for {} (formatted: {}) with size: {} and mode: {:#o}", remote_path, scp_remote_path, metadata.len(), 0o644);
-        let mut remote_file = match session.scp_send(Path::new(&scp_remote_path), 0o644, metadata.len(), None) {
-            Ok(rf) => rf,
-            Err(e) => {
-                tracing::error!("scp_send failed immediately with error: {}", e);
-                return Err(SshError::SftpError(e.to_string()));
-            }
-        };
+        tracing::info!(
+            "Calling scp_send for {} (formatted: {}) with size: {} and mode: {:#o}",
+            remote_path,
+            scp_remote_path,
+            metadata.len(),
+            0o644
+        );
+        let mut remote_file =
+            match session.scp_send(Path::new(&scp_remote_path), 0o644, metadata.len(), None) {
+                Ok(rf) => rf,
+                Err(e) => {
+                    tracing::error!("scp_send failed immediately with error: {}", e);
+                    return Err(SshError::SftpError(e.to_string()));
+                }
+            };
         tracing::info!("scp_send channel opened successfully. Beginning chunk transfer...");
 
         // Use smaller buffer chunks to prevent stalling on large transfers

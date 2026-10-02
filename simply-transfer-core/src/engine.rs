@@ -323,12 +323,20 @@ impl TransferEngine {
             let normalized_file = file.replace('\\', "/");
             let remote_path = if active_source_dir.is_file() {
                 if self.destination_dir.ends_with('/') {
-                    format!("{}/{}", self.destination_dir.trim_end_matches('/'), normalized_file)
+                    format!(
+                        "{}/{}",
+                        self.destination_dir.trim_end_matches('/'),
+                        normalized_file
+                    )
                 } else {
                     self.destination_dir.clone()
                 }
             } else {
-                format!("{}/{}", self.destination_dir.trim_end_matches('/'), normalized_file)
+                format!(
+                    "{}/{}",
+                    self.destination_dir.trim_end_matches('/'),
+                    normalized_file
+                )
             };
             let size = local_registry.files[file].size;
 
