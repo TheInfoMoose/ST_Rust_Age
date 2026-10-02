@@ -189,16 +189,8 @@ impl TransferEngine {
                 let mut local_paths = Vec::new();
                 for f in &files {
                     let normalized_file = f.replace('\\', "/");
-                    let full_remote_path = if active_source_dir_val.is_file() {
-                        if dest_dir.ends_with('/') {
-                            format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
-                        } else {
-                            dest_dir.clone()
-                        }
-                    } else {
-                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
-                    };
-                    // properly escape single quotes for shell: replace ' with '\''
+                    let full_remote_path = format!("{}/{}", dest_dir.trim_end_matches(&['/', '\\'][..]), normalized_file);
+// properly escape single quotes for shell: replace ' with '\''
                     let escaped_path = full_remote_path.replace("'", "'\\''");
                     remote_paths.push(format!("'{}'", escaped_path));
 
