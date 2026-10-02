@@ -123,9 +123,13 @@ impl SshClient for Ssh2Client {
             return Ok(());
         }
 
-        let mut remote_file = session
-            .scp_send(Path::new(&final_remote_path), 0o644, metadata.len(), None)
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
+        let sftp = session
+            .sftp()
+            .map_err(|e| SshError::SftpError(format!("Failed to initialize SFTP: {}", e)))?;
+
+        let mut remote_file = sftp
+            .create(Path::new(&final_remote_path))
+            .map_err(|e| SshError::SftpError(format!("Failed to open remote file via SFTP: {}", e)))?;
 
         let mut buffer = [0u8; 65536];
         let mut total_written: u64 = 0;
@@ -145,19 +149,8 @@ impl SshClient for Ssh2Client {
                 cb(total_written);
             }
         }
-
-        remote_file
-            .send_eof()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .wait_eof()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .close()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
-        remote_file
-            .wait_close()
-            .map_err(|e| SshError::SftpError(e.to_string()))?;
+        
+        // Remote file is closed automatically when it goes out of scope
 
         Ok(())
     }
