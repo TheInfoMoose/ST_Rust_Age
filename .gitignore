@@ -54,3 +54,4 @@ connections_linux.json
 connections_macos.json
 connections_windows.json
 .ssh/
+.agents/
