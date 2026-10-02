@@ -269,6 +269,7 @@ impl TransferEngine {
 
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
+        let mut files_to_validate = Vec::new();
         for file in &manifest.to_transfer {
             if let Some(ref rx) = self.control_rx {
                 let mut rx_clone = rx.clone();
@@ -336,7 +337,7 @@ impl TransferEngine {
                 Ok(_) => {
                     self.emit_file_status(file.clone(), FileTransferStatus::Completed)
                         .await;
-                    validation_tx.send(file.clone()).await.ok();
+                    files_to_validate.push(file.clone());
                 }
                 Err(e) => {
                     warn!("Failed to transfer file {}: {}", file, e);
@@ -347,11 +348,14 @@ impl TransferEngine {
             }
         }
 
-        drop(validation_tx);
-
         // Wait for Phase 3 to complete
         self.emit_phase(3, "Integrity Validation (Finishing)".to_string())
             .await;
+
+        for f in files_to_validate {
+            validation_tx.send(f).await.ok();
+        }
+        drop(validation_tx);
         if let Ok((val_success, val_failed)) = validation_handle.await {
             successful_count += val_success;
             failed_count += val_failed;
