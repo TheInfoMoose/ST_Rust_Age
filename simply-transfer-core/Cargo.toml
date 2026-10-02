@@ -9,7 +9,10 @@ serde_json = "1.0.151"
 simply-transfer-crypto = { version = "0.1.0", path = "../simply-transfer-crypto" }
 simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }
 ssh-key = { version = "0.6.7", features = ["ed25519", "alloc"] }
-ssh2 = { version = "0.9.6", features = ["vendored-openssl"] }
+async-trait = "0.1"
+russh = "0.45.0"
+russh-keys = "0.45.0"
+russh-sftp = "3.0.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"

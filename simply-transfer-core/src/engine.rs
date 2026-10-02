@@ -114,7 +114,7 @@ impl TransferEngine {
 
         // Pre-flight check: Destination disk space
         let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
-        self.check_disk_space(total_required_bytes)?;
+        self.check_disk_space(total_required_bytes).await?;
 
         // TODO: In a full implementation, send `local_registry` to the remote peer,
         // and receive a `TransferManifest` back. For now, we mock the manifest
@@ -175,7 +175,7 @@ impl TransferEngine {
                 }
 
                 let ssh_c = ssh_client_val.clone();
-                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows")
+                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows").await
                     .map(|out| out.trim() == "Windows")
                     .unwrap_or(false);
 
@@ -185,29 +185,27 @@ impl TransferEngine {
                     format!("sha256sum {}", remote_paths.join(" "))
                 };
 
-                let validation_result = tokio::task::spawn_blocking(
-                    move || -> Result<(Vec<String>, String), EngineError> {
-                        // Compute local hashes
-                        let mut local_hashes = Vec::new();
-                        for lp in local_paths {
-                            let local_hash = if let Ok(f) = std::fs::File::open(&lp) {
-                                simply_transfer_crypto::hash::compute_sha256_stream(f)
-                                    .unwrap_or_else(|_| "local_hash_failed".to_string())
-                            } else {
-                                "local_hash_failed".to_string()
-                            };
-                            local_hashes.push(local_hash);
-                        }
-
-                        let remote_output = ssh_c
-                            .execute_command(&cmd)
-                            .map_err(|e| EngineError::Network(e.to_string()))?;
-
-                        Ok((local_hashes, remote_output))
-                    },
-                )
+                let local_hashes = tokio::task::spawn_blocking(move || {
+                    let mut hashes = Vec::new();
+                    for lp in local_paths {
+                        let local_hash = if let Ok(f) = std::fs::File::open(&lp) {
+                            simply_transfer_crypto::hash::compute_sha256_stream(f)
+                                .unwrap_or_else(|_| "local_hash_failed".to_string())
+                        } else {
+                            "local_hash_failed".to_string()
+                        };
+                        hashes.push(local_hash);
+                    }
+                    hashes
+                })
                 .await
-                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+                .unwrap_or_else(|_| Vec::new());
+
+                let validation_result = ssh_c
+                    .execute_command(&cmd)
+                    .await
+                    .map_err(|e| EngineError::Network(e.to_string()))
+                    .map(|remote_output| (local_hashes, remote_output));
 
                 match validation_result {
                     Ok((local_hashes, output)) => {
@@ -302,24 +300,20 @@ impl TransferEngine {
             let rp = remote_path.clone();
             let sender = self.event_sender.clone();
             let file_clone = file.clone();
-            let transfer_result =
-                tokio::task::spawn_blocking(move || -> Result<(), EngineError> {
-                    let progress_cb = Box::new(move |progress: u64| {
-                        let _ = sender.blocking_send(TransferEvent::FileStatusChanged(
-                            file_clone.clone(),
-                            FileTransferStatus::Transferring {
-                                progress_bytes: progress,
-                                total_bytes: size,
-                            },
-                        ));
-                    });
+            let progress_cb = Box::new(move |progress: u64| {
+                let _ = sender.try_send(TransferEvent::FileStatusChanged(
+                    file_clone.clone(),
+                    FileTransferStatus::Transferring {
+                        progress_bytes: progress,
+                        total_bytes: size,
+                    },
+                ));
+            });
 
-                    ssh_client
-                        .upload_file(&lp, &rp, Some(progress_cb))
-                        .map_err(|e| EngineError::Network(e.to_string()))
-                })
+            let transfer_result = ssh_client
+                .upload_file(&lp, &rp, Some(progress_cb))
                 .await
-                .unwrap_or_else(|e| Err(EngineError::Io(std::io::Error::other(e.to_string()))));
+                .map_err(|e| EngineError::Network(e.to_string()));
 
             match transfer_result {
                 Ok(_) => {
@@ -418,8 +412,8 @@ impl TransferEngine {
         Ok(registry)
     }
 
-    fn check_disk_space(&self, required_bytes: u64) -> Result<(), EngineError> {
-        let is_windows = self.ssh_client.execute_command("cmd.exe /c echo Windows")
+    async fn check_disk_space(&self, required_bytes: u64) -> Result<(), EngineError> {
+        let is_windows = self.ssh_client.execute_command("cmd.exe /c echo Windows").await
             .map(|o| o.trim() == "Windows")
             .unwrap_or(false);
         
@@ -429,7 +423,7 @@ impl TransferEngine {
                 self.destination_dir.replace('\\', "\\\\")
             );
             
-            self.ssh_client.execute_command(&format!("powershell.exe -NoProfile -Command \"{}\"", powershell_cmd))
+            self.ssh_client.execute_command(&format!("powershell.exe -NoProfile -Command \"{}\"", powershell_cmd)).await
                 .map(|output| {
                     output.trim().parse::<u64>().unwrap_or(0)
                 })
@@ -437,7 +431,7 @@ impl TransferEngine {
         } else {
             let df_cmd = format!("df -B1 '{}'", self.destination_dir.replace("'", "'\\''"));
             
-            self.ssh_client.execute_command(&df_cmd)
+            self.ssh_client.execute_command(&df_cmd).await
                 .map(|output| {
                     output.lines()
                         .nth(1)

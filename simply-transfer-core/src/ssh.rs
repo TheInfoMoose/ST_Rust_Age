@@ -12,16 +12,21 @@ pub enum SshError {
     SftpError(String),
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
+    #[error("File transfer failed: {0}")]
+    FileTransferFailed(String),
+    #[error("Command execution failed: {0}")]
+    CommandExecutionFailed(String),
 }
 
 /// Abstraction for an SSH/SFTP client to allow swapping out implementations
 /// and ease of testing.
+#[async_trait::async_trait]
 pub trait SshClient: Send + Sync {
     /// Connect to the remote host.
-    fn connect(&mut self, host: &str, port: u16) -> Result<(), SshError>;
+    async fn connect(&mut self, host: &str, port: u16) -> Result<(), SshError>;
 
     /// Authenticate using an Ed25519/RSA private key string.
-    fn authenticate_publickey(
+    async fn authenticate_publickey(
         &mut self,
         username: &str,
         private_key_pem: &str,
@@ -29,7 +34,7 @@ pub trait SshClient: Send + Sync {
     ) -> Result<(), SshError>;
 
     /// Open an SFTP session to upload a file, optionally reporting progress in bytes.
-    fn upload_file(
+    async fn upload_file(
         &self,
         local_path: &Path,
         remote_path: &str,
@@ -37,7 +42,7 @@ pub trait SshClient: Send + Sync {
     ) -> Result<(), SshError>;
 
     /// Execute a remote command and return stdout.
-    fn execute_command(&self, command: &str) -> Result<String, SshError>;
+    async fn execute_command(&self, command: &str) -> Result<String, SshError>;
 }
 
 /// A mocked SSH client for use when testing the phased engine without a live server.
@@ -63,13 +68,14 @@ impl MockSshClient {
     }
 }
 
+#[async_trait::async_trait]
 impl SshClient for MockSshClient {
-    fn connect(&mut self, _host: &str, _port: u16) -> Result<(), SshError> {
+    async fn connect(&mut self, _host: &str, _port: u16) -> Result<(), SshError> {
         self.is_connected = true;
         Ok(())
     }
 
-    fn authenticate_publickey(
+    async fn authenticate_publickey(
         &mut self,
         _username: &str,
         _private_key_pem: &str,
@@ -83,7 +89,7 @@ impl SshClient for MockSshClient {
         }
     }
 
-    fn upload_file(
+    async fn upload_file(
         &self,
         local_path: &Path,
         remote_path: &str,
@@ -102,10 +108,14 @@ impl SshClient for MockSshClient {
         Ok(())
     }
 
-    fn execute_command(&self, command: &str) -> Result<String, SshError> {
+    async fn execute_command(&self, command: &str) -> Result<String, SshError> {
         // Mock responding to a sha256sum validation
-        if command.contains("sha256sum") {
+        if command.contains("sha256sum") || command.contains("Get-FileHash") {
             Ok("mock_hash  filename".to_string())
+        } else if command.contains("df -B1") {
+            Ok("Filesystem     1B-blocks      Used Available Use% Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
+        } else if command.contains("Get-WmiObject") || command.contains("powershell.exe -NoProfile -Command") {
+            Ok("999999999999".to_string())
         } else {
             Ok("".to_string())
         }

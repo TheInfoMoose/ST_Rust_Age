@@ -178,10 +178,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
                                         }
                                         
-                                        let mut ssh = simply_transfer_core::ssh2_client::Ssh2Client::new();
+                                        let mut ssh = simply_transfer_core::russh_client::RusshClient::new();
                                         use simply_transfer_core::ssh::SshClient;
-                                        if ssh.connect(&target_ip, 22).is_ok()
-                                            && ssh.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap(), None).is_ok()
+                                        if ssh.connect(&target_ip, 22).await.is_ok()
+                                            && ssh.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await.is_ok()
                                         {
                                             is_authenticated = true;
                                         }
@@ -344,8 +344,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 *guard = Some(control_tx);
             }
 
-            let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
-            let mut val_ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
+            let mut ssh_client = simply_transfer_core::russh_client::RusshClient::new();
+            let mut val_ssh_client = simply_transfer_core::russh_client::RusshClient::new();
             if !dest_ip.is_empty() {
                 use simply_transfer_core::ssh::SshClient;
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -372,15 +372,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                 }
                 
-                if let Err(e) = ssh_client.connect(&dest_ip, 22) {
+                if let Err(e) = ssh_client.connect(&dest_ip, 22).await {
                     tracing::error!("Failed to connect SSH client in start_transfer: {}", e);
-                } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
+                } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                     tracing::error!("Failed to authenticate SSH client in start_transfer: {}", e);
                 }
 
-                if let Err(e) = val_ssh_client.connect(&dest_ip, 22) {
+                if let Err(e) = val_ssh_client.connect(&dest_ip, 22).await {
                     tracing::error!("Failed to connect Validation SSH client: {}", e);
-                } else if let Err(e) = val_ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
+                } else if let Err(e) = val_ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                     tracing::error!("Failed to authenticate Validation SSH client: {}", e);
                 }
             }
@@ -755,16 +755,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
                                                 }
                                                 use simply_transfer_core::ssh::SshClient;
-                                                let mut ssh_client = simply_transfer_core::ssh2_client::Ssh2Client::new();
-                                                match ssh_client.connect(&dest_ip, 22) {
+                                                let mut ssh_client = simply_transfer_core::russh_client::RusshClient::new();
+                                                match ssh_client.connect(&dest_ip, 22).await {
                                                     Ok(_) => {
                                                         tracing::info!("SSH connected to {}", dest_ip);
-                                                        match ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap(), None) {
+                                                        match ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                                                             Ok(_) => {
                                                                 tracing::info!("SSH authenticated with {}", dest_ip);
                                                                 
                                                                 let fetch_dest_pub = if dest_pub.is_empty() {
-                                                                    ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub").unwrap_or_default()
+                                                                    ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub").await.unwrap_or_default()
                                                                 } else {
                                                                     dest_pub
                                                                 };
@@ -999,9 +999,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 if !dest_ip.is_empty() {
                     use simply_transfer_core::ssh::SshClient;
-                    use simply_transfer_core::ssh2_client::Ssh2Client;
+                    use simply_transfer_core::russh_client::RusshClient;
                     
-                    let mut ssh_client = Ssh2Client::new();
+                    let mut ssh_client = RusshClient::new();
                     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
@@ -1027,12 +1027,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                     }
                     
-                    if let Err(e) = ssh_client.connect(&dest_ip, 22) {
+                    if let Err(e) = ssh_client.connect(&dest_ip, 22).await {
                         tracing::error!("on_fetch_directory: SSH connect to {} failed: {}", dest_ip, e);
-                    } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, tmp_pem.to_str().unwrap_or(""), None) {
+                    } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                         tracing::error!("on_fetch_directory: SSH auth for {}@{} with key {:?} failed: {}", dest_user, dest_ip, tmp_pem, e);
                     } else {
                         let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
+                            .await
                             .map(|out| out.trim() == "Windows")
                             .unwrap_or(false);
                             
@@ -1047,7 +1048,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             format!("ls -1p \"{}\"", resolved_path)
                         };
 
-                        if let Ok(output) = ssh_client.execute_command(&cmd) {
+                        if let Ok(output) = ssh_client.execute_command(&cmd).await {
                             success = true;
                             for line in output.lines() {
                                 let line = line.trim();
