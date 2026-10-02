@@ -112,6 +112,10 @@ impl TransferEngine {
             .await;
         let local_registry = self.build_local_registry(&active_source_dir).await?;
 
+        // Pre-flight check: Destination disk space
+        let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
+        self.check_disk_space(total_required_bytes)?;
+
         // TODO: In a full implementation, send `local_registry` to the remote peer,
         // and receive a `TransferManifest` back. For now, we mock the manifest
         // assuming all files need to be transferred.
@@ -412,6 +416,48 @@ impl TransferEngine {
         }
 
         Ok(registry)
+    }
+
+    fn check_disk_space(&self, required_bytes: u64) -> Result<(), EngineError> {
+        let is_windows = self.ssh_client.execute_command("cmd.exe /c echo Windows")
+            .map(|o| o.trim() == "Windows")
+            .unwrap_or(false);
+        
+        let free_space: u64 = if is_windows {
+            let powershell_cmd = format!(
+                r#"Get-PSDrive -Name (Split-Path '{}' -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
+                self.destination_dir.replace('\\', "\\\\")
+            );
+            
+            self.ssh_client.execute_command(&format!("powershell.exe -NoProfile -Command \"{}\"", powershell_cmd))
+                .map(|output| {
+                    output.trim().parse::<u64>().unwrap_or(0)
+                })
+                .map_err(|e| EngineError::Network(format!("Failed to get Windows disk space: {}", e)))?
+        } else {
+            let df_cmd = format!("df -B1 '{}'", self.destination_dir.replace("'", "'\\''"));
+            
+            self.ssh_client.execute_command(&df_cmd)
+                .map(|output| {
+                    output.lines()
+                        .nth(1)
+                        .and_then(|line| {
+                            line.split_whitespace().nth(3).and_then(|s| s.parse::<u64>().ok())
+                        })
+                        .unwrap_or(0)
+                })
+                .map_err(|e| EngineError::Network(format!("Failed to get Linux disk space: {}", e)))?
+        };
+        
+        if free_space < required_bytes {
+            return Err(EngineError::ValidationFailed(format!(
+                "Insufficient disk space. Required: {} bytes, Available: {} bytes",
+                required_bytes,
+                free_space
+            )));
+        }
+        
+        Ok(())
     }
 
     async fn emit_phase(&self, phase: u8, name: String) {
