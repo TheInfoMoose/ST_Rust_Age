@@ -109,37 +109,12 @@ impl TransferEngine {
 
         let local_registry = self.build_local_registry(&active_source_dir).await?;
 
-        self.emit_phase(1, "Pre-flight Checks & Heartbeat".to_string())
+        self.emit_phase(1, "Pre-flight Checks".to_string())
             .await;
         let total_size: u64 = local_registry.files.values().map(|f| f.size).sum();
         self.perform_preflight_checks(total_size).await?;
 
-        let heartbeat_ssh = self.validation_ssh_client.clone();
-        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<()>(1);
-        let _heartbeat_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let ssh = heartbeat_ssh.clone();
-                        let res = tokio::task::spawn_blocking(move || {
-                            ssh.execute_command("echo heartbeat")
-                        }).await;
-
-                        match res {
-                            Ok(Ok(out)) if out.trim() == "heartbeat" => {},
-                            _ => {
-                                tracing::error!("Cryptographic heartbeat failed or socket hijacked!");
-                                break;
-                            }
-                        }
-                    }
-                    _ = heartbeat_rx.recv() => {
-                        break;
-                    }
-                }
-            }
-        });
+        let (heartbeat_tx, _heartbeat_rx) = mpsc::channel::<()>(1);
 
         // Phase 1: Destination Validation
         self.emit_phase(1, "Destination Validation".to_string())
