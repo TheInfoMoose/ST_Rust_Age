@@ -82,6 +82,7 @@ impl SshClient for Ssh2Client {
             .as_ref()
             .ok_or_else(|| SshError::ConnectionFailed("Not connected".to_string()))?;
 
+        let mut final_remote_path = remote_path.to_string();
         // Create remote parent directory
         if let Some(parent) = Path::new(remote_path).parent()
             && let Some(parent_str) = parent.to_str()
@@ -91,8 +92,12 @@ impl SshClient for Ssh2Client {
                 .map(|out| out.trim() == "Windows")
                 .unwrap_or(false);
 
+            if is_windows {
+                final_remote_path = final_remote_path.replace("/", "\\");
+            }
+
             let mkdir_cmd = if is_windows {
-                format!("powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"", parent_str)
+                format!("powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '{}'\"", parent_str.replace("/", "\\"))
             } else {
                 format!("mkdir -p '{}'", parent_str.replace("'", "'\\''"))
             };
@@ -106,8 +111,20 @@ impl SshClient for Ssh2Client {
             .metadata()
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
+        // 0-byte files cause libssh2 scp_send to fail or hang on some OpenSSH versions.
+        if metadata.len() == 0 {
+            // Touch the file on the remote side instead of scp_send
+            let touch_cmd = if final_remote_path.contains('\\') {
+                format!("powershell -NoProfile -Command \"New-Item -ItemType File -Force -Path '{}'\"", final_remote_path)
+            } else {
+                format!("touch '{}'", final_remote_path.replace("'", "'\\''"))
+            };
+            let _ = self.execute_command(&touch_cmd);
+            return Ok(());
+        }
+
         let mut remote_file = session
-            .scp_send(Path::new(remote_path), 0o644, metadata.len(), None)
+            .scp_send(Path::new(&final_remote_path), 0o644, metadata.len(), None)
             .map_err(|e| SshError::SftpError(e.to_string()))?;
 
         let mut buffer = [0u8; 65536];
