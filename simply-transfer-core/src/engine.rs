@@ -107,18 +107,10 @@ impl TransferEngine {
             self.source_dir.clone()
         };
 
-        let local_registry = self.build_local_registry(&active_source_dir).await?;
-
-        self.emit_phase(1, "Pre-flight Checks".to_string())
-            .await;
-        let total_size: u64 = local_registry.files.values().map(|f| f.size).sum();
-        self.perform_preflight_checks(total_size).await?;
-
-        let (heartbeat_tx, _heartbeat_rx) = mpsc::channel::<()>(1);
-
         // Phase 1: Destination Validation
         self.emit_phase(1, "Destination Validation".to_string())
             .await;
+        let local_registry = self.build_local_registry(&active_source_dir).await?;
 
         // TODO: In a full implementation, send `local_registry` to the remote peer,
         // and receive a `TransferManifest` back. For now, we mock the manifest
@@ -164,15 +156,12 @@ impl TransferEngine {
                 let mut local_paths = Vec::new();
                 for f in &files {
                     let normalized_file = f.replace('\\', "/");
-                    let full_remote_path = format!(
-                        "{}/{}",
-                        dest_dir.trim_end_matches(&['/', '\\'][..]),
-                        normalized_file
-                    );
+                    let full_remote_path =
+                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
                     // properly escape single quotes for shell: replace ' with '\''
                     let escaped_path = full_remote_path.replace("'", "'\\''");
                     remote_paths.push(format!("'{}'", escaped_path));
-
+                    
                     let lp = if active_source_dir_val.is_file() {
                         active_source_dir_val.clone()
                     } else {
@@ -182,16 +171,12 @@ impl TransferEngine {
                 }
 
                 let ssh_c = ssh_client_val.clone();
-                let is_windows_dest = ssh_c
-                    .execute_command("cmd.exe /c echo Windows")
+                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows")
                     .map(|out| out.trim() == "Windows")
                     .unwrap_or(false);
 
                 let cmd = if is_windows_dest {
-                    format!(
-                        "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"",
-                        remote_paths.join(",")
-                    )
+                    format!("powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"", remote_paths.join(","))
                 } else {
                     format!("sha256sum {}", remote_paths.join(" "))
                 };
@@ -269,7 +254,6 @@ impl TransferEngine {
 
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
-        let mut files_to_validate = Vec::new();
         for file in &manifest.to_transfer {
             if let Some(ref rx) = self.control_rx {
                 let mut rx_clone = rx.clone();
@@ -295,7 +279,7 @@ impl TransferEngine {
             let normalized_file = file.replace('\\', "/");
             let remote_path = format!(
                 "{}/{}",
-                self.destination_dir.trim_end_matches(&['/', '\\'][..]),
+                self.destination_dir.trim_end_matches('/'),
                 normalized_file
             );
             let size = local_registry.files[file].size;
@@ -337,7 +321,7 @@ impl TransferEngine {
                 Ok(_) => {
                     self.emit_file_status(file.clone(), FileTransferStatus::Completed)
                         .await;
-                    files_to_validate.push(file.clone());
+                    validation_tx.send(file.clone()).await.ok();
                 }
                 Err(e) => {
                     warn!("Failed to transfer file {}: {}", file, e);
@@ -348,14 +332,11 @@ impl TransferEngine {
             }
         }
 
+        drop(validation_tx);
+
         // Wait for Phase 3 to complete
         self.emit_phase(3, "Integrity Validation (Finishing)".to_string())
             .await;
-
-        for f in files_to_validate {
-            validation_tx.send(f).await.ok();
-        }
-        drop(validation_tx);
         if let Ok((val_success, val_failed)) = validation_handle.await {
             successful_count += val_success;
             failed_count += val_failed;
@@ -375,64 +356,6 @@ impl TransferEngine {
             })
             .await
             .ok();
-
-        // Stop heartbeat
-        let _ = heartbeat_tx.send(()).await;
-        Ok(())
-    }
-
-    async fn perform_preflight_checks(&self, total_size: u64) -> Result<(), EngineError> {
-        let ssh_c = self.ssh_client.clone();
-        let is_windows = tokio::task::spawn_blocking({
-            let ssh_c = ssh_c.clone();
-            move || {
-                ssh_c
-                    .execute_command("cmd.exe /c echo Windows")
-                    .map(|out| out.trim() == "Windows")
-                    .unwrap_or(false)
-            }
-        })
-        .await
-        .unwrap_or(false);
-
-        let dest_dir = self.destination_dir.clone();
-        let check_cmd = if is_windows {
-            format!(
-                "powershell -NoProfile -Command \"$path = '{}'; while (-not (Test-Path $path) -and $path) {{ $path = Split-Path $path -Parent }}; if ($path) {{ (Get-Item $path).PSDrive.Free }} else {{ 0 }}\"",
-                dest_dir
-            )
-        } else {
-            format!(
-                "DIR='{}'; while [ ! -d \"$DIR\" ] && [ \"$DIR\" != \"/\" ]; do DIR=$(dirname \"$DIR\"); done; df -k \"$DIR\" | awk 'NR==2 {{print $4}}'",
-                dest_dir.replace("'", "'\\''")
-            )
-        };
-
-        let ssh_c2 = self.ssh_client.clone();
-        let output = tokio::task::spawn_blocking(move || ssh_c2.execute_command(&check_cmd))
-            .await
-            .map_err(|e| EngineError::Network(e.to_string()))?
-            .map_err(|e| EngineError::Network(e.to_string()))?;
-
-        let free_space_bytes: u64 = if is_windows {
-            output.trim().parse().unwrap_or(0)
-        } else {
-            let kb: u64 = output.trim().parse().unwrap_or(0);
-            kb * 1024
-        };
-
-        if free_space_bytes < total_size {
-            tracing::warn!(
-                "Insufficient disk space: free {} bytes, required {} bytes",
-                free_space_bytes,
-                total_size
-            );
-            return Err(EngineError::PhaseError(format!(
-                "Insufficient disk space. Required: {} bytes, Available: {} bytes",
-                total_size, free_space_bytes
-            )));
-        }
-
         Ok(())
     }
 
