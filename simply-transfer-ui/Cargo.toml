@@ -20,6 +20,7 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 strict-num = "0.1"
+russh-keys = "0.45.0"
 
 [build-dependencies]
 slint-build = "1.18.1"

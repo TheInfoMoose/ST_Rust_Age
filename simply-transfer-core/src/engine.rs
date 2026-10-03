@@ -342,96 +342,96 @@ impl TransferEngine {
             }
         }
 
-        for file in &manifest.to_transfer {
-            if let Some(ref rx) = self.control_rx {
-                let mut rx_clone = rx.clone();
-                let mut current_signal = rx_clone.borrow().clone();
-                while current_signal == ControlSignal::Pause {
-                    tracing::info!("Transfer paused. Waiting for resume or cancel...");
-                    if rx_clone.changed().await.is_err() {
-                        return Err(EngineError::PhaseError("Control channel closed".into()));
+        use futures::stream::{StreamExt, TryStreamExt};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let failed_count_atomic = Arc::new(AtomicUsize::new(0));
+
+        let stream_result = futures::stream::iter(manifest.to_transfer.iter())
+            .map(|f| Ok::<_, EngineError>((f.clone(), local_registry.files[f].size)))
+            .try_for_each_concurrent(50, |(file, size)| {
+                let rx_clone = self.control_rx.clone();
+                let ssh_client = self.ssh_client.clone();
+                let active_source_dir = active_source_dir.clone();
+                let dest_dir = self.destination_dir.clone();
+                let event_sender = self.event_sender.clone();
+                let validation_tx = validation_tx.clone();
+                let failed_count_atomic = failed_count_atomic.clone();
+                let is_windows_dest = is_windows_dest;
+
+                async move {
+                    if let Some(ref rx) = rx_clone {
+                        let mut rx_watcher = rx.clone();
+                        let mut current_signal = rx_watcher.borrow().clone();
+                        while current_signal == ControlSignal::Pause {
+                            tracing::info!("Transfer paused. Waiting for resume or cancel...");
+                            if rx_watcher.changed().await.is_err() {
+                                return Err(EngineError::PhaseError("Control channel closed".into()));
+                            }
+                            current_signal = rx_watcher.borrow().clone();
+                        }
+                        if current_signal == ControlSignal::Cancel {
+                            tracing::info!("Transfer cancelled.");
+                            return Err(EngineError::PhaseError("Transfer cancelled by user".into()));
+                        }
                     }
-                    current_signal = rx_clone.borrow().clone();
+
+                    let local_path = if active_source_dir.is_file() {
+                        active_source_dir.clone()
+                    } else {
+                        active_source_dir.join(&file)
+                    };
+
+                    let normalized_file = if is_windows_dest {
+                        file.replace('/', "\\")
+                    } else {
+                        file.replace('\\', "/")
+                    };
+
+                    let remote_path = if is_windows_dest {
+                        format!("{}\\{}", dest_dir.trim_end_matches('\\').trim_end_matches('/'), normalized_file)
+                    } else {
+                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
+                    };
+
+                    let _ = event_sender
+                        .send(TransferEvent::FileStatusChanged(
+                            file.clone(),
+                            FileTransferStatus::Transferring { progress_bytes: 0, total_bytes: size },
+                        ))
+                        .await;
+
+                    let file_progress = file.clone();
+                    let sender = event_sender.clone();
+                    let progress_cb = Box::new(move |progress: u64| {
+                        let _ = sender.try_send(TransferEvent::FileStatusChanged(
+                            file_progress.clone(),
+                            FileTransferStatus::Transferring { progress_bytes: progress, total_bytes: size },
+                        ));
+                    });
+
+                    match ssh_client.upload_file(&local_path, &remote_path, Some(progress_cb)).await {
+                        Ok(_) => {
+                            let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Completed)).await;
+                            let _ = validation_tx.send(file.clone()).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to transfer file {}: {}", file, e);
+                            let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Failed(e.to_string()))).await;
+                            failed_count_atomic.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+
+                    Ok::<(), EngineError>(())
                 }
-                if current_signal == ControlSignal::Cancel {
-                    tracing::info!("Transfer cancelled.");
-                    return Err(EngineError::PhaseError("Transfer cancelled by user".into()));
-                }
-            }
-
-            let local_path = if active_source_dir.is_file() {
-                active_source_dir.clone()
-            } else {
-                active_source_dir.join(file)
-            };
-
-            let normalized_file = if is_windows_dest {
-                file.replace('/', "\\")
-            } else {
-                file.replace('\\', "/")
-            };
-
-            let remote_path = if is_windows_dest {
-                format!(
-                    "{}\\{}",
-                    self.destination_dir
-                        .trim_end_matches('\\')
-                        .trim_end_matches('/'),
-                    normalized_file
-                )
-            } else {
-                format!(
-                    "{}/{}",
-                    self.destination_dir.trim_end_matches('/'),
-                    normalized_file
-                )
-            };
-
-            let size = local_registry.files[file].size;
-
-            self.emit_file_status(
-                file.clone(),
-                FileTransferStatus::Transferring {
-                    progress_bytes: 0,
-                    total_bytes: size,
-                },
-            )
+            })
             .await;
 
-            let ssh_client = self.ssh_client.clone();
-            let lp = local_path.clone();
-            let rp = remote_path.clone();
-            let sender = self.event_sender.clone();
-            let file_clone = file.clone();
-            let progress_cb = Box::new(move |progress: u64| {
-                let _ = sender.try_send(TransferEvent::FileStatusChanged(
-                    file_clone.clone(),
-                    FileTransferStatus::Transferring {
-                        progress_bytes: progress,
-                        total_bytes: size,
-                    },
-                ));
-            });
-
-            let transfer_result = ssh_client
-                .upload_file(&lp, &rp, Some(progress_cb))
-                .await
-                .map_err(|e| EngineError::Network(e.to_string()));
-
-            match transfer_result {
-                Ok(_) => {
-                    self.emit_file_status(file.clone(), FileTransferStatus::Completed)
-                        .await;
-                    validation_tx.send(file.clone()).await.ok();
-                }
-                Err(e) => {
-                    warn!("Failed to transfer file {}: {}", file, e);
-                    self.emit_file_status(file.clone(), FileTransferStatus::Failed(e.to_string()))
-                        .await;
-                    failed_count += 1;
-                }
-            }
+        if let Err(e) = stream_result {
+            return Err(e);
         }
+        
+        failed_count += failed_count_atomic.load(Ordering::Relaxed);
 
         drop(validation_tx);
 

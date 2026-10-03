@@ -82,10 +82,31 @@ fn open_log(filename: &str) {
     let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
 }
 
-#[tokio::main]
+use std::sync::OnceLock;
+static P2P_SERVER: OnceLock<simply_transfer_core::russh_server::TransferServer> = OnceLock::new();
+
 #[rustfmt::skip]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+
+    // Create a dedicated Tokio runtime, separating it from the Slint event loop
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+        
+    // Enter the runtime context so `tokio::spawn` works in Slint callbacks
+    let _guard = rt.enter();
+
+    let host_key = russh_keys::key::KeyPair::generate_ed25519().unwrap();
+    let p2p_server = simply_transfer_core::russh_server::TransferServer::new();
+    P2P_SERVER.set(p2p_server.clone()).ok();
+    
+    rt.spawn(async move {
+        if let Err(e) = simply_transfer_core::russh_server::run_server(2222, p2p_server, host_key).await {
+            tracing::error!("P2P Daemon globally crashed: {}", e);
+        }
+    });
 
     let ui = MainWindow::new()?;
 
@@ -157,8 +178,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(u) = parsed.user {
                                 dest_user = u;
                             } else {
-                                dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
+                                dest_user = "simply-transfer".to_string();
                             }
+                        } else {
+                            dest_user = "simply-transfer".to_string();
                         }
 
                         if is_tcp_open && !dest_user.is_empty() {
@@ -180,7 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         
                                         let mut ssh = simply_transfer_core::russh_client::RusshClient::new();
                                         use simply_transfer_core::ssh::SshClient;
-                                        if ssh.connect(&target_ip, 22).await.is_ok()
+                                        if ssh.connect(&target_ip, 2222).await.is_ok()
                                             && ssh.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await.is_ok()
                                         {
                                             is_authenticated = true;
@@ -279,10 +302,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if host == "Remote" {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&actual_token_str) {
                         dest_ip = parsed.ip;
-                        dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
+                        dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     }
                 } else {
                     dest_ip = host.clone();
+                    dest_user = "simply-transfer".to_string();
                 }
             }
         }
@@ -373,13 +397,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                 }
                 
-                if let Err(e) = ssh_client.connect(&dest_ip, 22).await {
+                if let Err(e) = ssh_client.connect(&dest_ip, 2222).await {
                     tracing::error!("Failed to connect SSH client in start_transfer: {}", e);
                 } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                     tracing::error!("Failed to authenticate SSH client in start_transfer: {}", e);
                 }
 
-                if let Err(e) = val_ssh_client.connect(&dest_ip, 22).await {
+                if let Err(e) = val_ssh_client.connect(&dest_ip, 2222).await {
                     tracing::error!("Failed to connect Validation SSH client: {}", e);
                 } else if let Err(e) = val_ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                     tracing::error!("Failed to authenticate Validation SSH client: {}", e);
@@ -750,141 +774,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let dest_pub = req.get("pub_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                     tracing::info!("Received verify request from {}@{}", dest_user, dest_ip);
                                     
-                                    let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                                    let mut actual_pub_key = pub_key.clone();
-                                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&pub_key) {
-                                        actual_pub_key = parsed.pub_key;
-                                    }
-                                    match mgr.get_private_key_pem(&actual_pub_key) {
-                                        Ok(priv_pem) => {
-                                            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-                                            let ssh_dir = std::path::Path::new(&home).join(".ssh");
-                                            let _ = std::fs::create_dir_all(&ssh_dir);
-                                            let tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
-                                            
-                
-                                            
-                                            if let Err(e) = std::fs::write(&tmp_pem, priv_pem.as_bytes()) {
-                                                tracing::error!("Failed to write tmp_pem: {}", e);
-                                            } else {
-                                                #[cfg(unix)]
-                                                {
-                                                    use std::os::unix::fs::PermissionsExt;
-                                                    let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
-                                                }
-                                                use simply_transfer_core::ssh::SshClient;
-                                                let mut ssh_client = simply_transfer_core::russh_client::RusshClient::new();
-                                                match ssh_client.connect(&dest_ip, 22).await {
-                                                    Ok(_) => {
-                                                        tracing::info!("SSH connected to {}", dest_ip);
-                                                        match ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
-                                                            Ok(_) => {
-                                                                tracing::info!("SSH authenticated with {}", dest_ip);
-                                                                
-                                                                let fetch_dest_pub = if dest_pub.is_empty() {
-                                                                    ssh_client.execute_command("cat ~/.ssh/simply-transfer.pub").await.unwrap_or_default()
-                                                                } else {
-                                                                    dest_pub
-                                                                };
-                                                                
-                                                                if !fetch_dest_pub.trim().is_empty() {
-                                                                    tracing::info!("Ingesting dest_pub");
-                                                                    let pub_key_line = format!("ssh-ed25519 {} simply-transfer", fetch_dest_pub.trim());
-                                                                    let auth_keys = ssh_dir.join("authorized_keys");
-                                                                    use std::io::Write;
-                                                                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
-                                                                        let _ = writeln!(f, "{}", pub_key_line);
-                                                                        #[cfg(unix)]
-                                                                        {
-                                                                            let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
-                                                                        }
-                                                                    
-                                                                        #[cfg(target_os = "windows")]
-                                                                        {
-                                                                            let admin_keys = "C:\\ProgramData\\ssh\\administrators_authorized_keys";
-                                                                            let mut admin_key_exists = false;
-                                                                            if let Ok(content) = std::fs::read_to_string(admin_keys) {
-                                                                                if content.contains(fetch_dest_pub.trim()) {
-                                                                                    admin_key_exists = true;
-                                                                                }
-                                                                            }
-                                                                            if !admin_key_exists {
-                                                                                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(admin_keys) {
-                                                                                    let _ = writeln!(file, "{}", pub_key_line);
-                                                                                } else {
-                                                                                    let script = format!(
-                                                                                        "Add-Content -Path \\\"{}\\\" -Value \\\"{}\\\"",
-                                                                                        admin_keys, pub_key_line
-                                                                                    );
-                                                                                    let _ = std::process::Command::new("powershell")
-                                                                                        .arg("-NoProfile")
-                                                                                        .arg("-Command")
-                                                                                        .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -Wait", script))
-                                                                                        .status();
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        
-                                                                        let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
-                                                                        let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
-                                                                        let _ = writer.write_all(res.as_bytes()).await;
-                                                                        let new_host = format!("{}@{}", dest_user, dest_ip);
-                                                                        tracing::info!("Attempting to map TCP handshake for remote host: {}", new_host);
-                                                                        let _ = slint::invoke_from_event_loop(move || {
-                                                                            if let Some(ui) = ui_handle.upgrade() {
-                                                                                let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-                                                                                for conn in &mut conns {
-                                                                                    if conn.state == "Waiting for peer..." {
-                                                                                        tracing::info!("Found connection waiting for peer. Updating state to Connected.");
-                                                                                        conn.host = new_host.clone().into();
-                                                                                        conn.state = "Connected".into();
-                                                                                        conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
-                                                                                    }
-                                                                                }
-                                                                                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
-                                                                                ui.set_overall_status("Connection Confirmed".into());
-                                                                                
-                                                                                save_connections(&conns);
-                                                                            }
-                                                                        });
-                                                                        return;
-                                                                    } else {
-                                                                        tracing::error!("Failed to open authorized_keys for append");
-                                                                    }
-                                                                } else {
-                                                                    tracing::warn!("Did not receive dest_pub via OOB, and fallback failed.");
-                                                                    let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
-                                                                    let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
-                                                                    let _ = writer.write_all(res.as_bytes()).await;
-                                                                    let new_host = format!("{}@{}", dest_user, dest_ip);
-                                                                    let pub_key_clone2 = pub_key.clone();
-                                                                    let _ = slint::invoke_from_event_loop(move || {
-                                                                        if let Some(ui) = ui_handle.upgrade() {
-                                                                            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-                                                                            for conn in &mut conns {
-                                                                                if conn.token == pub_key_clone2 {
-                                                                                    conn.host = new_host.clone().into();
-                                                                                }
-                                                                            }
-                                                                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
-                                                                            ui.set_overall_status("Connection Confirmed".into());
-                                                                            
-                                                                            save_connections(&conns);
-                                                                        }
-                                                                    });
-                                                                    return;
-                                                                }
-                                                            }
-                                                            Err(e) => tracing::error!("SSH auth failed: {:?}", e),
-                                                        }
-                                                    }
-                                                    Err(e) => tracing::error!("SSH connect failed: {:?}", e),
-                                                }
-                                                let _ = std::fs::remove_file(&tmp_pem);
-                                        
+                                    if !dest_pub.trim().is_empty() {
+                                        tracing::info!("Ingesting dest_pub from TCP handshake");
+                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim()) {
+                                            if let Some(srv) = P2P_SERVER.get() {
+                                                srv.add_authorized_key(dest_pub_parsed).await;
+                                                tracing::info!("Authorized key added to global P2P Daemon!");
                                             }
                                         }
-                                        Err(e) => tracing::error!("Failed to get private key for token pub_key: {:?}", e),
+                                        
+                                        let my_user = "simply-transfer".to_string();
+                                        let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
+                                        let _ = writer.write_all(res.as_bytes()).await;
+                                        
+                                        let new_host = dest_ip.clone();
+                                        tracing::info!("Attempting to map TCP handshake for remote host: {}", new_host);
+                                        let _ = slint::invoke_from_event_loop(move || {
+                                            if let Some(ui) = ui_handle.upgrade() {
+                                                let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                                                for conn in &mut conns {
+                                                    if conn.state == "Waiting for peer..." {
+                                                        tracing::info!("Found connection waiting for peer. Updating state to Connected.");
+                                                        conn.host = new_host.clone().into();
+                                                        conn.state = "Connected".into();
+                                                        conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                                    }
+                                                }
+                                                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
+                                                ui.set_overall_status("Connection Confirmed".into());
+                                                
+                                                save_connections(&conns);
+                                            }
+                                        });
+                                        return;
+                                    } else {
+                                        tracing::warn!("Did not receive dest_pub via OOB. Connection invalid.");
                                     }
                                     let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
                                 } else if req["action"] == "commit" {
@@ -905,6 +829,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                 let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key, Some(&my_user));
                 conn_to_save.token = generated_token.into();
+                conn_to_save.state = "Waiting for peer...".into();
             } else {
                 let token = conn_to_save.token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
@@ -931,7 +856,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let ui_weak = ui.as_weak();
     ui.on_browse_source(move |_| {}); // No-op now
 
     let ui_weak = ui.as_weak();
@@ -986,10 +910,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if host == "Remote" {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_ip = parsed.ip;
-                            dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
+                            dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                         }
                     } else {
                         dest_ip = host.clone();
+                        dest_user = "simply-transfer".to_string();
                     }
                 }
             }
@@ -1018,9 +943,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
 
                     
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                        if let Ok(priv_pem) = mgr.get_private_key_pem(&parsed.pub_key) {
+                        // Extract the sender's public key ID from the token (second part after semicolon)
+                        let private_key_id = if let Some(parts) = token_str.split(';').nth(1) {
+                            parts.to_string()
+                        } else {
+                            parsed.pub_key.clone() // fallback to receiver's public key
+                        };
+                        
+                        if let Ok(priv_pem) = mgr.get_private_key_pem(&private_key_id) {
                             let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
                             
                             #[cfg(unix)]
@@ -1029,7 +961,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
                             }
                         } else {
-                            tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", parsed.pub_key);
+                            tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", private_key_id);
                             tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                         }
                     } else {
@@ -1037,7 +969,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                     }
                     
-                    if let Err(e) = ssh_client.connect(&dest_ip, 22).await {
+                    if let Err(e) = ssh_client.connect(&dest_ip, 2222).await {
                         tracing::error!("on_fetch_directory: SSH connect to {} failed: {}", dest_ip, e);
                     } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {
                         tracing::error!("on_fetch_directory: SSH auth for {}@{} with key {:?} failed: {}", dest_user, dest_ip, tmp_pem, e);
@@ -1194,10 +1126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else if host == "Remote" {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                         dest_ip = parsed.ip;
-                        dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
+                        dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     }
                 } else {
                     dest_ip = host;
+                    dest_user = "simply-transfer".to_string();
                 }
             }
         }
@@ -1234,9 +1167,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
                     
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                        if let Ok(priv_pem) = mgr.get_private_key_pem(&parsed.pub_key) {
+                        // Extract the sender's public key ID from the token (second part after semicolon)
+                        let private_key_id = if let Some(parts) = token_str.split(';').nth(1) {
+                            parts.to_string()
+                        } else {
+                            parsed.pub_key.clone() // fallback to receiver's public key
+                        };
+                        
+                        if let Ok(priv_pem) = mgr.get_private_key_pem(&private_key_id) {
                             let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
                             #[cfg(unix)]
                             {
@@ -1250,7 +1190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                     }
                     
-                    if let Err(_) = ssh_client.connect(&dest_ip, 22).await {}
+                    if let Err(_) = ssh_client.connect(&dest_ip, 2222).await {}
                     else if let Err(_) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {}
                     else {
                         let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
@@ -1645,6 +1585,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut line = String::new();
                             if reader.read_line(&mut line).await.is_ok() && line.contains("\"ok\"") {
                                 log_event("connection", "Remote token validated and handshake succeeded.");
+                                
+                                // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
+                                tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
+                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&parsed.pub_key) {
+                                    if let Some(srv) = P2P_SERVER.get() {
+                                        let srv_clone = srv.clone();
+                                        tokio::spawn(async move {
+                                            srv_clone.add_authorized_key(dest_pub_parsed).await;
+                                            tracing::info!("Receiver's authorized key added to global P2P Daemon!");
+                                        });
+                                    }
+                                }
+
                                 if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
                                     let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
                                     let new_host = format!("{}@{}", remote_user, parsed.ip);

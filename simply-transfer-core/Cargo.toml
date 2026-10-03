@@ -12,11 +12,11 @@ ssh-key = { version = "0.6.7", features = ["ed25519", "alloc"] }
 async-trait = "0.1"
 russh = "0.45.0"
 russh-keys = "0.45.0"
-russh-sftp = "3.0.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 walkdir = "2.5.0"
+futures = "0.3.34"
 
 [dev-dependencies]
 tempfile = "3.27.0"
