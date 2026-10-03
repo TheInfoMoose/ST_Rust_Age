@@ -1,10 +1,10 @@
 use crate::ssh::{SshClient, SshError};
+use async_trait::async_trait;
 use russh::{client::Config, client::Handle};
 use russh_sftp::client::SftpSession;
 use std::path::Path;
-use tokio::fs;
 use std::sync::Arc;
-use async_trait::async_trait;
+use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct RusshClient {
@@ -45,11 +45,11 @@ impl RusshClient {
             ..Default::default()
         };
         let config = Arc::new(config);
-        
+
         let client = russh::client::connect(config, (host, port), ClientHandler)
             .await
             .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-        
+
         self.handle = Some(client);
         Ok(())
     }
@@ -61,7 +61,7 @@ impl SshClient for RusshClient {
         if self.handle.is_some() {
             return Ok(());
         }
-        
+
         self.establish_connection(host, port).await
     }
 
@@ -71,28 +71,38 @@ impl SshClient for RusshClient {
         private_key_pem: &str,
         _passphrase: Option<&str>,
     ) -> Result<(), SshError> {
-        let handle = self.handle.as_mut().ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
-        
+        let handle = self
+            .handle
+            .as_mut()
+            .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
+
         let key_pair = russh_keys::decode_secret_key(private_key_pem, None)
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
-        let auth_res = handle.authenticate_publickey(username, Arc::new(key_pair))
+        let auth_res = handle
+            .authenticate_publickey(username, Arc::new(key_pair))
             .await
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
         if !auth_res {
-            return Err(SshError::AuthenticationFailed("Key rejected by server".to_string()));
+            return Err(SshError::AuthenticationFailed(
+                "Key rejected by server".to_string(),
+            ));
         }
 
-        let mut channel = handle.channel_open_session().await
+        let mut channel = handle
+            .channel_open_session()
+            .await
             .map_err(|e| SshError::SftpError(e.to_string()))?;
-        channel.request_subsystem(true, "sftp").await
+        channel
+            .request_subsystem(true, "sftp")
+            .await
             .map_err(|e| SshError::SftpError(e.to_string()))?;
-            
+
         let sftp = SftpSession::new(channel.into_stream())
             .await
             .map_err(|e| SshError::SftpError(e.to_string()))?;
-        
+
         self.sftp_client = Some(sftp);
         Ok(())
     }
@@ -103,52 +113,73 @@ impl SshClient for RusshClient {
         remote_path: &str,
         progress_callback: Option<Box<dyn Fn(u64) + Send>>,
     ) -> Result<(), SshError> {
-        let sftp = self.sftp_client.as_ref().ok_or(SshError::SftpError("Not connected to SFTP".to_string()))?;
-        
+        let sftp = self
+            .sftp_client
+            .as_ref()
+            .ok_or(SshError::SftpError("Not connected to SFTP".to_string()))?;
+
         let mut local_file = fs::File::open(local_path)
             .await
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
 
-        let metadata = local_file.metadata().await
+        let metadata = local_file
+            .metadata()
+            .await
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
         let _total_size = metadata.len();
 
-        let mut sftp_file = sftp.create(remote_path).await
+        let mut sftp_file = sftp
+            .create(remote_path)
+            .await
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
 
-        const BUFFER_SIZE: usize = 64 * 1024; // 64KB buffer
+        const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut uploaded_bytes = 0u64;
 
         loop {
-            let bytes_read = local_file.read(&mut buffer).await
+            let bytes_read = local_file
+                .read(&mut buffer)
+                .await
                 .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-                
+
             if bytes_read == 0 {
                 break;
             }
 
-            sftp_file.write_all(&buffer[..bytes_read]).await
+            sftp_file
+                .write_all(&buffer[..bytes_read])
+                .await
                 .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
 
             uploaded_bytes += bytes_read as u64;
-            
+
             if let Some(callback) = &progress_callback {
                 callback(uploaded_bytes);
             }
         }
 
+        sftp_file
+            .flush()
+            .await
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+
         Ok(())
     }
 
     async fn execute_command(&self, command: &str) -> Result<String, SshError> {
-        let handle = self.handle.as_ref().ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
-        
-        let mut channel = handle.channel_open_session()
+        let handle = self
+            .handle
+            .as_ref()
+            .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
+
+        let mut channel = handle
+            .channel_open_session()
             .await
             .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
 
-        channel.exec(true, command)
+        channel
+            .exec(true, command)
             .await
             .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
 

@@ -299,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return;
         }
 
-        let (src, dest, transfer_type, session_name) = if let Some(ui) = ui_handle.upgrade() {
+        let (all_mappings, transfer_type, session_name) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
             
             let mut sessions: Vec<slint::SharedString> = ui.get_active_sessions().iter().collect();
@@ -328,7 +328,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
             let t_type = ui.get_transfer_type_val().to_string();
-            (mappings[0].source.to_string(), mappings[0].destination.to_string(), t_type, session_name)
+            let all_mappings: Vec<(String, String)> = mappings.iter().map(|m| (m.source.to_string(), m.destination.to_string())).collect();
+            (all_mappings, t_type, session_name)
         } else {
             return;
         };
@@ -385,15 +386,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let engine = TransferEngine::new(
-                PathBuf::from(src),
-                dest,
-                tx,
-                Arc::new(ssh_client),
-                Arc::new(val_ssh_client),
-                Arc::new(FallbackSnapshotDriver),
-                Some(control_rx),
-            );
+            let ssh_client = Arc::new(ssh_client);
+            let val_ssh_client = Arc::new(val_ssh_client);
+            let snapshot_driver = Arc::new(FallbackSnapshotDriver);
 
             let (batch_tx, mut batch_rx) = mpsc::channel(10000);
 
@@ -634,12 +629,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 loop {
                     log_event(log_file, "Executing background transfer cycle...");
                     tracing::info!("Executing background transfer cycle...");
-                    if let Err(e) = engine.execute().await {
-                        log_event(log_file, &format!("Engine execution failed: {:?}", e));
-                        tracing::error!("Engine execution failed: {:?}", e);
-                    } else {
-                        log_event(log_file, "Cycle completed successfully, waiting for next interval.");
+                    
+                    for (src, dest) in &all_mappings {
+                        let engine = TransferEngine::new(
+                            PathBuf::from(src),
+                            dest.clone(),
+                            tx.clone(),
+                            ssh_client.clone(),
+                            val_ssh_client.clone(),
+                            snapshot_driver.clone(),
+                            Some(control_rx.clone()),
+                        );
+                        if let Err(e) = engine.execute().await {
+                            log_event(log_file, &format!("Engine execution failed for {}: {:?}", src, e));
+                            tracing::error!("Engine execution failed for {}: {:?}", src, e);
+                        }
                     }
+                    
+                    log_event(log_file, "Cycle completed successfully, waiting for next interval.");
                     
                     let sleep_duration = if transfer_type == "Continuous Sync" {
                         60 // Mock 1 min sync
@@ -651,13 +658,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration)).await;
                 }
             } else {
-                log_event("transfers", "Initiating single transfer...");
-                if let Err(e) = engine.execute().await {
-                    log_event("transfers", &format!("Engine execution failed: {:?}", e));
-                    tracing::error!("Engine execution failed: {:?}", e);
-                } else {
-                    log_event("transfers", "Transfer and validation completed successfully.");
+                log_event("transfers", "Initiating single transfer queue...");
+                for (src, dest) in &all_mappings {
+                    log_event("transfers", &format!("Transferring {} -> {}", src, dest));
+                    let engine = TransferEngine::new(
+                        PathBuf::from(src),
+                        dest.clone(),
+                        tx.clone(),
+                        ssh_client.clone(),
+                        val_ssh_client.clone(),
+                        snapshot_driver.clone(),
+                        Some(control_rx.clone()),
+                    );
+                    if let Err(e) = engine.execute().await {
+                        log_event("transfers", &format!("Engine execution failed for {}: {:?}", src, e));
+                        tracing::error!("Engine execution failed for {}: {:?}", src, e);
+                    }
                 }
+                log_event("transfers", "Transfer queue completed successfully.");
             }
         });
     });
@@ -914,45 +932,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
-    ui.on_browse_source(move |idx| {
-        if let Some(ui) = ui_weak.upgrade() {
-            ui.set_is_browser_open(true);
-            ui.set_browser_is_remote(false);
-            ui.set_browser_is_source(true);
-            ui.set_browser_target_idx(idx);
-            
-            let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
-            let idx = idx as usize;
-            let mut start_path = "/".to_string();
-            if idx < mappings.len() && !mappings[idx].source.is_empty() {
-                start_path = mappings[idx].source.to_string();
-            }
-            ui.set_browser_current_path(start_path.clone().into());
-            ui.invoke_fetch_directory(start_path.into(), false);
-        }
-    });
+    ui.on_browse_source(move |_| {}); // No-op now
 
     let ui_weak = ui.as_weak();
     ui.on_browse_destination(move |idx| {
         if let Some(ui) = ui_weak.upgrade() {
             ui.set_is_browser_open(true);
-            ui.set_browser_is_remote(true);
-            ui.set_browser_is_source(false);
+            ui.set_browser_is_remote(false);
+            ui.set_dest_browser_is_remote(true);
             ui.set_browser_target_idx(idx);
             
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
-            let mut start_path = "/".to_string();
-            if idx < mappings.len() && !mappings[idx].destination.is_empty() {
-                start_path = mappings[idx].destination.to_string();
+            
+            let mut start_source = "/".to_string();
+            if idx < mappings.len() && !mappings[idx].source.is_empty() {
+                start_source = mappings[idx].source.to_string();
             }
-            ui.set_browser_current_path(start_path.clone().into());
-            ui.invoke_fetch_directory(start_path.into(), true);
+            ui.set_browser_current_path(start_source.clone().into());
+            ui.invoke_fetch_directory(start_source.into(), false, false);
+            
+            let mut start_dest = "/".to_string();
+            if idx < mappings.len() && !mappings[idx].destination.is_empty() {
+                start_dest = mappings[idx].destination.to_string();
+            }
+            ui.set_dest_browser_current_path(start_dest.clone().into());
+            ui.invoke_fetch_directory(start_dest.into(), true, true);
         }
     });
     
     let ui_weak = ui.as_weak();
-    ui.on_fetch_directory(move |path, is_remote| {
+    ui.on_fetch_directory(move |path, is_remote, is_dest| {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
         
@@ -1065,6 +1075,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     name: name.into(),
                                     is_dir,
                                     path: full_path.into(),
+                                    is_selected: false,
+                                    depth: 0,
+                                    is_expanded: false,
                                 });
                             }
                         }
@@ -1076,6 +1089,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         name: if dest_ip.is_empty() { "[Invalid Remote Configuration]".into() } else { "[Remote Connection Failed]".into() },
                         is_dir: false,
                         path: path_str.clone().into(),
+                        is_selected: false,
+                        depth: 0,
+                        is_expanded: false,
                     });
                 }
             } else if let Ok(entries) = std::fs::read_dir(&path_str) {
@@ -1086,6 +1102,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         name: name.into(),
                         is_dir,
                         path: entry.path().to_string_lossy().to_string().into(),
+                        is_selected: false,
+                        depth: 0,
+                        is_expanded: false,
                     });
                 }
             }
@@ -1099,26 +1118,303 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let model = std::rc::Rc::new(slint::VecModel::from(nodes));
-                    ui.set_browser_nodes(model.into());
-                    ui.set_browser_current_path(path_str.into());
+                    if is_dest {
+                        ui.set_dest_browser_nodes(model.into());
+                        ui.set_dest_browser_current_path(path_str.into());
+                    } else {
+                        ui.set_browser_nodes(model.into());
+                        ui.set_browser_current_path(path_str.into());
+                    }
                 }
             });
         });
     });
 
     let ui_weak = ui.as_weak();
-    ui.on_commit_browser_selection(move |path| {
+    ui.on_collapse_browser_node(move |node, is_dest| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let node_path = node.path.as_str();
+            let browser_nodes: Vec<_> = if is_dest {
+                ui.get_dest_browser_nodes().iter().collect()
+            } else {
+                ui.get_browser_nodes().iter().collect()
+            };
+            
+            let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path);
+            
+            if let Some(index) = index {
+                let mut new_nodes = Vec::new();
+                for i in 0..=index {
+                    let mut n = browser_nodes[i].clone();
+                    if i == index {
+                        n.is_expanded = false;
+                    }
+                    new_nodes.push(n);
+                }
+                
+                let current_depth = browser_nodes[index].depth;
+                let mut i = index + 1;
+                while i < browser_nodes.len() && browser_nodes[i].depth > current_depth {
+                    i += 1;
+                }
+                
+                for j in i..browser_nodes.len() {
+                    new_nodes.push(browser_nodes[j].clone());
+                }
+                
+                if is_dest {
+                    ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                } else {
+                    ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_expand_browser_node(move |node, is_remote, is_dest| {
+        let node_path = node.path.to_string();
+        let ui_weak = ui_weak.clone();
+        
+        let mut token_str = String::new();
+        let mut dest_ip = String::new();
+        let mut dest_user = String::new();
+
+        if is_remote && let Some(ui) = ui_weak.upgrade() {
+            let conns: Vec<_> = ui.get_connections().iter().collect();
+            let idx = ui.get_selected_connection_idx() as usize;
+            if idx < conns.len() {
+                let host = conns[idx].host.to_string();
+                let token = conns[idx].token.to_string();
+                token_str = token.clone();
+                if host.contains('@') {
+                    let parts: Vec<&str> = host.split('@').collect();
+                    dest_user = parts[0].to_string();
+                    dest_ip = parts[1].trim().to_string();
+                } else if host == "Remote" {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                        dest_ip = parsed.ip;
+                        dest_user = parsed.user.unwrap_or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string()));
+                    }
+                } else {
+                    dest_ip = host;
+                }
+            }
+        }
+        
+        if let Some(ui) = ui_weak.upgrade() {
+            let browser_nodes: Vec<_> = if is_dest {
+                ui.get_dest_browser_nodes().iter().collect()
+            } else {
+                ui.get_browser_nodes().iter().collect()
+            };
+            let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path.as_str());
+            if let Some(index) = index {
+                let mut new_nodes = browser_nodes.clone();
+                new_nodes[index].is_expanded = true;
+                if is_dest {
+                    ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                } else {
+                    ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                }
+            }
+        }
+
+        tokio::spawn(async move {
+            let mut nodes = Vec::new();
+            let depth = node.depth + 1;
+            
+            if is_remote {
+                if !dest_ip.is_empty() {
+                    use simply_transfer_core::ssh::SshClient;
+                    use simply_transfer_core::russh_client::RusshClient;
+                    
+                    let mut ssh_client = RusshClient::new();
+                    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                    let ssh_dir = std::path::Path::new(&home).join(".ssh");
+                    let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
+                    
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str) {
+                        let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                        if let Ok(priv_pem) = mgr.get_private_key_pem(&parsed.pub_key) {
+                            let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(&tmp_pem, std::fs::Permissions::from_mode(0o600));
+                            }
+                        } else {
+                            tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
+                        }
+                    } else {
+                        tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
+                    }
+                    
+                    if let Err(_) = ssh_client.connect(&dest_ip, 22).await {}
+                    else if let Err(_) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {}
+                    else {
+                        let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
+                            .await.map(|out| out.trim() == "Windows").unwrap_or(false);
+                            
+                        let mut resolved_path = node_path.clone();
+                        let cmd = if is_windows {
+                            if resolved_path.is_empty() { resolved_path = "C:\\".to_string(); }
+                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", resolved_path.replace("'", "''"))
+                        } else {
+                            if resolved_path.is_empty() { resolved_path = "/".to_string(); }
+                            format!("ls -1p '{}'", resolved_path.replace("'", "'\\''"))
+                        };
+
+                        if let Ok(output) = ssh_client.execute_command(&cmd).await {
+                            for line in output.lines() {
+                                let line = line.trim();
+                                if line.is_empty() { continue; }
+                                let is_dir = line.ends_with('/');
+                                let name = if is_dir { &line[..line.len()-1] } else { line };
+                                let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
+                                    format!("{}{}", resolved_path, name)
+                                } else {
+                                    let sep = if is_windows { "\\" } else { "/" };
+                                    format!("{}{}{}", resolved_path, sep, name)
+                                };
+                                nodes.push(FileNode {
+                                    name: name.into(),
+                                    is_dir,
+                                    path: full_path.into(),
+                                    is_selected: false,
+                                    depth,
+                                    is_expanded: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Ok(entries) = std::fs::read_dir(&node_path) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                    nodes.push(FileNode {
+                        name: name.into(),
+                        is_dir,
+                        path: entry.path().to_string_lossy().to_string().into(),
+                        is_selected: false,
+                        depth,
+                        is_expanded: false,
+                    });
+                }
+            }
+            
+            nodes.sort_by(|a, b| {
+                if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
+                else if !a.is_dir && b.is_dir { std::cmp::Ordering::Greater }
+                else { a.name.cmp(&b.name) }
+            });
+            
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    let browser_nodes: Vec<_> = if is_dest {
+                        ui.get_dest_browser_nodes().iter().collect()
+                    } else {
+                        ui.get_browser_nodes().iter().collect()
+                    };
+                    let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path.as_str());
+                    
+                    if let Some(index) = index {
+                        let mut new_nodes = Vec::new();
+                        for i in 0..=index {
+                            new_nodes.push(browser_nodes[i].clone());
+                        }
+                        
+                        for n in nodes {
+                            new_nodes.push(n);
+                        }
+                        
+                        for i in index + 1..browser_nodes.len() {
+                            new_nodes.push(browser_nodes[i].clone());
+                        }
+                        
+                        if is_dest {
+                            ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                        } else {
+                            ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                        }
+                    }
+                }
+            });
+        });
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_commit_browser_selection(move |source_paths, dest_paths| {
         if let Some(ui) = ui_weak.upgrade() {
             ui.set_is_browser_open(false);
             let idx = ui.get_browser_target_idx() as usize;
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            
             if idx < mappings.len() {
-                if ui.get_browser_is_source() {
-                    mappings[idx].source = path.clone();
+                let dest = if dest_paths.row_count() > 0 {
+                    dest_paths.row_data(0).unwrap().to_string()
                 } else {
-                    mappings[idx].destination = path;
+                    ui.get_dest_browser_current_path().to_string()
+                };
+
+                if source_paths.row_count() > 0 {
+                    mappings[idx].source = source_paths.row_data(0).unwrap();
+                    mappings[idx].destination = dest.clone().into();
+                    
+                    for i in 1..source_paths.row_count() {
+                        mappings.insert(idx + i, DirectoryMapping {
+                            source: source_paths.row_data(i).unwrap(),
+                            destination: dest.clone().into(),
+                        });
+                    }
+                } else {
+                    mappings[idx].source = ui.get_browser_current_path();
+                    mappings[idx].destination = dest.clone().into();
                 }
+                
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_toggle_browser_selection(move |path, is_dest| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let path_str = path.to_string();
+            
+            let nodes: Vec<_> = if is_dest {
+                ui.get_dest_browser_nodes().iter().collect()
+            } else {
+                ui.get_browser_nodes().iter().collect()
+            };
+            
+            let mut updated_nodes = Vec::new();
+            
+            for mut node in nodes {
+                if node.path == path_str {
+                    node.is_selected = !node.is_selected;
+                } else if is_dest {
+                    node.is_selected = false;
+                }
+                updated_nodes.push(node);
+            }
+            
+            let selected_paths: Vec<slint::SharedString> = updated_nodes
+                .iter()
+                .filter(|node| node.is_selected)
+                .map(|node| node.path.clone())
+                .collect();
+                
+            let nodes_model = std::rc::Rc::new(slint::VecModel::from(updated_nodes));
+            let selection_model = std::rc::Rc::new(slint::VecModel::from(selected_paths));
+                
+            if is_dest {
+                ui.set_dest_browser_nodes(nodes_model.into());
+                ui.set_dest_browser_selection(selection_model.into());
+            } else {
+                ui.set_browser_nodes(nodes_model.into());
+                ui.set_browser_selection(selection_model.into());
             }
         }
     });

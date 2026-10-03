@@ -110,7 +110,14 @@ impl TransferEngine {
         // Phase 1: Destination Validation
         self.emit_phase(1, "Destination Validation".to_string())
             .await;
+        
+        let is_windows_dest = self.ssh_client.execute_command("cmd.exe /c echo Windows")
+            .await
+            .map(|out| out.trim() == "Windows")
+            .unwrap_or(false);
+
         let local_registry = self.build_local_registry(&active_source_dir).await?;
+
 
         // Pre-flight check: Destination disk space
         let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
@@ -156,16 +163,36 @@ impl TransferEngine {
                     }
                 }
 
+                let ssh_c = ssh_client_val.clone();
+
                 let mut remote_paths = Vec::new();
                 let mut local_paths = Vec::new();
+
                 for f in &files {
-                    let normalized_file = f.replace('\\', "/");
-                    let full_remote_path =
-                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file);
-                    // properly escape single quotes for shell: replace ' with '\''
-                    let escaped_path = full_remote_path.replace("'", "'\\''");
-                    remote_paths.push(format!("'{}'", escaped_path));
-                    
+                    let normalized_file = if is_windows_dest {
+                        f.replace('/', "\\")
+                    } else {
+                        f.replace('\\', "/")
+                    };
+
+                    let full_remote_path = if is_windows_dest {
+                        format!(
+                            "{}\\{}",
+                            dest_dir.trim_end_matches('\\').trim_end_matches('/'),
+                            normalized_file
+                        )
+                    } else {
+                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
+                    };
+
+                    // properly escape double quotes for shell: replace " with "" or \"
+                    let escaped_path = if is_windows_dest {
+                        full_remote_path.replace("\"", "\"\"")
+                    } else {
+                        full_remote_path.replace("\"", "\\\"")
+                    };
+                    remote_paths.push(format!("\"{}\"", escaped_path));
+
                     let lp = if active_source_dir_val.is_file() {
                         active_source_dir_val.clone()
                     } else {
@@ -174,13 +201,11 @@ impl TransferEngine {
                     local_paths.push(lp);
                 }
 
-                let ssh_c = ssh_client_val.clone();
-                let is_windows_dest = ssh_c.execute_command("cmd.exe /c echo Windows").await
-                    .map(|out| out.trim() == "Windows")
-                    .unwrap_or(false);
-
                 let cmd = if is_windows_dest {
-                    format!("powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"", remote_paths.join(","))
+                    format!(
+                        "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"",
+                        remote_paths.join(",")
+                    )
                 } else {
                     format!("sha256sum {}", remote_paths.join(" "))
                 };
@@ -256,6 +281,67 @@ impl TransferEngine {
 
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
+                
+        // Collect all unique parent directories first
+        let mut parent_dirs = std::collections::HashSet::new();
+        for file in &manifest.to_transfer {
+            let normalized_file = if is_windows_dest {
+                file.replace('/', "\\")
+            } else {
+                file.replace('\\', "/")
+            };
+
+            let remote_path = if is_windows_dest {
+                format!(
+                    "{}\\{}",
+                    self.destination_dir
+                        .trim_end_matches('\\')
+                        .trim_end_matches('/'),
+                    normalized_file
+                )
+            } else {
+                format!(
+                    "{}/{}",
+                    self.destination_dir.trim_end_matches('/'),
+                    normalized_file
+                )
+            };
+
+            let parent = std::path::Path::new(&remote_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            
+            if !parent.is_empty() {
+                parent_dirs.insert(parent);
+            }
+        }
+
+        // Create all parent directories in chunks of 50
+        if !parent_dirs.is_empty() {
+            let dirs: Vec<String> = parent_dirs.into_iter().collect();
+            for chunk in dirs.chunks(50) {
+                if is_windows_dest {
+                    let dir_list: String = chunk.iter()
+                        .map(|d| format!("\"{}\"", d.replace("\"", "\"\"")))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let cmd = format!(
+                        "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force -Path {}\"",
+                        dir_list
+                    );
+                    let _ = self.ssh_client.execute_command(&cmd).await;
+                } else {
+                    let dir_list: String = chunk.iter()
+                        .map(|d| format!("\"{}\"", d.replace("\"", "\\\"")))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let cmd = format!("mkdir -p {}", dir_list);
+                    let _ = self.ssh_client.execute_command(&cmd).await;
+                }
+            }
+        }
+
         for file in &manifest.to_transfer {
             if let Some(ref rx) = self.control_rx {
                 let mut rx_clone = rx.clone();
@@ -278,12 +364,29 @@ impl TransferEngine {
             } else {
                 active_source_dir.join(file)
             };
-            let normalized_file = file.replace('\\', "/");
-            let remote_path = format!(
-                "{}/{}",
-                self.destination_dir.trim_end_matches('/'),
-                normalized_file
-            );
+
+            let normalized_file = if is_windows_dest {
+                file.replace('/', "\\")
+            } else {
+                file.replace('\\', "/")
+            };
+
+            let remote_path = if is_windows_dest {
+                format!(
+                    "{}\\{}",
+                    self.destination_dir
+                        .trim_end_matches('\\')
+                        .trim_end_matches('/'),
+                    normalized_file
+                )
+            } else {
+                format!(
+                    "{}/{}",
+                    self.destination_dir.trim_end_matches('/'),
+                    normalized_file
+                )
+            };
+
             let size = local_registry.files[file].size;
 
             self.emit_file_status(
@@ -413,44 +516,58 @@ impl TransferEngine {
     }
 
     async fn check_disk_space(&self, required_bytes: u64) -> Result<(), EngineError> {
-        let is_windows = self.ssh_client.execute_command("cmd.exe /c echo Windows").await
+        let is_windows = self
+            .ssh_client
+            .execute_command("cmd.exe /c echo Windows")
+            .await
             .map(|o| o.trim() == "Windows")
             .unwrap_or(false);
-        
+
         let free_space: u64 = if is_windows {
             let powershell_cmd = format!(
-                r#"Get-PSDrive -Name (Split-Path '{}' -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
-                self.destination_dir.replace('\\', "\\\\")
+                r#"Get-PSDrive -Name (Split-Path "{}" -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
+                self.destination_dir.replace("\"", "\"\"").replace('\\', "\\\\")
             );
-            
-            self.ssh_client.execute_command(&format!("powershell.exe -NoProfile -Command \"{}\"", powershell_cmd)).await
-                .map(|output| {
-                    output.trim().parse::<u64>().unwrap_or(0)
-                })
-                .map_err(|e| EngineError::Network(format!("Failed to get Windows disk space: {}", e)))?
+
+            self.ssh_client
+                .execute_command(&format!(
+                    "powershell.exe -NoProfile -Command \"{}\"",
+                    powershell_cmd
+                ))
+                .await
+                .map(|output| output.trim().parse::<u64>().unwrap_or(0))
+                .map_err(|e| {
+                    EngineError::Network(format!("Failed to get Windows disk space: {}", e))
+                })?
         } else {
-            let df_cmd = format!("df -B1 '{}'", self.destination_dir.replace("'", "'\\''"));
-            
-            self.ssh_client.execute_command(&df_cmd).await
+            let df_cmd = format!("df -B1 \"{}\"", self.destination_dir.replace("\"", "\\\""));
+
+            self.ssh_client
+                .execute_command(&df_cmd)
+                .await
                 .map(|output| {
-                    output.lines()
+                    output
+                        .lines()
                         .nth(1)
                         .and_then(|line| {
-                            line.split_whitespace().nth(3).and_then(|s| s.parse::<u64>().ok())
+                            line.split_whitespace()
+                                .nth(3)
+                                .and_then(|s| s.parse::<u64>().ok())
                         })
                         .unwrap_or(0)
                 })
-                .map_err(|e| EngineError::Network(format!("Failed to get Linux disk space: {}", e)))?
+                .map_err(|e| {
+                    EngineError::Network(format!("Failed to get Linux disk space: {}", e))
+                })?
         };
-        
+
         if free_space < required_bytes {
             return Err(EngineError::ValidationFailed(format!(
                 "Insufficient disk space. Required: {} bytes, Available: {} bytes",
-                required_bytes,
-                free_space
+                required_bytes, free_space
             )));
         }
-        
+
         Ok(())
     }
 

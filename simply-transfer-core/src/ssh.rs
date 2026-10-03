@@ -114,7 +114,9 @@ impl SshClient for MockSshClient {
             Ok("mock_hash  filename".to_string())
         } else if command.contains("df -B1") {
             Ok("Filesystem     1B-blocks      Used Available Use% Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
-        } else if command.contains("Get-WmiObject") || command.contains("powershell.exe -NoProfile -Command") {
+        } else if command.contains("Get-WmiObject")
+            || command.contains("powershell.exe -NoProfile -Command")
+        {
             Ok("999999999999".to_string())
         } else {
             Ok("".to_string())
