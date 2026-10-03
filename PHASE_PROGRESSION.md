@@ -19,14 +19,14 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * ~~**Live Progress Streaming:** Transmit real-time upload speed (MB/s), duration, and ETA through `mpsc` channels into Slint.~~ *(Completed: Pre-October 2026)*
 * ~~**Batched Remote Validation:** Execute remote SHA-256 checks in batches to reduce command execution overhead.~~ *(Completed: 2026-10-02)*
 
-## Phase 3: P2P SSH Daemon Initialization (ACTIVE)
+## Phase 3: P2P SSH Daemon Initialization (COMPLETED)
 **Objective:** Host a dedicated `russh` server daemon within the application to bypass generic OpenSSH server limits and unify the source/destination environment.
 * ~~**[x]** Implement embedded `russh` SSH Server daemon inside `simply-transfer-core`.~~ *(Completed: 2026-10-03)*
 * ~~**[x]** Configure daemon to securely accept and validate the OOB-exchanged Ed25519 keys.~~ *(Completed: 2026-10-03)*
 * ~~**[x]** Create custom SSH subsystem for data transmission (bypassing OS-level command execution).~~ *(Completed: 2026-10-03)*
 * ~~**[x]** Refactor source application to connect to the peer daemon instead of the OS's native SSH daemon.~~ *(Completed: 2026-10-03)*
 
-## Phase 4: High-Performance Transport & Resiliency
+## Phase 4: High-Performance Transport & Resiliency (ACTIVE)
 **Objective:** Saturate Gigabit Ethernet links and allow concurrent multi-session configurations over the new P2P Daemon.
 * ~~**[x]** **Custom Binary Stream Transit:** Implement raw binary data streaming over the P2P SSH tunnel (Option 2), replacing the bottlenecked SFTP module.~~ *(Completed: 2026-10-03)*
 * ~~**[x]** **Receiver Path Normalization:** Have the destination daemon handle local path writing natively to bypass Windows OS path-escaping bugs.~~ *(Completed: 2026-10-03)*
