@@ -229,7 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let conns: Vec<_> = ui.get_connections().iter().collect();
                     let mut conn_data = Vec::new();
                     for (i, c) in conns.iter().enumerate() {
-                        conn_data.push((i, c.host.to_string(), c.token.to_string(), c.state.to_string()));
+                        conn_data.push((i, c.host.to_string(), c.token.to_string(), c.state.to_string(), c.transfer_type.to_string()));
                     }
                     let _ = tx.send(conn_data);
                 }
@@ -237,8 +237,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             if let Ok(conn_data) = rx.await {
                 let mut updates = Vec::new();
-                for (i, host, token, state) in conn_data {
+                for (i, host, token, state, transfer_type) in conn_data {
                     if state.starts_with("Transmitting") || state == "Waiting for peer..." || state == "Connected" {
+                        continue;
+                    }
+                    if transfer_type != "Remote Transfer" {
                         continue;
                     }
                     let mut target_ip = String::new();
@@ -1082,10 +1085,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         // Extract the sender's public key ID from the token (second part after semicolon)
-                        let private_key_id = if let Some(parts) = token_str.split(';').nth(1) {
-                            parts.to_string()
-                        } else {
-                            parsed.pub_key.clone() // fallback to receiver's public key
+                        let private_key_id = match token_str.split(';').nth(1) {
+                            Some(key_id) => key_id.to_string(),
+                            None => {
+                                let _ = notify_rust::Notification::new()
+                                    .summary("Connection Not Verified")
+                                    .body("Please verify the connection to exchange keys before fetching the directory.")
+                                    .show();
+                                return;
+                            }
                         };
                         
                         if let Ok(priv_pem) = mgr.get_private_key_pem(&private_key_id) {
