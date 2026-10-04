@@ -60,6 +60,11 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 
 ### Sub-phase B: State & Metrics Accuracy
 * **[x]** ~~**Destination Connection Status:** Fix the bug where destination connection details hang on "pending verification" and do not accurately update.~~ *(Completed: 2026-10-04)*
+
+#### Phase 6 - Sub-phase D (Security Audit & NIST Key Management)
+* ~~**[x]** **NIST Key Persistence:** Remove all plaintext `.pem` file fallbacks. Authenticate via in-memory extraction strictly from the OS Keyring.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **P2P Daemon Persistence:** Persist `russh_server` authorized keys to disk with strict 0600 access controls to ensure peer connections survive app restarts.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **OOB Handshake Timeouts:** Add `tokio::time::timeout` wrappers to prevent indefinite hangs during OOB key exchanges.~~ *(Completed: 2026-10-04)*
 * **[x]** ~~**Global ETA Calculation:** Ensure the file transfer ETA reflects the overall transfer completion rather than erratically estimating based on individual batches.~~ *(Completed: 2026-10-04)*
 
 ### Sub-phase C: App Functionality & Polish
@@ -67,4 +72,4 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * **[ ]** **Pause Transfer Validation:** Validate and fix the functionality of the "Pause Transfer" button.
 * ~~**[x]** **Destination Active Transfer View:** Ensure the destination device displays the active transfer, including file progress, transmission metrics, and completion/validation status.~~ *(Completed: 2026-10-04)*
 * **[ ]** **In-App Logging:** Reinstate logs inside Settings > Logs so users no longer have to rely on terminal output.
-* **[ ]** **Windows Console Suppression:** Ensure launching the release version of the Windows app does not spawn a terminal/cmd window.
+* ~~**[x]** **Windows Console Suppression:** Ensure launching the release version of the Windows app does not spawn a terminal/cmd window.~~ *(Completed: 2026-10-04)*

@@ -1,0 +1,79 @@
+I'll begin by looking at the workspace structure and the relevant source files.
+
+Listed directory Simply_Transfer_v2
+Searched for "Verifying"
+Searched for "remote_verification_status|connection_status|Connected"
+Viewed main.slint:260-560
+Viewed main.rs:1580-1840
+
+The literal "Verifying Connection" isn't in the Slint file, so I'll trace where connection states get set.
+
+Searched for "\.state = |state: \"|Verif|Waiting for peer"
+Searched for "state = |Verif|Waiting for peer"
+
+"Pending Verification" at line 315 looks like the likely candidate. Let me read the heartbeat/state loop and the commit handler.
+
+Viewed main.rs:150-440
+Viewed main.rs:860-1010
+
+Next I'll check the commit handler's start, the saved connection files, and recent logs for runtime evidence.
+
+Viewed main.rs:800-860
+
+The shell is blocked during review, so I'll stick to read-only file tools.
+
+Viewed connections_linux.json:1-12
+Viewed connections_windows.json:1-12
+Viewed connections_macos.json:1-12
+Listed directory logs_linux
+
+The Windows/macOS destination entries were saved with no `;<dest_pub_key>` suffix on the token. That matters for the heartbeat. Next I'll check the logs and `save_connections`.
+
+Viewed connection.log:1-61
+Listed directory logs_windows
+Searched for "fn save_connections"
+Viewed main.rs:1-100
+Viewed connection.log:1-60
+
+Handshakes succeed in the logs, so the OOB exchange itself isn't failing. I'll find where the user-facing phrase "Verifying Connection" comes from and check the other code paths that write state.
+
+Searched for "Verifying Connection"
+Searched for "save_connections("
+Viewed main.rs:720-770
+Listed directory src
+Viewed main.rs:440-560
+Viewed main.rs:100-150
+Searched for "authorized|fn auth_|fn new|Auth::|load|persist"
+Viewed russh_server.rs:1-85
+
+I've found the cause. I haven't changed any files, and the shell was blocked during review, so everything below comes from reading the code, the saved connection files and the logs.
+
+One caveat first: the text "Verifying Connection" doesn't appear anywhere in the code. The closest destination-side label is the dashboard state **"Pending Verification"** ([main.rs:315](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L312-L318)), which the 5-second heartbeat re-sets indefinitely. The other candidate, `"Verifying..."` in the Add Remote panel, always gets replaced once verification finishes, and your logs show it finishing. Can you confirm "Pending Verification" is the label you're seeing?
+
+## Root cause: the destination loses track of its own key after Commit
+
+1. **Verify runs before the connection exists.** In [on_verify_remote_token](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L1771-L1789), the destination makes a new keypair and tries to save its key ID onto its matching connection entry (`token;my_pub_key`). But that entry isn't created until you press **Commit**, so there's nothing to update and the key ID is thrown away.
+2. **Commit saves the plain token.** The Slint Commit button ([main.slint:532](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/ui/main.slint#L532)) passes `token: remote_token.text`, without the `;my_pub_key` suffix. Your saved files confirm it: neither [connections_windows.json](file:///home/zak/DevShare/Simply_Transfer_v2/connections_windows.json) nor [connections_macos.json](file:///home/zak/DevShare/Simply_Transfer_v2/connections_macos.json) has the suffix.
+3. **The heartbeat then looks up the wrong key.** At [main.rs:285](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L285), `key_to_use = my_pub_key.unwrap_or(&parsed.pub_key)` falls back to the **source's** public key. The destination's keyring has no private key for that, so `get_private_key_pem` fails and no SSH login is even attempted. Port 22 is open, so the state lands on "Pending Verification" and retries every 5 seconds without ever succeeding.
+
+**Why transfers still work:** `start_transfer` has a fallback to `~/.ssh/simply-transfer-remote.pem` ([main.rs:494-498](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L494-L498)). The heartbeat has no such fallback, so the connection is healthy but the state tracker can't see it.
+
+**Why it seems to appear later:** Commit hard-codes `state: "Connected"`, and the heartbeat skips connections in that state ([main.rs:241](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L241)). After any restart, every connection is reset to `"Checking..."` ([main.rs:209](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L209)), the heartbeat takes over, and it gets stuck.
+
+## Other problems that would keep it from ever showing "Connected"
+
+| # | Issue | Location |
+|---|---|---|
+| A | When the heartbeat succeeds it sets `"Authenticated (Idle)"`, never `"Connected"`. | [main.rs:313](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L313) |
+| B | The reachability check probes port **22** (system sshd), but login goes to the P2P daemon on port **2222**. Whether port 22 happens to be open decides between "Pending" and "Disconnected", not the real link. | [main.rs:265](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L265) vs [L301](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L301) |
+| C | The P2P daemon's list of accepted keys is held in memory only. After either side restarts, the peer's key is gone and login fails until you pair again. | [russh_server.rs:12-42](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-core/src/russh_server.rs#L12-L42) |
+| D | Every Verify click makes a new keypair and overwrites the single `simply-transfer-remote.pem` file. With more than one peer, the last pairing wins and old keys pile up in the keyring. | [main.rs:1713-1723](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L1713-L1723) |
+| E | The OOB handshake reply waits on `read_line` with no timeout; the 15 s timeout only covers connecting. If the source never replies, the panel stays on "Verifying..." forever. | [main.rs:1751](file:///home/zak/DevShare/Simply_Transfer_v2/simply-transfer-ui/src/main.rs#L1751) |
+
+## Proposed fix (needs your approval)
+
+1. **Keep the key ID through Commit.** After a successful Verify, store `token;my_pub_key` in a Slint property and have Commit use it instead of `remote_token.text`.
+2. **Fix the heartbeat:** probe port 2222, report `"Connected"` on success, and add the same `.pem` fallback that `start_transfer` uses.
+3. **Optional:** save the P2P daemon's accepted keys to disk and reload them at startup (C), add a read timeout to the handshake (E), and name the key file per peer (D).
+
+If you approve, I'll send these to Qwen with the latest `QWEN_ARCHITECTURE_REFERENCE.md`, review what it produces, and log the bug in `PHASE_PROGRESSION.md`. Do you want just steps 1–2, or the optional items too?

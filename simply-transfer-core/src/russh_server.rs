@@ -1,14 +1,21 @@
 use async_trait::async_trait;
 use russh::server::{Auth, Handler, Server, Session};
 use russh::{Channel, ChannelId};
+use russh_keys::PublicKeyBase64;
 use russh_keys::key;
 use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc};
 
 #[derive(Clone)]
 pub struct TransferServer {
+    pub authorized_keys_file_path: PathBuf,
     pub authorized_keys: Arc<tokio::sync::RwLock<HashMap<String, key::PublicKey>>>,
     file_writers: Arc<Mutex<HashMap<ChannelId, mpsc::Sender<Vec<u8>>>>>,
     pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
@@ -22,8 +29,37 @@ impl Default for TransferServer {
 
 impl TransferServer {
     pub fn new() -> Self {
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let keys_file_path = PathBuf::from(format!(
+            "{}/.gemini/antigravity-ide/p2p_authorized_keys.json",
+            home_dir
+        ));
+
+        let loaded_keys = if keys_file_path.exists() {
+            if let Ok(file) = File::open(&keys_file_path) {
+                let reader = BufReader::new(file);
+                if let Ok(keys_map) = serde_json::from_reader::<_, HashMap<String, String>>(reader)
+                {
+                    let mut public_keys = HashMap::new();
+                    for (fingerprint, key_base64) in keys_map {
+                        if let Ok(public_key) = russh_keys::parse_public_key_base64(&key_base64) {
+                            public_keys.insert(fingerprint, public_key);
+                        }
+                    }
+                    public_keys
+                } else {
+                    HashMap::new()
+                }
+            } else {
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        };
+
         TransferServer {
-            authorized_keys: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            authorized_keys_file_path: keys_file_path,
+            authorized_keys: Arc::new(tokio::sync::RwLock::new(loaded_keys)),
             file_writers: Arc::new(Mutex::new(HashMap::new())),
             event_sender: None,
         }
@@ -38,7 +74,34 @@ impl TransferServer {
 
     pub async fn add_authorized_key(&self, key: key::PublicKey) {
         let fingerprint = key.fingerprint().to_string();
+
         self.authorized_keys.write().await.insert(fingerprint, key);
+
+        let keys = self.authorized_keys.read().await;
+
+        let path = &self.authorized_keys_file_path;
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let mut keys_map: HashMap<String, String> = HashMap::new();
+        for (fingerprint, public_key) in keys.iter() {
+            keys_map.insert(fingerprint.clone(), public_key.public_key_base64());
+        }
+
+        if let Ok(file) = File::create(path) {
+            let mut writer = BufWriter::new(file);
+            let _ = serde_json::to_writer_pretty(&mut writer, &keys_map);
+            let _ = writer.flush();
+
+            #[cfg(unix)]
+            {
+                if let Ok(mut perms) = fs::metadata(path).map(|m| m.permissions()) {
+                    perms.set_mode(0o600);
+                    let _ = fs::set_permissions(path, perms);
+                }
+            }
+        }
     }
 }
 
