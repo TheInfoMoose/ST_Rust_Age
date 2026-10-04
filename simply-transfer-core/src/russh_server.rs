@@ -173,83 +173,88 @@ impl Handler for TransferServer {
 
             tokio::spawn(async move {
                 if let Some(conn) = endpoint.accept().await
-                    && let Ok(connection) = conn.await {
-                        if let Ok(mut bi) = connection.accept_bi().await {
-                            let mut token_buf = [0u8; 8];
-                            if bi.1.read_exact(&mut token_buf).await.is_ok() {
-                                let received_token = u64::from_le_bytes(token_buf);
-                                if received_token == token {
+                    && let Ok(connection) = conn.await
+                {
+                    if let Ok(mut bi) = connection.accept_bi().await {
+                        let mut token_buf = [0u8; 8];
+                        if bi.1.read_exact(&mut token_buf).await.is_ok() {
+                            let received_token = u64::from_le_bytes(token_buf);
+                            if received_token == token {
+                                if let Some(sender) = &event_sender_clone {
+                                    let _ =
+                                        sender.send(crate::engine::TransferEvent::TransferStarted(
+                                            "Incoming".to_string(),
+                                        ));
+                                }
+                                let path = std::path::Path::new(&remote_path);
+                                if let Some(parent) = path.parent() {
+                                    let _ = tokio::fs::create_dir_all(parent).await;
+                                }
+
+                                let file_result = if offset == 0 {
+                                    tokio::fs::File::create(&remote_path).await
+                                } else {
+                                    tokio::fs::OpenOptions::new()
+                                        .write(true)
+                                        .open(&remote_path)
+                                        .await
+                                };
+
+                                if let Ok(mut file) = file_result {
+                                    if offset > 0 {
+                                        use std::io::SeekFrom;
+                                        use tokio::io::AsyncSeekExt;
+                                        let _ = file.seek(SeekFrom::Start(offset)).await;
+                                    }
+
+                                    let mut buf = vec![0u8; 1024 * 1024];
+                                    let mut total_bytes_written = offset;
+
                                     if let Some(sender) = &event_sender_clone {
                                         let _ = sender.send(
-                                            crate::engine::TransferEvent::TransferStarted(
-                                                "Incoming".to_string(),
+                                            crate::engine::TransferEvent::FileStatusChanged(
+                                                remote_path.clone(),
+                                                crate::engine::FileTransferStatus::Transferring {
+                                                    progress_bytes: total_bytes_written,
+                                                    total_bytes: 0,
+                                                },
                                             ),
                                         );
                                     }
-                                    let path = std::path::Path::new(&remote_path);
-                                    if let Some(parent) = path.parent() {
-                                        let _ = tokio::fs::create_dir_all(parent).await;
-                                    }
 
-                                    let file_result = if offset == 0 {
-                                        tokio::fs::File::create(&remote_path).await
-                                    } else {
-                                        tokio::fs::OpenOptions::new()
-                                            .write(true)
-                                            .open(&remote_path)
-                                            .await
-                                    };
-
-                                    if let Ok(mut file) = file_result {
-                                        if offset > 0 {
-                                            use std::io::SeekFrom;
-                                            use tokio::io::AsyncSeekExt;
-                                            let _ = file.seek(SeekFrom::Start(offset)).await;
+                                    while let Ok(Some(n)) = bi.1.read(&mut buf).await {
+                                        if file.write_all(&buf[..n]).await.is_err() {
+                                            break;
                                         }
-
-                                        let mut buf = vec![0u8; 1024 * 1024];
-                                        let mut total_bytes_written = offset;
-
+                                        total_bytes_written += n as u64;
                                         if let Some(sender) = &event_sender_clone {
                                             let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                remote_path.clone(),
-                                                crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
-                                            ));
-                                        }
-
-                                        while let Ok(Some(n)) = bi.1.read(&mut buf).await {
-                                            if file.write_all(&buf[..n]).await.is_err() {
-                                                break;
-                                            }
-                                            total_bytes_written += n as u64;
-                                            if let Some(sender) = &event_sender_clone {
-                                                let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
                                                     remote_path.clone(),
                                                     crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
                                                 ));
-                                            }
                                         }
-                                        let _ = file.flush().await;
-                                        drop(file);
-
-                                        if let Some(sender) = &event_sender_clone {
-                                            let _ = sender.send(
-                                                crate::engine::TransferEvent::FileStatusChanged(
-                                                    remote_path.clone(),
-                                                    crate::engine::FileTransferStatus::Completed,
-                                                ),
-                                            );
-                                        }
-
-                                        // Send application-layer ACK that the file has been successfully written and closed
-                                        let _ = bi.0.write_all(b"OK").await;
-                                        let _ = bi.0.finish();
                                     }
+                                    let _ = file.flush().await;
+                                    drop(file);
+
+                                    if let Some(sender) = &event_sender_clone {
+                                        let _ = sender.send(
+                                            crate::engine::TransferEvent::FileStatusChanged(
+                                                remote_path.clone(),
+                                                crate::engine::FileTransferStatus::Completed,
+                                            ),
+                                        );
+                                    }
+
+                                    // Send application-layer ACK that the file has been successfully written and closed
+                                    let _ = bi.0.write_all(b"OK").await;
+                                    let _ = bi.0.finish();
                                 }
                             }
                         }
-                        let _ = connection.closed().await;
                     }
+                    let _ = connection.closed().await;
+                }
             });
 
             Ok(())

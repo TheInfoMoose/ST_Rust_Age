@@ -11,7 +11,6 @@ pub struct RusshClient {
     remote_host: Option<String>,
 }
 
-
 struct ClientHandler;
 
 #[async_trait]
@@ -184,9 +183,7 @@ impl SshClient for RusshClient {
             quic_client_config,
         )));
 
-        let remote_host = self
-            .remote_host.as_deref()
-            .unwrap_or("127.0.0.1");
+        let remote_host = self.remote_host.as_deref().unwrap_or("127.0.0.1");
         let connect_addr: std::net::SocketAddr = format!("{}:{}", remote_host, port)
             .parse()
             .map_err(|e| SshError::FileTransferFailed(format!("Invalid socket address: {}", e)))?;
