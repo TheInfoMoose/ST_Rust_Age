@@ -46,9 +46,15 @@ pub enum ControlSignal {
 pub enum TransferEvent {
     TransferStarted(String),
     PhaseChanged(u8, String),
-    ManifestGenerated { total_files: usize, total_bytes: u64 },
+    ManifestGenerated {
+        total_files: usize,
+        total_bytes: u64,
+    },
     FileStatusChanged(String, FileTransferStatus),
-    TransferComplete { successful: usize, failed: usize },
+    TransferComplete {
+        successful: usize,
+        failed: usize,
+    },
     TransferFailed(String),
 }
 
@@ -167,7 +173,7 @@ impl TransferEngine {
                         break;
                     }
                 }
-                
+
                 tracing::info!("Validation batch received with {} files", files.len());
 
                 let ssh_c = ssh_client_val.clone();
@@ -226,7 +232,7 @@ impl TransferEngine {
 
                 let validation_result = tokio::time::timeout(
                     std::time::Duration::from_secs(45),
-                    ssh_c.execute_command(&cmd)
+                    ssh_c.execute_command(&cmd),
                 )
                 .await
                 .map_err(|_| EngineError::Network("Timeout waiting for SSH validation".to_string()))
@@ -409,7 +415,7 @@ impl TransferEngine {
 
                     let max_retries = 5;
                     let mut offset = 0u64;
-                    
+
                     for attempt in 0..=max_retries {
                         let file_progress = file.clone();
                         let sender = event_sender.clone();
@@ -434,7 +440,7 @@ impl TransferEngine {
                                     failed_count_atomic.fetch_add(1, Ordering::Relaxed);
                                     break;
                                 }
-                                
+
                                 // Exponential backoff before checking size and retrying
                                 let delay = std::time::Duration::from_millis(100 * 2u64.pow(attempt as u32));
                                 tokio::time::sleep(delay).await;
@@ -456,9 +462,7 @@ impl TransferEngine {
             })
             .await;
 
-        if let Err(e) = stream_result {
-            return Err(e);
-        }
+        stream_result?;
 
         failed_count += failed_count_atomic.load(Ordering::Relaxed);
 

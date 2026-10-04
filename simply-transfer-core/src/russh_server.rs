@@ -14,6 +14,12 @@ pub struct TransferServer {
     pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
 }
 
+impl Default for TransferServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransferServer {
     pub fn new() -> Self {
         TransferServer {
@@ -23,7 +29,10 @@ impl TransferServer {
         }
     }
 
-    pub fn set_event_sender(&mut self, sender: tokio::sync::broadcast::Sender<crate::engine::TransferEvent>) {
+    pub fn set_event_sender(
+        &mut self,
+        sender: tokio::sync::broadcast::Sender<crate::engine::TransferEvent>,
+    ) {
         self.event_sender = Some(sender);
     }
 
@@ -98,7 +107,11 @@ impl Handler for TransferServer {
                 (0, payload.to_string())
             };
 
-            tracing::info!("Accepted QUIC binary transfer for: {} at offset {}", remote_path, offset);
+            tracing::info!(
+                "Accepted QUIC binary transfer for: {} at offset {}",
+                remote_path,
+                offset
+            );
 
             let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -112,56 +125,66 @@ impl Handler for TransferServer {
             };
             let cert_der = cert.cert.der().to_vec();
             let priv_key = cert.signing_key.serialize_der();
-            
+
             let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der.clone())];
-            let key = rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(priv_key));
-            
+            let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+                rustls::pki_types::PrivatePkcs8KeyDer::from(priv_key),
+            );
+
             let mut server_crypto = match rustls::ServerConfig::builder()
                 .with_no_client_auth()
-                .with_single_cert(cert_chain, key) {
+                .with_single_cert(cert_chain, key)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to build QUIC server crypto: {}", e);
+                    return Ok(());
+                }
+            };
+            server_crypto.alpn_protocols = vec![b"simply-transfer".to_vec()];
+
+            let quic_server_config =
+                match quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto) {
                     Ok(c) => c,
                     Err(e) => {
-                        tracing::error!("Failed to build QUIC server crypto: {}", e);
+                        tracing::error!("Failed to convert rustls config: {}", e);
                         return Ok(());
                     }
                 };
-            server_crypto.alpn_protocols = vec![b"simply-transfer".to_vec()];
-            
-            let quic_server_config = match quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("Failed to convert rustls config: {}", e);
-                    return Ok(());
-                }
-            };
-            let server_config = quinn::ServerConfig::with_crypto(std::sync::Arc::new(quic_server_config));
-            let endpoint = match quinn::Endpoint::server(server_config, "0.0.0.0:0".parse().unwrap()) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!("Failed to bind QUIC endpoint: {}", e);
-                    return Ok(());
-                }
-            };
+            let server_config =
+                quinn::ServerConfig::with_crypto(std::sync::Arc::new(quic_server_config));
+            let endpoint =
+                match quinn::Endpoint::server(server_config, "0.0.0.0:0".parse().unwrap()) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::error!("Failed to bind QUIC endpoint: {}", e);
+                        return Ok(());
+                    }
+                };
             let port = endpoint.local_addr().unwrap().port();
-            
+
             use base64::{Engine as _, engine::general_purpose::STANDARD};
             let cert_b64 = STANDARD.encode(&cert_der);
-            
+
             let response = format!("{}|{}|{}", port, token, cert_b64);
             session.data(channel, russh::CryptoVec::from_slice(response.as_bytes()));
 
             let event_sender_clone = self.event_sender.clone();
-            
+
             tokio::spawn(async move {
-                if let Some(conn) = endpoint.accept().await {
-                    if let Ok(connection) = conn.await {
+                if let Some(conn) = endpoint.accept().await
+                    && let Ok(connection) = conn.await {
                         if let Ok(mut bi) = connection.accept_bi().await {
                             let mut token_buf = [0u8; 8];
                             if bi.1.read_exact(&mut token_buf).await.is_ok() {
                                 let received_token = u64::from_le_bytes(token_buf);
                                 if received_token == token {
                                     if let Some(sender) = &event_sender_clone {
-                                        let _ = sender.send(crate::engine::TransferEvent::TransferStarted("Incoming".to_string()));
+                                        let _ = sender.send(
+                                            crate::engine::TransferEvent::TransferStarted(
+                                                "Incoming".to_string(),
+                                            ),
+                                        );
                                     }
                                     let path = std::path::Path::new(&remote_path);
                                     if let Some(parent) = path.parent() {
@@ -171,7 +194,10 @@ impl Handler for TransferServer {
                                     let file_result = if offset == 0 {
                                         tokio::fs::File::create(&remote_path).await
                                     } else {
-                                        tokio::fs::OpenOptions::new().write(true).open(&remote_path).await
+                                        tokio::fs::OpenOptions::new()
+                                            .write(true)
+                                            .open(&remote_path)
+                                            .await
                                     };
 
                                     if let Ok(mut file) = file_result {
@@ -180,37 +206,41 @@ impl Handler for TransferServer {
                                             use tokio::io::AsyncSeekExt;
                                             let _ = file.seek(SeekFrom::Start(offset)).await;
                                         }
-                                        
+
                                         let mut buf = vec![0u8; 1024 * 1024];
                                         let mut total_bytes_written = offset;
-                                        
+
                                         if let Some(sender) = &event_sender_clone {
                                             let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                remote_path.clone(), 
+                                                remote_path.clone(),
                                                 crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
                                             ));
                                         }
 
                                         while let Ok(Some(n)) = bi.1.read(&mut buf).await {
-                                            if file.write_all(&buf[..n]).await.is_err() { break; }
+                                            if file.write_all(&buf[..n]).await.is_err() {
+                                                break;
+                                            }
                                             total_bytes_written += n as u64;
                                             if let Some(sender) = &event_sender_clone {
                                                 let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                    remote_path.clone(), 
+                                                    remote_path.clone(),
                                                     crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
                                                 ));
                                             }
                                         }
                                         let _ = file.flush().await;
                                         drop(file);
-                                        
+
                                         if let Some(sender) = &event_sender_clone {
-                                            let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                remote_path.clone(), 
-                                                crate::engine::FileTransferStatus::Completed
-                                            ));
+                                            let _ = sender.send(
+                                                crate::engine::TransferEvent::FileStatusChanged(
+                                                    remote_path.clone(),
+                                                    crate::engine::FileTransferStatus::Completed,
+                                                ),
+                                            );
                                         }
-                                        
+
                                         // Send application-layer ACK that the file has been successfully written and closed
                                         let _ = bi.0.write_all(b"OK").await;
                                         let _ = bi.0.finish();
@@ -220,7 +250,6 @@ impl Handler for TransferServer {
                         }
                         let _ = connection.closed().await;
                     }
-                }
             });
 
             Ok(())
@@ -242,8 +271,11 @@ impl Handler for TransferServer {
         if cmd_str.starts_with("simply-transfer-hash|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-hash|");
             let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
-            
-            tracing::info!("simply-transfer-hash| command received with {} files", paths.len());
+
+            tracing::info!(
+                "simply-transfer-hash| command received with {} files",
+                paths.len()
+            );
 
             let handle = session.handle();
             tokio::spawn(async move {
@@ -252,7 +284,8 @@ impl Handler for TransferServer {
                     for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
                         tracing::info!("Hashing remote file: {}", path);
                         let local_hash = if let Ok(f) = std::fs::File::open(path) {
-                            simply_transfer_crypto::hash::compute_sha256_stream(f).unwrap_or_else(|_| "hash_failed".to_string())
+                            simply_transfer_crypto::hash::compute_sha256_stream(f)
+                                .unwrap_or_else(|_| "hash_failed".to_string())
                         } else {
                             "hash_failed".to_string()
                         };
@@ -260,11 +293,18 @@ impl Handler for TransferServer {
                         out.push_str(&format!("{}  {}\n", local_hash, path));
                     }
                     out
-                }).await.unwrap_or_else(|_| String::new());
+                })
+                .await
+                .unwrap_or_else(|_| String::new());
 
-                tracing::info!("Sending SSH hash response back to client. Payload length: {}", output_str.len());
+                tracing::info!(
+                    "Sending SSH hash response back to client. Payload length: {}",
+                    output_str.len()
+                );
 
-                let _ = handle.data(channel, russh::CryptoVec::from_slice(output_str.as_bytes())).await;
+                let _ = handle
+                    .data(channel, russh::CryptoVec::from_slice(output_str.as_bytes()))
+                    .await;
                 let _ = handle.exit_status_request(channel, 0).await;
                 let _ = handle.eof(channel).await;
                 let _ = handle.close(channel).await;
@@ -283,7 +323,7 @@ impl Handler for TransferServer {
         };
         #[cfg(not(windows))]
         let output = std::process::Command::new("sh")
-            .args(&["-c", &cmd_str])
+            .args(["-c", &cmd_str])
             .output();
 
         match output {

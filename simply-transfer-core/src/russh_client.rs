@@ -5,17 +5,12 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
 
-
+#[derive(Default)]
 pub struct RusshClient {
     handle: Option<Handle<ClientHandler>>,
     remote_host: Option<String>,
 }
 
-impl Default for RusshClient {
-    fn default() -> Self {
-        Self { handle: None, remote_host: None }
-    }
-}
 
 struct ClientHandler;
 
@@ -142,32 +137,37 @@ impl SshClient for RusshClient {
 
         let mut response_str = String::new();
         while let Some(msg) = channel.wait().await {
-            match msg {
-                russh::ChannelMsg::Data { ref data } => {
-                    response_str = String::from_utf8_lossy(data).to_string();
-                    break;
-                }
-                _ => {}
+            if let russh::ChannelMsg::Data { ref data } = msg {
+                response_str = String::from_utf8_lossy(data).to_string();
+                break;
             }
         }
-        
+
         if response_str.is_empty() {
-            return Err(SshError::FileTransferFailed("No QUIC port provided by server".into()));
+            return Err(SshError::FileTransferFailed(
+                "No QUIC port provided by server".into(),
+            ));
         }
 
         let parts: Vec<&str> = response_str.split('|').collect();
         if parts.len() != 3 {
-            return Err(SshError::FileTransferFailed("Invalid QUIC connection response".into()));
+            return Err(SshError::FileTransferFailed(
+                "Invalid QUIC connection response".into(),
+            ));
         }
         let port: u16 = parts[0].parse().unwrap_or(0);
         let token: u64 = parts[1].parse().unwrap_or(0);
-        
+
         use base64::{Engine as _, engine::general_purpose::STANDARD};
-        let cert_der = STANDARD.decode(parts[2]).map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-        
+        let cert_der = STANDARD
+            .decode(parts[2])
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+
         let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.add(rustls::pki_types::CertificateDer::from(cert_der)).map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-        
+        root_cert_store
+            .add(rustls::pki_types::CertificateDer::from(cert_der))
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         let mut client_crypto = rustls::ClientConfig::builder()
@@ -180,18 +180,31 @@ impl SshClient for RusshClient {
 
         let mut client_endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-        client_endpoint.set_default_client_config(quinn::ClientConfig::new(std::sync::Arc::new(quic_client_config)));
+        client_endpoint.set_default_client_config(quinn::ClientConfig::new(std::sync::Arc::new(
+            quic_client_config,
+        )));
 
-        let remote_host = self.remote_host.as_ref().map(|s| s.as_str()).unwrap_or("127.0.0.1");
+        let remote_host = self
+            .remote_host.as_deref()
+            .unwrap_or("127.0.0.1");
         let connect_addr: std::net::SocketAddr = format!("{}:{}", remote_host, port)
             .parse()
             .map_err(|e| SshError::FileTransferFailed(format!("Invalid socket address: {}", e)))?;
 
-        let connection = client_endpoint.connect(connect_addr, "localhost").map_err(|e| SshError::FileTransferFailed(e.to_string()))?.await.map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-        let mut bi = connection.open_bi().await.map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
-        
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
-        bi.0.write_all(&token.to_le_bytes()).await.map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+        let connection = client_endpoint
+            .connect(connect_addr, "localhost")
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?
+            .await
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+        let mut bi = connection
+            .open_bi()
+            .await
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        bi.0.write_all(&token.to_le_bytes())
+            .await
+            .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
 
         let mut file = fs::File::open(local_path)
             .await
@@ -213,8 +226,8 @@ impl SshClient for RusshClient {
                     match res {
                         Ok(0) => break,
                         Ok(n) => {
-                            if bi.0.write_all(&buffer[..n]).await.is_err() { 
-                                return Err(SshError::FileTransferFailed("Connection dropped".into())); 
+                            if bi.0.write_all(&buffer[..n]).await.is_err() {
+                                return Err(SshError::FileTransferFailed("Connection dropped".into()));
                             }
                             progress += n as u64;
                             if let Some(cb) = &progress_callback {
@@ -235,18 +248,22 @@ impl SshClient for RusshClient {
         }
 
         let _ = bi.0.finish();
-        
+
         let mut ack_buf = [0u8; 2];
         if let Ok(_) = bi.1.read_exact(&mut ack_buf).await {
             if &ack_buf != b"OK" {
                 tracing::warn!("Did not receive valid application-layer ACK");
                 connection.close(0u32.into(), b"failed");
-                return Err(SshError::FileTransferFailed("Invalid application-layer ACK".into()));
+                return Err(SshError::FileTransferFailed(
+                    "Invalid application-layer ACK".into(),
+                ));
             }
         } else {
             tracing::warn!("Failed to read application-layer ACK");
             connection.close(0u32.into(), b"failed");
-            return Err(SshError::FileTransferFailed("Failed to read application-layer ACK".into()));
+            return Err(SshError::FileTransferFailed(
+                "Failed to read application-layer ACK".into(),
+            ));
         }
 
         connection.close(0u32.into(), b"done");
@@ -260,30 +277,34 @@ impl SshClient for RusshClient {
             .as_ref()
             .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
 
-        let mut channel = tokio::time::timeout(std::time::Duration::from_secs(60), handle.channel_open_session())
-            .await
-            .map_err(|_| SshError::CommandExecutionFailed("Timeout opening channel".to_string()))?
-            .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
+        let mut channel = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            handle.channel_open_session(),
+        )
+        .await
+        .map_err(|_| SshError::CommandExecutionFailed("Timeout opening channel".to_string()))?
+        .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
 
-        tokio::time::timeout(std::time::Duration::from_secs(60), channel.exec(true, command))
-            .await
-            .map_err(|_| SshError::CommandExecutionFailed("Timeout executing command".to_string()))?
-            .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            channel.exec(true, command),
+        )
+        .await
+        .map_err(|_| SshError::CommandExecutionFailed("Timeout executing command".to_string()))?
+        .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
 
         let mut output = String::new();
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(600), channel.wait()).await {
-                Ok(Some(msg)) => {
-                    match msg {
-                        russh::ChannelMsg::Data { ref data } => {
-                            output.push_str(&String::from_utf8_lossy(data));
-                        }
-                        russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
-                            break;
-                        }
-                        _ => {}
+                Ok(Some(msg)) => match msg {
+                    russh::ChannelMsg::Data { ref data } => {
+                        output.push_str(&String::from_utf8_lossy(data));
                     }
-                }
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
+                        break;
+                    }
+                    _ => {}
+                },
                 Ok(None) => break,
                 Err(_) => {
                     tracing::warn!("Timeout waiting for SSH command output");
