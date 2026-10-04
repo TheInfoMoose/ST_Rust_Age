@@ -44,8 +44,9 @@ pub enum ControlSignal {
 /// Events emitted by the engine to the UI/consumers.
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
+    TransferStarted(String),
     PhaseChanged(u8, String),
-    ManifestGenerated(usize),
+    ManifestGenerated { total_files: usize, total_bytes: u64 },
     FileStatusChanged(String, FileTransferStatus),
     TransferComplete { successful: usize, failed: usize },
     TransferFailed(String),
@@ -133,7 +134,10 @@ impl TransferEngine {
         };
 
         self.event_sender
-            .send(TransferEvent::ManifestGenerated(manifest.to_transfer.len()))
+            .send(TransferEvent::ManifestGenerated {
+                total_files: manifest.to_transfer.len(),
+                total_bytes: total_required_bytes,
+            })
             .await
             .ok();
 
@@ -163,6 +167,8 @@ impl TransferEngine {
                         break;
                     }
                 }
+                
+                tracing::info!("Validation batch received with {} files", files.len());
 
                 let ssh_c = ssh_client_val.clone();
 
@@ -198,6 +204,8 @@ impl TransferEngine {
 
                 let cmd = format!("simply-transfer-hash|{}", remote_paths.join("|"));
 
+                tracing::info!("Spawning local hash block for {} files", local_paths.len());
+
                 let local_hashes = tokio::task::spawn_blocking(move || {
                     let mut hashes = Vec::new();
                     for lp in local_paths {
@@ -214,18 +222,26 @@ impl TransferEngine {
                 .await
                 .unwrap_or_else(|_| Vec::new());
 
-                let validation_result = ssh_c
-                    .execute_command(&cmd)
-                    .await
-                    .map_err(|e| EngineError::Network(e.to_string()))
-                    .map(|remote_output| (local_hashes, remote_output));
+                tracing::info!("Executing SSH command: {}", cmd);
+
+                let validation_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(45),
+                    ssh_c.execute_command(&cmd)
+                )
+                .await
+                .map_err(|_| EngineError::Network("Timeout waiting for SSH validation".to_string()))
+                .and_then(|res| res.map_err(|e| EngineError::Network(e.to_string())))
+                .map(|remote_output| (local_hashes, remote_output));
+
+                tracing::info!("SSH command returned");
 
                 match validation_result {
                     Ok((local_hashes, output)) => {
                         let remote_lines: Vec<&str> = output.trim().lines().collect();
 
+                        let fallback_hash = "local_hash_failed".to_string();
                         for (i, file) in files.iter().enumerate() {
-                            let local_hash = &local_hashes[i];
+                            let local_hash = local_hashes.get(i).unwrap_or(&fallback_hash);
                             let matched = remote_lines
                                 .iter()
                                 .any(|l| l.starts_with(local_hash) || l.starts_with("mock_hash"));

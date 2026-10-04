@@ -90,6 +90,8 @@ impl SshServer {
                     "'-Command Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0'",
                     "-Verb",
                     "RunAs",
+                    "-WindowStyle",
+                    "Hidden",
                     "-Wait",
                 ])
                 .status()
@@ -223,6 +225,8 @@ impl SshServer {
                     "'-Command Start-Service sshd'",
                     "-Verb",
                     "RunAs",
+                    "-WindowStyle",
+                    "Hidden",
                     "-Wait",
                 ])
                 .status()

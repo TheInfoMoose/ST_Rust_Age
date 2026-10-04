@@ -20,7 +20,7 @@ A complete Rust rewrite of Simply Transfer. This modular, high-performance file 
 
 The project has been completely re-architected into a modular Rust workspace consisting of the following core crates:
 
-- **`simply-transfer-core`**: The central engine governing transfer logic, SSH/SFTP client integrations, and transfer orchestration.
+- **`simply-transfer-core`**: The central engine governing transfer logic, orchestrating the embedded P2P `russh` server daemon, and managing the high-throughput OOB QUIC data channel.
 - **`simply-transfer-crypto`**: A dedicated cryptographic crate handling SHA-256 byte-level hash validation and secure token/secret management.
 - **`simply-transfer-snapshots`**: A cross-platform capable snapshotting abstraction layer (with support modules for Windows VSS, Linux, and macOS) to ensure files can be backed up even while locked.
 - **`simply-transfer-ui`**: A modern, lightweight, high-performance graphical user interface built utilizing [Slint](https://slint.dev/).
@@ -29,10 +29,10 @@ The project has been completely re-architected into a modular Rust workspace con
 
 ## Key Features
 
-- **Pure Rust Implementation**: Zero-cost abstractions and memory safety guarantees for robust file operations.
-- **High-Performance Transfers**: Asynchronous chunk processing tailored for large datasets and constrained networks.
-- **Cross-Platform Snapshotting**: Seamlessly back up open and exclusively locked databases (such as live QuickBooks files on Windows) without interrupting the user.
-- **Cryptographic Validation**: Two-step streaming SHA-256 hash validation ensures byte-for-byte integrity on the destination server.
+- **Pure Rust Implementation**: Zero-cost abstractions and memory safety guarantees. Excision of C-dependencies ensures seamless cross-compilation across Windows, macOS, and Linux.
+- **High-Performance QUIC Transport**: Bypasses traditional SSH packet fragmentation bottlenecks by pivoting bulk data to a multiplexed, UDP-backed TLS 1.3 `quinn` stream, saturating Gigabit Ethernet links.
+- **Embedded P2P Daemon**: Hosts its own internal `russh` SSH server to ingest Ed25519 keys via OOB TCP handshake. No dependency on OS-level OpenSSH servers or `~/.ssh/authorized_keys`.
+- **Native Hash Validation**: Two-step streaming SHA-256 hash validation natively computed on the destination daemon (bypassing OS shells) ensures byte-for-byte integrity.
 - **Modular and Extensible**: Decoupled architecture allows components to be reused or replaced independently.
 
 ---

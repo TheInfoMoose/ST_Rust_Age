@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, mpsc};
 pub struct TransferServer {
     pub authorized_keys: Arc<tokio::sync::RwLock<HashMap<String, key::PublicKey>>>,
     file_writers: Arc<Mutex<HashMap<ChannelId, mpsc::Sender<Vec<u8>>>>>,
+    pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
 }
 
 impl TransferServer {
@@ -18,7 +19,12 @@ impl TransferServer {
         TransferServer {
             authorized_keys: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             file_writers: Arc::new(Mutex::new(HashMap::new())),
+            event_sender: None,
         }
+    }
+
+    pub fn set_event_sender(&mut self, sender: tokio::sync::broadcast::Sender<crate::engine::TransferEvent>) {
+        self.event_sender = Some(sender);
     }
 
     pub async fn add_authorized_key(&self, key: key::PublicKey) {
@@ -144,6 +150,8 @@ impl Handler for TransferServer {
             let response = format!("{}|{}|{}", port, token, cert_b64);
             session.data(channel, russh::CryptoVec::from_slice(response.as_bytes()));
 
+            let event_sender_clone = self.event_sender.clone();
+            
             tokio::spawn(async move {
                 if let Some(conn) = endpoint.accept().await {
                     if let Ok(connection) = conn.await {
@@ -152,6 +160,9 @@ impl Handler for TransferServer {
                             if bi.1.read_exact(&mut token_buf).await.is_ok() {
                                 let received_token = u64::from_le_bytes(token_buf);
                                 if received_token == token {
+                                    if let Some(sender) = &event_sender_clone {
+                                        let _ = sender.send(crate::engine::TransferEvent::TransferStarted("Incoming".to_string()));
+                                    }
                                     let path = std::path::Path::new(&remote_path);
                                     if let Some(parent) = path.parent() {
                                         let _ = tokio::fs::create_dir_all(parent).await;
@@ -171,10 +182,34 @@ impl Handler for TransferServer {
                                         }
                                         
                                         let mut buf = vec![0u8; 1024 * 1024];
+                                        let mut total_bytes_written = offset;
+                                        
+                                        if let Some(sender) = &event_sender_clone {
+                                            let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
+                                                remote_path.clone(), 
+                                                crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
+                                            ));
+                                        }
+
                                         while let Ok(Some(n)) = bi.1.read(&mut buf).await {
                                             if file.write_all(&buf[..n]).await.is_err() { break; }
+                                            total_bytes_written += n as u64;
+                                            if let Some(sender) = &event_sender_clone {
+                                                let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
+                                                    remote_path.clone(), 
+                                                    crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
+                                                ));
+                                            }
                                         }
                                         let _ = file.flush().await;
+                                        drop(file);
+                                        
+                                        if let Some(sender) = &event_sender_clone {
+                                            let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
+                                                remote_path.clone(), 
+                                                crate::engine::FileTransferStatus::Completed
+                                            ));
+                                        }
                                         
                                         // Send application-layer ACK that the file has been successfully written and closed
                                         let _ = bi.0.write_all(b"OK").await;
@@ -208,20 +243,26 @@ impl Handler for TransferServer {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-hash|");
             let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
             
+            tracing::info!("simply-transfer-hash| command received with {} files", paths.len());
+
             let handle = session.handle();
             tokio::spawn(async move {
                 let output_str = tokio::task::spawn_blocking(move || {
                     let mut out = String::new();
-                    for path in paths {
-                        let local_hash = if let Ok(f) = std::fs::File::open(&path) {
+                    for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
+                        tracing::info!("Hashing remote file: {}", path);
+                        let local_hash = if let Ok(f) = std::fs::File::open(path) {
                             simply_transfer_crypto::hash::compute_sha256_stream(f).unwrap_or_else(|_| "hash_failed".to_string())
                         } else {
                             "hash_failed".to_string()
                         };
+                        tracing::info!("Remote file {} hashed: {}", path, local_hash);
                         out.push_str(&format!("{}  {}\n", local_hash, path));
                     }
                     out
                 }).await.unwrap_or_else(|_| String::new());
+
+                tracing::info!("Sending SSH hash response back to client. Payload length: {}", output_str.len());
 
                 let _ = handle.data(channel, russh::CryptoVec::from_slice(output_str.as_bytes())).await;
                 let _ = handle.exit_status_request(channel, 0).await;

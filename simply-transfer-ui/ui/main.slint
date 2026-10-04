@@ -154,8 +154,8 @@ component TransferQueueRow inherits Rectangle {
     height: 25px;
     HorizontalBox {
         padding: 0; spacing: 10px;
-        Rectangle { width: 50%; Text { text: root.file.name; overflow: elide; } }
-        Rectangle { width: 20%; Text { text: root.file.size; horizontal-alignment: right; } }
+        Rectangle { width: 50%; Text { width: 100%; text: root.file.name; overflow: elide; } }
+        Rectangle { width: 20%; Text { width: 100%; text: root.file.size; horizontal-alignment: right; overflow: elide; } }
         Rectangle { width: 30%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
     }
 }
@@ -165,8 +165,8 @@ component CompletedQueueRow inherits Rectangle {
     height: 25px;
     HorizontalBox {
         padding: 0; spacing: 10px;
-        Rectangle { width: 60%; Text { text: root.file.name; overflow: elide; } }
-        Rectangle { width: 40%; Text { text: root.file.status; color: root.file.status_color; horizontal-alignment: right; } }
+        Rectangle { width: 60%; Text { width: 100%; text: root.file.name; overflow: elide; } }
+        Rectangle { width: 40%; Text { width: 100%; text: root.file.status; color: root.file.status_color; horizontal-alignment: right; overflow: elide; } }
     }
 }
 
@@ -177,9 +177,9 @@ component MetricsGrid inherits Rectangle {
 
     HorizontalBox {
         padding: 0; spacing: 0;
-        Rectangle { width: 33%; Text { text: "Upload: " + root.upload_speed; horizontal-alignment: left; } }
-        Rectangle { width: 33%; Text { text: "Download: " + root.download_speed; horizontal-alignment: center; } }
-        Rectangle { width: 34%; Text { text: "ETA: " + root.eta; horizontal-alignment: right; } }
+        Rectangle { width: 33%; HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; } Text { text: root.upload_speed; width: 80px; horizontal-alignment: left; } } }
+        Rectangle { width: 33%; HorizontalBox { padding: 0; alignment: center; Text { text: "Download:"; } Text { text: root.download_speed; width: 80px; horizontal-alignment: left; } } }
+        Rectangle { width: 34%; HorizontalBox { padding: 0; alignment: end; Text { text: "ETA:"; } Text { text: root.eta; width: 80px; horizontal-alignment: right; } } }
     }
 }
 
@@ -194,10 +194,8 @@ export component SessionPopout inherits Window {
     VerticalBox {
         Text { text: root.phase_text; font-weight: 700; font-size: 16px; }
         ListView {
-            for file in root.transfer_queue : HorizontalBox {
-                Text { text: file.name; }
-                Text { text: file.size; }
-                ProgressIndicator { progress: file.progress; }
+            for file in root.transfer_queue : TransferQueueRow {
+                file: file;
             }
         }
     }
@@ -205,8 +203,8 @@ export component SessionPopout inherits Window {
 
 export component MainWindow inherits Window {
     title: "Simply Transfer v2";
-    width: 1000px;
-    height: 750px;
+    min-width: 1000px;
+    min-height: 750px;
     background: AppTheme.window_bg;
 
     // Callbacks for Rust backend
@@ -325,7 +323,7 @@ export component MainWindow inherits Window {
             HorizontalBox {
                 // Left Column: Active Connections
                 StyledBox {
-                    width: 300px;
+                    width: 35%;
                     VerticalBox {
                         padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                         HorizontalBox {
@@ -555,13 +553,11 @@ export component MainWindow inherits Window {
                                 padding: 15px;
                             spacing: 12px;
                             for mapping[idx] in root.current_mappings : HorizontalBox {
-                                Text { text: "Source Path:"; vertical-alignment: center; }
-                                LineEdit { text: mapping.source; placeholder-text: "/path/to/source"; edited(text) => { root.update_mapping_source(idx, text); } }
+                                LineEdit { horizontal-stretch: 1; text: mapping.source; placeholder-text: "/path/to/source"; edited(text) => { root.update_mapping_source(idx, text); } }
 
                                 Rectangle { width: 20px; }
 
-                                Text { text: "Destination Path:"; vertical-alignment: center; }
-                                LineEdit { text: mapping.destination; placeholder-text: "/path/to/destination"; edited(text) => { root.update_mapping_destination(idx, text); } }
+                                LineEdit { horizontal-stretch: 1; text: mapping.destination; placeholder-text: "/path/to/destination"; edited(text) => { root.update_mapping_destination(idx, text); } }
                                 Button { text: "Configure Transfer"; clicked => { root.browse_destination(idx); } }
                                 
                                 if root.current_mappings.length > 1: Button { text: "-"; clicked => { root.remove_mapping(idx); } }
@@ -664,8 +660,6 @@ export component MainWindow inherits Window {
                                         eta: root.metric_eta;
                                         horizontal-stretch: 1;
                                     }
-                                    Text { text: root.current_phase; }
-                                    Text { text: root.ellipsis; width: 15px; horizontal-alignment: left; }
                                 }
                                 
                                 Rectangle { height: 10px; }

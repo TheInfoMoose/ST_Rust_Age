@@ -98,8 +98,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Enter the runtime context so `tokio::spawn` works in Slint callbacks
     let _guard = rt.enter();
 
+    let (global_tx, mut global_rx) = tokio::sync::broadcast::channel::<simply_transfer_core::engine::TransferEvent>(1000);
+
     let host_key = russh_keys::key::KeyPair::generate_ed25519().unwrap();
-    let p2p_server = simply_transfer_core::russh_server::TransferServer::new();
+    let mut p2p_server = simply_transfer_core::russh_server::TransferServer::new();
+    p2p_server.set_event_sender(global_tx.clone());
     P2P_SERVER.set(p2p_server.clone()).ok();
     
     rt.spawn(async move {
@@ -109,6 +112,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui = MainWindow::new()?;
+    let ui_global_weak = ui.as_weak();
+    
+    tokio::spawn(async move {
+        let mut local_t_q: Vec<TransferQueueItem> = Vec::new();
+        let mut overall_total_bytes: u64 = 0;
+        let mut target_conn_name = String::new();
+        let mut transfer_start_time = tokio::time::Instant::now();
+        let mut current_completed_bytes: u64 = 0;
+        
+        while let Ok(event) = global_rx.recv().await {
+            match event {
+                simply_transfer_core::engine::TransferEvent::TransferStarted(peer) => {
+                    local_t_q.clear();
+                    overall_total_bytes = 0;
+                    current_completed_bytes = 0;
+                    target_conn_name = peer.clone();
+                    transfer_start_time = tokio::time::Instant::now();
+                    
+                    let ui_clone = ui_global_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_clone.upgrade() {
+                            ui.set_active_tab(1); // Assuming 1 is Dashboard or Active Transfer
+                            ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+                            ui.set_phase_text("Live Transfer Queue".into());
+                            ui.set_overall_status("Receiving...".into());
+                            ui.set_current_phase("Receiving".into());
+                        }
+                    });
+                }
+                simply_transfer_core::engine::TransferEvent::FileStatusChanged(file, status) => {
+                    if let simply_transfer_core::engine::FileTransferStatus::Transferring { progress_bytes, total_bytes } = status {
+                        overall_total_bytes = overall_total_bytes.max(total_bytes);
+                        let progress = if total_bytes > 0 { progress_bytes as f32 / total_bytes as f32 } else { 0.0 };
+                        
+                        let item = TransferQueueItem {
+                            name: file.clone().into(),
+                            size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
+                            progress,
+                        };
+                        
+                        if local_t_q.is_empty() {
+                            local_t_q.push(item);
+                        } else {
+                            local_t_q[0] = item;
+                        }
+                        
+                        current_completed_bytes = progress_bytes;
+                        
+                        let elapsed_secs = transfer_start_time.elapsed().as_secs();
+                        let clone_eta = if current_completed_bytes > 0 && overall_total_bytes > current_completed_bytes && elapsed_secs > 0 {
+                            let bytes_per_sec = current_completed_bytes as f64 / elapsed_secs as f64;
+                            let remaining_bytes = overall_total_bytes.saturating_sub(current_completed_bytes);
+                            let remaining_secs = (remaining_bytes as f64 / bytes_per_sec) as u64;
+                            format!("{:02}:{:02}:{:02}", remaining_secs / 3600, (remaining_secs % 3600) / 60, remaining_secs % 60)
+                        } else {
+                            "Calculating...".to_string()
+                        };
+                        
+                        let clone_mu = if elapsed_secs > 0 {
+                            format!("{:.2} MB/s", (current_completed_bytes as f64 / 1_048_576.0) / elapsed_secs as f64)
+                        } else {
+                            "0.0 MB/s".to_string()
+                        };
+                        
+                        let local_t_q_clone = local_t_q.clone();
+                        let ui_clone = ui_global_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_clone.upgrade() {
+                                ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(local_t_q_clone)).into());
+                                ui.set_metric_download(clone_mu.into());
+                                ui.set_metric_eta(clone_eta.into());
+                            }
+                        });
+                    } else if let simply_transfer_core::engine::FileTransferStatus::Completed = status {
+                        local_t_q.clear();
+                        let ui_clone = ui_global_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_clone.upgrade() {
+                                ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+                                ui.set_overall_status("Completed".into());
+                                ui.set_current_phase("Idle".into());
+                            }
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 
     let loaded = load_connections();
     let slint_conns: Vec<ConnectionItem> = loaded.into_iter().map(|c| ConnectionItem {
@@ -146,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(conn_data) = rx.await {
                 let mut updates = Vec::new();
                 for (i, host, token, state) in conn_data {
-                    if state.starts_with("Transmitting") || state == "Waiting for peer..." {
+                    if state.starts_with("Transmitting") || state == "Waiting for peer..." || state == "Connected" {
                         continue;
                     }
                     let mut target_ip = String::new();
@@ -271,8 +363,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_tx = active_control_tx.clone();
     let pause_tx = active_control_tx.clone();
     let cancel_tx = active_control_tx.clone();
+    let global_tx_for_start = global_tx.clone();
 
     ui.on_start_transfer(move || {
+        let global_tx = global_tx_for_start.clone();
         let ui_handle = ui_handle.clone();
         let control_tx_ref = start_tx.clone();
 
@@ -281,11 +375,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut actual_token_str = String::new();
         let mut my_pub_key = None;
         let mut conn_name = String::new();
+        let mut target_host = String::new();
         if let Some(ui) = ui_handle.upgrade() {
             let conns: Vec<_> = ui.get_connections().iter().collect();
             let idx = ui.get_selected_connection_idx() as usize;
             if idx < conns.len() {
                 let host = conns[idx].host.to_string();
+                target_host = host.clone();
                 conn_name = conns[idx].name.to_string();
                 let token_str = conns[idx].token.to_string();
                 
@@ -361,8 +457,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dest_ip = dest_ip.clone();
         let dest_user = dest_user.clone();
 
+        let target_host_clone = target_host.clone();
+        let target_conn_name = conn_name.clone();
+
         tokio::spawn(async move {
-            let (tx, mut rx) = mpsc::channel(100);
+            let (tx, mut rx) = mpsc::channel::<simply_transfer_core::engine::TransferEvent>(100);
 
             let (control_tx, control_rx) = watch::channel(ControlSignal::Run);
             if let Ok(mut guard) = control_tx_ref.lock() {
@@ -416,8 +515,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (batch_tx, mut batch_rx) = mpsc::channel(10000);
 
+            let global_tx_clone = global_tx.clone();
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
+                    let _ = global_tx_clone.send(event.clone());
                     batch_tx.send(event).await.ok();
                 }
             });
@@ -438,9 +539,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transfer_start_time = tokio::time::Instant::now();
                 let mut total_files = 0;
                 let mut current_completed_files = 0;
+                let mut overall_total_bytes = 0;
+                let mut current_completed_bytes = 0;
+                let mut previously_completed_bytes = 0;
+                let mut current_file_size = 0;
                 let mut bytes_transferred_in_interval = 0;
                 let mut speed_ema: f32 = 0.0;
 
+                let mut batch_rx_opt = Some(batch_rx);
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
@@ -470,10 +576,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     TransferEvent::FileStatusChanged(file, status) => {
                                         match status {
                                             FileTransferStatus::Transferring { progress_bytes, total_bytes } => {
+                                                current_file_size = total_bytes;
+                                                current_completed_bytes = previously_completed_bytes + progress_bytes;
                                                 let progress = if total_bytes > 0 { progress_bytes as f32 / total_bytes as f32 } else { 0.0 };
                                                 local_t_q = vec![TransferQueueItem {
                                                     name: file.into(),
-                                                    size: format!("{} bytes", total_bytes).into(),
+                                                    size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
                                                     progress,
                                                 }];
                                                 
@@ -487,6 +595,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             FileTransferStatus::Completed => {
                                                 local_t_q.clear();
                                                 current_completed_files += 1;
+                                                previously_completed_bytes += current_file_size;
+                                                current_file_size = 0;
                                                 status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
                                                 log_event("transfer", &format!("Transferred: {}", file));
                                                 
@@ -530,8 +640,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             _ => {}
                                         }
                                     }
-                                    TransferEvent::ManifestGenerated(total) => {
+                                    TransferEvent::ManifestGenerated { total_files: total, total_bytes } => {
                                         total_files = total;
+                                        overall_total_bytes = total_bytes;
                                         status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
                                     }
                                     TransferEvent::TransferComplete { successful, failed } => {
@@ -551,6 +662,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             .body(&format!("Transfer aborted: {}", err))
                                             .show();
                                     }
+                                    TransferEvent::TransferStarted(_) => {}
                                 }
                             }
                             
@@ -588,13 +700,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let clone_ml = metric_latency_txt.clone();
                             let clone_active_phase = active_phase.clone();
                             let session_name_clone = session_name.clone();
+                            let target_host_for_closure = target_host_clone.clone();
+                            let target_conn_name_for_closure = target_conn_name.clone();
                             let elapsed_secs = transfer_start_time.elapsed().as_secs();
                             let clone_duration = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
-                            let clone_eta = if current_completed_files > 0 && total_files > current_completed_files {
-                                let secs_per_file = elapsed_secs as f32 / current_completed_files as f32;
-                                let remaining_secs = (secs_per_file * (total_files - current_completed_files) as f32) as u64;
+                            let clone_eta = if current_completed_bytes > 0 && overall_total_bytes > current_completed_bytes {
+                                let bytes_per_sec = current_completed_bytes as f64 / elapsed_secs as f64;
+                                let remaining_bytes = overall_total_bytes.saturating_sub(current_completed_bytes);
+                                let remaining_secs = (remaining_bytes as f64 / bytes_per_sec) as u64;
                                 format!("{:02}:{:02}:{:02}", remaining_secs / 3600, (remaining_secs % 3600) / 60, remaining_secs % 60)
-                            } else if total_files == 0 {
+                            } else if overall_total_bytes == 0 {
                                 "N/A".to_string()
                             } else {
                                 "Calculating...".to_string()
@@ -623,8 +738,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     
                                     if clone_active_phase != "Idle" {
                                         let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-                                        let idx = ui.get_selected_connection_idx() as usize;
-                                        if idx < conns.len() {
+                                        let mut target_idx = None;
+                                        for (idx, conn) in conns.iter().enumerate() {
+                                            if conn.name.as_str() == target_conn_name_for_closure.as_str() && 
+                                               conn.host.as_str() == target_host_for_closure.as_str() {
+                                                target_idx = Some(idx);
+                                                break;
+                                            }
+                                        }
+                                        if let Some(idx) = target_idx {
                                             conns[idx].state = clone_active_phase.into();
                                             conns[idx].state_color = slint::Color::from_rgb_u8(50, 200, 50);
                                             conns[idx].duration = clone_duration.into();
@@ -641,10 +763,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             });
-                        }
-                        n = batch_rx.recv_many(&mut buffer, 5000) => {
-                            if n == 0 {
+                            if batch_rx_opt.is_none() && buffer.is_empty() {
                                 break;
+                            }
+                        }
+                        res = async {
+                            if let Some(rx) = &mut batch_rx_opt {
+                                rx.recv_many(&mut buffer, 5000).await
+                            } else {
+                                std::future::pending().await
+                            }
+                        } => {
+                            if res == 0 {
+                                batch_rx_opt = None;
                             }
                         }
                     }
@@ -781,7 +912,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     
                                     if !dest_pub.trim().is_empty() {
                                         tracing::info!("Ingesting dest_pub from TCP handshake");
-                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim()) {
+                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&format!("ssh-ed25519 {}", dest_pub.trim())) {
                                             if let Some(srv) = P2P_SERVER.get() {
                                                 srv.add_authorized_key(dest_pub_parsed).await;
                                                 tracing::info!("Authorized key added to global P2P Daemon!");
@@ -1528,7 +1659,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = std::process::Command::new("powershell")
                                     .arg("-NoProfile")
                                     .arg("-Command")
-                                    .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -Wait", script))
+                                    .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -WindowStyle Hidden -Wait", script))
                                     .status();
                                 log_event("connection", "Appended public key to administrators_authorized_keys via elevated PowerShell.");
                             }
@@ -1593,7 +1724,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 
                                 // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
                                 tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
-                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&parsed.pub_key) {
+                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&format!("ssh-ed25519 {}", parsed.pub_key.trim())) {
                                     if let Some(srv) = P2P_SERVER.get() {
                                         let srv_clone = srv.clone();
                                         tokio::spawn(async move {

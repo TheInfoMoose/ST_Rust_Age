@@ -20,9 +20,10 @@ The frontend, written using Slint and Rust.
 
 ### `simply-transfer-core`
 The backbone of the application.
-- Orchestrates the actual data transfer.
-- Implements the 3-phase process: **Snapshot -> Validation -> Transmission -> Integrity Check**.
-- **Key Files:** `src/engine.rs` (Transfer Engine), `src/ssh.rs` (SSH Client abstractions).
+- Orchestrates the actual data transfer and integrates an embedded P2P `russh` server daemon, bypassing OS-level OpenSSH dependencies.
+- Pivots bulk data transit to a dedicated Out-of-Band (OOB) QUIC channel (`quinn`) to saturate Gigabit links and bypass SSH packet fragmentation.
+- Implements the 3-phase process: **Snapshot -> Transmission -> Integrity Validation**.
+- **Key Files:** `src/engine.rs` (Transfer Engine), `src/ssh.rs` (SSH Client abstractions), `src/russh_server.rs` (Embedded Daemon).
 
 ### `simply-transfer-crypto`
 Handles all cryptographic operations.
@@ -35,7 +36,7 @@ Responsible for calculating changes between directories to minimize data transfe
 - Uses `FallbackSnapshotDriver` to generate manifests and diffs.
 
 ## 3. Security Model
-- **Authentication:** Peer-to-peer SSH authentication. The source generates an Ed25519 keypair and creates a token. The destination ingests this token into `~/.ssh/authorized_keys` and the source initiates the connection.
+- **Authentication:** Peer-to-peer SSH authentication. The source generates an Ed25519 keypair and creates a token. The destination ingests this token into the embedded `russh` daemon's memory (no `~/.ssh/authorized_keys` required), and the source initiates the connection.
 - **Auditing:** CI is equipped with `cargo-audit` to block builds if active vulnerabilities are detected in any crates. Exceptions are explicitly managed and documented.
 
 ## 4. Development Workflow
@@ -44,8 +45,7 @@ Responsible for calculating changes between directories to minimize data transfe
 3. **CI Pipelines:** Automated testing on MacOS, Windows, and Ubuntu.
 
 ## 5. Roadmap & Future Work
-- **Performance Enhancements:** Parallelize chunk hashing over multiple threads.
-- **Network Resiliency:** Improve automatic reconnection logic for spotty network environments.
+- **Multi-transfer UI Decoupling:** Decouple global UI setup models so users can configure Connection B while Connection A is actively transmitting.
 - **Dependency Management:** Address technical debt and unmaintained crates (e.g., replacing `ttf-parser` dependency in the UI).
 
 ---
@@ -56,25 +56,21 @@ Responsible for calculating changes between directories to minimize data transfe
 This section serves as a living document to track the current state of features, what needs work, and what remains to be implemented. For a detailed breakdown of items prioritized by dependency, necessity, and resource expenditure across our 5-phase roadmap, see the [Task Hierarchy & Phase Progression](TASK_HIERARCHY.md).
 
 ### ✅ Features Enabled and Functioning
-- **Cross-Platform Automated CI/CD:** Fully operational GitHub Actions pipelines (`release.yml` and `clear-cache.yml`), including matrix builds for Windows, macOS (Silicon & Intel), and Linux.
-- **Pre-Release Workflow:** Manual builds and pushes now automatically generate dynamic pre-release tags (e.g., `dev-build-<run_number>`), with automated cleanup of Actions cache.
-- **UI Persistence & State:** Connections list is now successfully saving/loading locally, overcoming the previous UI state issues.
-- **Out-Of-Band (OOB) Handshake:** Token generation, token parsing, and initial cryptographic handshake between peers over a temporary TCP port.
-- **SSH Keypair Management:** The application can generate Ed25519 keys, obfuscate them into tokens, and store the keys.
-- **Strict Pre-flight Checks:** Destination disk space and active `sshd` socket reachability tests are enforced before transmission.
-- **Cryptographic Heartbeat:** Continuous background polling and bidirectional P2P key ingestion to maintain active verified state across devices.
+- **Cross-Platform Automated CI/CD:** Fully operational GitHub Actions pipelines.
+- **Pre-Release Workflow:** Automated pre-release tags and cache cleanup.
+- **UI Persistence & State:** Connections list successfully saving/loading.
+- **Out-Of-Band (OOB) Handshake:** Token generation, parsing, and TCP handshake.
+- **P2P Embedded SSH Daemon:** App hosts a dedicated `russh` daemon, securely validating OOB Ed25519 keys without OS-level `sshd` dependencies.
+- **Dedicated QUIC Data Channel:** Bulk data is streamed over a direct `quinn` UDP/QUIC socket to bypass SSH TCP packet bottlenecks and saturate Gigabit Ethernet links.
+- **Network Resiliency:** Exponential backoff, socket re-negotiation, and atomic `seek()` alignment for resuming interrupted transfers cleanly.
+- **Native Hash Validation:** Instead of OS shell hashing, the destination daemon intercepts `simply-transfer-hash|` commands and natively computes local hashes using a 1MB buffer with large (600s) SSH execution timeouts.
+
 ### 🚧 Started, but Needing Work (In Progress)
-- **Data Transmission (Transfer Engine):** The scaffolding for the chunked file hashing and transmission exists, but the core data streaming needs further optimization and hardening.
-- **UI Progress Streaming:** Passing real-time transfer stats (MB/s, ETA) from the background `TransferEngine` to the Slint UI safely without blocking the main event loop.
-- **Snapshot Diffing Logic:** The `FallbackSnapshotDriver` is scaffolded, but its integration with the actual transfer phase to skip existing/unchanged files needs refinement.
+- **Multi-transfer UI Decoupling:** Decouple `connections.json` models from active background transfers.
 
 ### 🛑 Scaffolded, but Not Implemented
-- **Network Resiliency & Reconnection:** Logic to handle spotty network drops and resume a transfer exactly where it left off.
-- **[Multi-transfer Setup](FUTURE_ISSUE_MULTITRANSFER_SETUP.md):** Decouple UI state so the setup screen can be mapped to specific connections, allowing setup while another transfer is active.
-- **[Transport Efficiency Profiling](FUTURE_ISSUE_TRANSPORT_EFFICIENCY.md):** Identify bottleneck in SSH chunking/writes that caps Gigabit speeds at 2-3MB/s and implement pipeline optimizations.
+- **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion.
 
 ### ❓ Clarifications & Verifications Needed
-1. **OS Permissions for `~/.ssh`:** We need to verify that the application has the necessary permissions to write to `~/.ssh/authorized_keys` across all target OS environments (especially Windows/macOS strict sandbox modes) without requiring the user to manually intervene or run as root/Administrator.
-2. **SSH Daemon Dependency:** We need to clarify if the destination machine is required to have a native SSH Server (`sshd`) actively running on port 22. If so, we need to explicitly prompt the user to enable it, or bundle a lightweight internal SSH server in the application.
-3. **Firewalls & NAT Traversal:** The temporary TCP listener binds to a random port. We need to verify if Windows Firewall (or equivalent) will prompt the user and potentially block the handshake. We may need to look into UPnP or hole-punching for true P2P across different subnets.
-4. **Keyring Services:** Verify the reliability of the native OS keyring integration across different Linux desktop environments (GNOME Keyring vs KWallet) and Windows Credential Manager.
+1. **Firewalls & NAT Traversal:** The temporary TCP listener binds to a random port. We need to verify if Windows Firewall (or equivalent) will prompt the user and potentially block the handshake. We may need to look into UPnP or hole-punching for true P2P across different subnets.
+2. **Keyring Services:** Verify the reliability of the native OS keyring integration across different Linux desktop environments (GNOME Keyring vs KWallet) and Windows Credential Manager.

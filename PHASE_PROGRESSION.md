@@ -26,7 +26,7 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * ~~**[x]** Create custom SSH subsystem for data transmission (bypassing OS-level command execution).~~ *(Completed: 2026-10-03)*
 * ~~**[x]** Refactor source application to connect to the peer daemon instead of the OS's native SSH daemon.~~ *(Completed: 2026-10-03)*
 
-## Phase 4: High-Performance Transport & Resiliency (ACTIVE)
+## Phase 4: High-Performance Transport & Resiliency (COMPLETED)
 **Objective:** Saturate Gigabit Ethernet links and allow concurrent multi-session configurations over the new P2P Daemon.
 * ~~**[x]** **Custom Binary Stream Transit:** Implement raw binary data streaming over the P2P SSH tunnel.~~ *(DEPRECATED: 2026-10-03 - Superseded by OOB QUIC Channel due to SSH packet fragmentation limits)*
 * ~~**[x]** **Receiver Path Normalization:** Have the destination daemon handle local path writing natively to bypass Windows OS path-escaping bugs.~~ *(Completed: 2026-10-03)*
@@ -36,10 +36,35 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * ~~**[x]** **Fix UI Cancellation Loop:** Wrap the data transmission loop in a `tokio::select!` block listening to the `ControlSignal::Cancel` channel for instantaneous teardown.~~ *(Completed: 2026-10-03)*
 * ~~**[x]** **Fix Thread Panic on App Close:** Implement `std::process::exit(0)` bypass on application exit to prevent Tokio runtime TLS drop panics.~~ *(Completed: 2026-10-03)*
 * ~~**[x]** **Native Hash Validation:** Replace OS-level shell hashing (PowerShell/sha256sum) with a custom SSH interception layer (`simply-transfer-hash|`) to natively compute validation hashes on the destination daemon for perfect parity and reliability.~~ *(Completed: 2026-10-04)*
-* **[ ]** **Multi-transfer UI Decoupling:** Decouple global UI setup models (`connections.json`) from active background transfers so users can configure Connection B while Connection A is actively transmitting.
+* ~~**[x]** **Integrity Validation Deadlock Fix:** Implement bounds checking on validation loop and explicit OS file handle drops on QUIC receivers to prevent silent panics leaving batches stranded in "Completed" status.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Integrity Validation UI Fix:** Fix UI event loop premature teardown discarding final event buffer, ensuring `TransferComplete` events process gracefully.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Multi-transfer UI Decoupling:** Decouple global UI setup models (`connections.json`) from active background transfers so users can configure Connection B while Connection A is actively transmitting.~~ *(Completed: 2026-10-04)*
 
 ## Phase 5: Platform Polish & Technical Debt (Backlog)
 **Objective:** Enhance platform-specific user experience and track upstream ecosystem maintenance.
-* **[ ]** **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion (`Start-Process powershell -Verb RunAs`). The UAC prompt should remain, but the terminal window should be hidden.
+* ~~**[x]** **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion (`Start-Process powershell -Verb RunAs`). The UAC prompt should remain, but the terminal window should be hidden.~~ *(Completed: 2026-10-04)*
 * **[ ]** **Replace `ttf-parser` Dependency:** Monitor upstream `slint` / `winit` / `ab_glyph` dependencies to transition away from unmaintained `ttf-parser` (Advisory ID: `RUSTSEC-2026-0192`) when viable replacements emerge. Remove the `--ignore RUSTSEC-2026-0192` flag from CI once resolved.
 * ~~**[x]** **Out-of-Band Dedicated Data Channel (Option 3):** Evaluate shifting bulk data transit to a direct QUIC / TLS socket.~~ *(Migrated to Phase 4: 2026-10-03)*
+## Phase 6: UI/UX & Functional Polish (ACTIVE)
+**Objective:** Resolve layout overlaps, fix metric alignments, and ensure in-app functionality operates seamlessly.
+
+### Sub-phase A: Layout & Styling Enhancements
+* ~~**[x]** **Transfer Setup Layout:** Remove source/destination path field labels and extend the text boxes, relying entirely on placeholder text.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Active Transfer Fixed Positioning:** Implement fixed positioning for Upload, Download, and ETA labels and values to prevent jitter as numbers fluctuate.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Live Transfer Queue Scaling:** Convert file names and status fields into percentage-based columns tied to the window size to prevent overlaps. Shorten long file names with a trailing ellipsis and convert file sizes from bytes to MB.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Integrity Validation Scaling:** Apply the same percentage-based column layout (as Live Transfer Queue) to the file name and complete/validated fields in the Integrity Validation view.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Completed Files Layout:** Apply fixed positioning for the fields in the Completed files list.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Minimum Window Scaling:** Enforce a minimum fixed width/height for the app window while allowing scaling, so percentage-based layouts function correctly.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Dynamic Connection List:** Update the Dashboard connections list to use proportional scaling (percentage-based width) instead of a fixed pixel width.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Clean Active Transfer Layout:** Remove the overlapping phase progression text (`current_phase`) next to the MetricsGrid to ensure horizontal scaling fits cleanly.~~ *(Completed: 2026-10-04)*
+
+### Sub-phase B: State & Metrics Accuracy
+* **[x]** ~~**Destination Connection Status:** Fix the bug where destination connection details hang on "pending verification" and do not accurately update.~~ *(Completed: 2026-10-04)*
+* **[x]** ~~**Global ETA Calculation:** Ensure the file transfer ETA reflects the overall transfer completion rather than erratically estimating based on individual batches.~~ *(Completed: 2026-10-04)*
+
+### Sub-phase C: App Functionality & Polish
+* **[ ]** **Active Transfer Modal:** Add necessary functional controls to the active transfer popout modal.
+* **[ ]** **Pause Transfer Validation:** Validate and fix the functionality of the "Pause Transfer" button.
+* ~~**[x]** **Destination Active Transfer View:** Ensure the destination device displays the active transfer, including file progress, transmission metrics, and completion/validation status.~~ *(Completed: 2026-10-04)*
+* **[ ]** **In-App Logging:** Reinstate logs inside Settings > Logs so users no longer have to rely on terminal output.
+* **[ ]** **Windows Console Suppression:** Ensure launching the release version of the Windows app does not spawn a terminal/cmd window.
