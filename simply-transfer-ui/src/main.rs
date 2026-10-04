@@ -932,9 +932,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(ui) = ui_handle.upgrade() {
                                                 let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                                 for conn in &mut conns {
-                                                    let conn_actual_token = conn.token.to_string().split(';').next().unwrap_or(&conn.token).to_string();
-                                                    let incoming_actual_token = pub_key.split(';').next().unwrap_or(&pub_key).to_string();
-                                                    if conn_actual_token == incoming_actual_token {
+                                                    let mut conn_pub = String::new();
+                                                    let clean_token = conn.token.to_string();
+                                                    let clean_token = clean_token.split(';').next().unwrap_or(&clean_token).trim();
+                                                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(clean_token) {
+                                                        conn_pub = parsed.pub_key;
+                                                    }
+                                                    let incoming_actual_token = pub_key.split(';').next().unwrap_or(&pub_key).trim().to_string();
+                                                    
+                                                    if conn_pub == incoming_actual_token && !conn_pub.is_empty() {
                                                         tracing::info!("Found connection waiting for peer. Updating state to Connected.");
                                                         conn.host = new_host.clone().into();
                                                         conn.state = "Connected".into();
@@ -1035,6 +1041,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
+        let mut t_type = String::new();
         
         if is_remote
             && let Some(ui) = ui_weak.upgrade() {
@@ -1043,6 +1050,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if idx < conns.len() {
                     let host = conns[idx].host.to_string();
                     let token = conns[idx].token.to_string();
+                    t_type = conns[idx].transfer_type.to_string();
                     token_str = token.clone();
                     
                     if host.contains('@') {
@@ -1091,11 +1099,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let private_key_id = match token_str.split(';').nth(1) {
                             Some(key_id) => key_id.to_string(),
                             None => {
-                                let _ = notify_rust::Notification::new()
-                                    .summary("Connection Not Verified")
-                                    .body("Please verify the connection to exchange keys before fetching the directory.")
-                                    .show();
-                                return;
+                                if t_type == "Remote Transfer" {
+                                    let _ = notify_rust::Notification::new()
+                                        .summary("Connection Not Verified")
+                                        .body("Please verify the connection to exchange keys before fetching the directory.")
+                                        .show();
+                                    return;
+                                } else {
+                                    parsed.pub_key.clone()
+                                }
                             }
                         };
                         
@@ -1765,8 +1777,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ui.set_remote_verified_host(new_host.clone().into());
                                             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                             for conn in &mut conns {
-                                                let conn_actual_token = conn.token.to_string().split(';').next().unwrap_or(&conn.token).to_string();
-                                                let incoming_actual_token = token_clone.split(';').next().unwrap_or(&token_clone).to_string();
+                                                let conn_actual_token = conn.token.to_string();
+                                                let conn_actual_token = conn_actual_token.split(';').next().unwrap_or(&conn_actual_token).trim();
+                                                let incoming_actual_token = token_clone.split(';').next().unwrap_or(&token_clone).trim();
                                                 if conn_actual_token == incoming_actual_token {
                                                     tracing::info!("Updating UI connection to Connected state.");
                                                     conn.host = new_host.clone().into();
