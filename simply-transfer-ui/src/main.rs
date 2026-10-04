@@ -932,7 +932,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(ui) = ui_handle.upgrade() {
                                                 let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                                 for conn in &mut conns {
-                                                    if conn.state == "Waiting for peer..." {
+                                                    let conn_actual_token = conn.token.to_string().split(';').next().unwrap_or(&conn.token).to_string();
+                                                    let incoming_actual_token = pub_key.split(';').next().unwrap_or(&pub_key).to_string();
+                                                    if conn_actual_token == incoming_actual_token {
                                                         tracing::info!("Found connection waiting for peer. Updating state to Connected.");
                                                         conn.host = new_host.clone().into();
                                                         conn.state = "Connected".into();
@@ -941,6 +943,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 }
                                                 ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
                                                 ui.set_overall_status("Connection Confirmed".into());
+                                                ui.set_remote_verification_status("Connected".into());
                                                 
                                                 save_connections(&conns);
                                             }
@@ -1134,27 +1137,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             format!("ls -1p \"{}\"", resolved_path)
                         };
 
-                        if let Ok(output) = ssh_client.execute_command(&cmd).await {
-                            success = true;
-                            for line in output.lines() {
-                                let line = line.trim();
-                                if line.is_empty() { continue; }
-                                let is_dir = line.ends_with('/');
-                                let name = if is_dir { &line[..line.len()-1] } else { line };
-                                let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
-                                    format!("{}{}", resolved_path, name)
-                                } else {
-                                    let sep = if is_windows { "\\" } else { "/" };
-                                    format!("{}{}{}", resolved_path, sep, name)
-                                };
-                                nodes.push(FileNode {
-                                    name: name.into(),
-                                    is_dir,
-                                    path: full_path.into(),
-                                    is_selected: false,
-                                    depth: 0,
-                                    is_expanded: false,
-                                });
+                        match ssh_client.execute_command(&cmd).await {
+                            Ok(output) => {
+                                tracing::info!("PowerShell command executed successfully: {}", cmd);
+                                tracing::info!("Raw output length: {}", output.len());
+                                tracing::debug!("Raw output content: {:?}", output);
+                                success = true;
+                                for line in output.lines() {
+                                    let line = line.trim();
+                                    if line.is_empty() { continue; }
+                                    let is_dir = line.ends_with('/');
+                                    let name = if is_dir { &line[..line.len()-1] } else { line };
+                                    let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
+                                        format!("{}{}", resolved_path, name)
+                                    } else {
+                                        let sep = if is_windows { "\\" } else { "/" };
+                                        format!("{}{}{}", resolved_path, sep, name)
+                                    };
+                                    nodes.push(FileNode {
+                                        name: name.into(),
+                                        is_dir,
+                                        path: full_path.into(),
+                                        is_selected: false,
+                                        depth: 0,
+                                        is_expanded: false,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("PowerShell command failed: {} - Error: {}", cmd, e);
                             }
                         }
                     }
@@ -1754,7 +1765,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             ui.set_remote_verified_host(new_host.clone().into());
                                             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                             for conn in &mut conns {
-                                                if conn.token == token_clone {
+                                                let conn_actual_token = conn.token.to_string().split(';').next().unwrap_or(&conn.token).to_string();
+                                                let incoming_actual_token = token_clone.split(';').next().unwrap_or(&token_clone).to_string();
+                                                if conn_actual_token == incoming_actual_token {
                                                     tracing::info!("Updating UI connection to Connected state.");
                                                     conn.host = new_host.clone().into();
                                                     conn.token = appended_token.clone().into();
@@ -1762,6 +1775,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
                                                 }
                                             }
+                                            ui.set_remote_verification_status("Verified".into());
                                             ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
                                         }
                                     });
