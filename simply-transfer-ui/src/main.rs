@@ -915,7 +915,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     
                                     if !dest_pub.trim().is_empty() {
                                         tracing::info!("Ingesting dest_pub from TCP handshake");
-                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&format!("ssh-ed25519 {}", dest_pub.trim())) {
+                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim()) {
                                             if let Some(srv) = P2P_SERVER.get() {
                                                 srv.add_authorized_key(dest_pub_parsed).await;
                                                 tracing::info!("Authorized key added to global P2P Daemon!");
@@ -1755,7 +1755,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 
                                 // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
                                 tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
-                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(&format!("ssh-ed25519 {}", parsed.pub_key.trim())) {
+                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(parsed.pub_key.trim()) {
                                     if let Some(srv) = P2P_SERVER.get() {
                                         let srv_clone = srv.clone();
                                         tokio::spawn(async move {
