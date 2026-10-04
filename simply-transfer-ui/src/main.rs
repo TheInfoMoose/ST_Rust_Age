@@ -279,8 +279,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dest_user = "simply-transfer".to_string();
                         }
 
-                        if is_tcp_open && !dest_user.is_empty() {
-                            if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(actual_token) {
+                        if is_tcp_open && !dest_user.is_empty()
+                            && let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(actual_token) {
                                 let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                                 let key_to_use = my_pub_key.unwrap_or(&parsed.pub_key);
                                 if let Ok(priv_pem) = mgr.get_private_key_pem(key_to_use) {
@@ -308,7 +308,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
-                        }
                         
                         let new_state = if is_authenticated {
                             "Authenticated (Idle)"
@@ -516,7 +515,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let val_ssh_client = Arc::new(val_ssh_client);
             let snapshot_driver = Arc::new(FallbackSnapshotDriver);
 
-            let (batch_tx, mut batch_rx) = mpsc::channel(10000);
+            let (batch_tx, batch_rx) = mpsc::channel(10000);
 
             let global_tx_clone = global_tx.clone();
             tokio::spawn(async move {
@@ -915,12 +914,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     
                                     if !dest_pub.trim().is_empty() {
                                         tracing::info!("Ingesting dest_pub from TCP handshake");
-                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim()) {
-                                            if let Some(srv) = P2P_SERVER.get() {
+                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim())
+                                            && let Some(srv) = P2P_SERVER.get() {
                                                 srv.add_authorized_key(dest_pub_parsed).await;
                                                 tracing::info!("Authorized key added to global P2P Daemon!");
                                             }
-                                        }
                                         
                                         let my_user = "simply-transfer".to_string();
                                         let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
@@ -1093,7 +1091,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
 
                     
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str.split(';').next().unwrap_or(&token_str)) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         // Extract the sender's public key ID from the token (second part after semicolon)
                         let private_key_id = match token_str.split(';').nth(1) {
@@ -1334,7 +1332,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
                     
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token_str.split(';').next().unwrap_or(&token_str)) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         // Extract the sender's public key ID from the token (second part after semicolon)
                         let private_key_id = if let Some(parts) = token_str.split(';').nth(1) {
@@ -1755,15 +1753,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 
                                 // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
                                 tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
-                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(parsed.pub_key.trim()) {
-                                    if let Some(srv) = P2P_SERVER.get() {
+                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(parsed.pub_key.trim())
+                                    && let Some(srv) = P2P_SERVER.get() {
                                         let srv_clone = srv.clone();
                                         tokio::spawn(async move {
                                             srv_clone.add_authorized_key(dest_pub_parsed).await;
                                             tracing::info!("Receiver's authorized key added to global P2P Daemon!");
                                         });
                                     }
-                                }
 
                                 if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
                                     let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
