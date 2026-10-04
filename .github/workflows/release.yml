@@ -60,8 +60,8 @@ jobs:
       - name: Package Release (Windows)
         if: runner.os == 'Windows'
         run: |
-          mv target\${{ matrix.target }}\release\simply-transfer-ui.exe ${{ matrix.binary_name }}
-          Compress-Archive -Path ${{ matrix.binary_name }} -DestinationPath ${{ matrix.archive_name }}
+          mv -Force target\${{ matrix.target }}\release\simply-transfer-ui.exe ${{ matrix.binary_name }}
+          Compress-Archive -Force -Path ${{ matrix.binary_name }} -DestinationPath ${{ matrix.archive_name }}
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
