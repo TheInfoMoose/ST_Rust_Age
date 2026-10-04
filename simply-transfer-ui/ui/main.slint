@@ -529,7 +529,7 @@ export component MainWindow inherits Window {
                                             if root.is_remote_verified {
                                                 root.is_adding_connection = false;
                                                 let host_str = root.remote_verified_host != "" ? root.remote_verified_host : "Remote";
-                                                root.commit_connection({ name: "Remote", host: host_str, state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
+                                                root.commit_connection({ name: "Remote", host: host_str, state: "Connected", state_color: Colors.green, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
                                             }
                                         }
                                     }
