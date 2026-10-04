@@ -110,14 +110,15 @@ impl TransferEngine {
         // Phase 1: Destination Validation
         self.emit_phase(1, "Destination Validation".to_string())
             .await;
-        
-        let is_windows_dest = self.ssh_client.execute_command("cmd.exe /c echo Windows")
+
+        let is_windows_dest = self
+            .ssh_client
+            .execute_command("cmd.exe /c echo Windows")
             .await
             .map(|out| out.trim() == "Windows")
             .unwrap_or(false);
 
         let local_registry = self.build_local_registry(&active_source_dir).await?;
-
 
         // Pre-flight check: Destination disk space
         let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
@@ -185,13 +186,7 @@ impl TransferEngine {
                         format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
                     };
 
-                    // properly escape double quotes for shell: replace " with "" or \"
-                    let escaped_path = if is_windows_dest {
-                        full_remote_path.replace("\"", "\"\"")
-                    } else {
-                        full_remote_path.replace("\"", "\\\"")
-                    };
-                    remote_paths.push(format!("\"{}\"", escaped_path));
+                    remote_paths.push(full_remote_path);
 
                     let lp = if active_source_dir_val.is_file() {
                         active_source_dir_val.clone()
@@ -201,14 +196,7 @@ impl TransferEngine {
                     local_paths.push(lp);
                 }
 
-                let cmd = if is_windows_dest {
-                    format!(
-                        "powershell -NoProfile -Command \"Get-FileHash -Algorithm SHA256 {} | ForEach-Object {{ $_.Hash.ToLower() + '  ' + $_.Path }}\"",
-                        remote_paths.join(",")
-                    )
-                } else {
-                    format!("sha256sum {}", remote_paths.join(" "))
-                };
+                let cmd = format!("simply-transfer-hash|{}", remote_paths.join("|"));
 
                 let local_hashes = tokio::task::spawn_blocking(move || {
                     let mut hashes = Vec::new();
@@ -281,7 +269,7 @@ impl TransferEngine {
 
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
-                
+
         // Collect all unique parent directories first
         let mut parent_dirs = std::collections::HashSet::new();
         for file in &manifest.to_transfer {
@@ -311,7 +299,7 @@ impl TransferEngine {
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
-            
+
             if !parent.is_empty() {
                 parent_dirs.insert(parent);
             }
@@ -322,7 +310,8 @@ impl TransferEngine {
             let dirs: Vec<String> = parent_dirs.into_iter().collect();
             for chunk in dirs.chunks(50) {
                 if is_windows_dest {
-                    let dir_list: String = chunk.iter()
+                    let dir_list: String = chunk
+                        .iter()
                         .map(|d| format!("\"{}\"", d.replace("\"", "\"\"")))
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -332,7 +321,8 @@ impl TransferEngine {
                     );
                     let _ = self.ssh_client.execute_command(&cmd).await;
                 } else {
-                    let dir_list: String = chunk.iter()
+                    let dir_list: String = chunk
+                        .iter()
                         .map(|d| format!("\"{}\"", d.replace("\"", "\\\"")))
                         .collect::<Vec<_>>()
                         .join(" ");
@@ -349,7 +339,7 @@ impl TransferEngine {
 
         let stream_result = futures::stream::iter(manifest.to_transfer.iter())
             .map(|f| Ok::<_, EngineError>((f.clone(), local_registry.files[f].size)))
-            .try_for_each_concurrent(50, |(file, size)| {
+            .try_for_each_concurrent(5, |(file, size)| {
                 let rx_clone = self.control_rx.clone();
                 let ssh_client = self.ssh_client.clone();
                 let active_source_dir = active_source_dir.clone();
@@ -401,24 +391,47 @@ impl TransferEngine {
                         ))
                         .await;
 
-                    let file_progress = file.clone();
-                    let sender = event_sender.clone();
-                    let progress_cb = Box::new(move |progress: u64| {
-                        let _ = sender.try_send(TransferEvent::FileStatusChanged(
-                            file_progress.clone(),
-                            FileTransferStatus::Transferring { progress_bytes: progress, total_bytes: size },
-                        ));
-                    });
+                    let max_retries = 5;
+                    let mut offset = 0u64;
+                    
+                    for attempt in 0..=max_retries {
+                        let file_progress = file.clone();
+                        let sender = event_sender.clone();
+                        let progress_cb = Box::new(move |progress: u64| {
+                            let _ = sender.try_send(TransferEvent::FileStatusChanged(
+                                file_progress.clone(),
+                                FileTransferStatus::Transferring { progress_bytes: progress, total_bytes: size },
+                            ));
+                        });
 
-                    match ssh_client.upload_file(&local_path, &remote_path, Some(progress_cb)).await {
-                        Ok(_) => {
-                            let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Completed)).await;
-                            let _ = validation_tx.send(file.clone()).await;
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to transfer file {}: {}", file, e);
-                            let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Failed(e.to_string()))).await;
-                            failed_count_atomic.fetch_add(1, Ordering::Relaxed);
+                        let upload_cancel_rx = rx_clone.clone().unwrap_or_else(|| tokio::sync::watch::channel(ControlSignal::Run).1);
+                        match ssh_client.upload_file(&local_path, &remote_path, offset, Some(progress_cb), upload_cancel_rx).await {
+                            Ok(_) => {
+                                let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Completed)).await;
+                                let _ = validation_tx.send(file.clone()).await;
+                                break;
+                            }
+                            Err(e) => {
+                                if attempt == max_retries {
+                                    tracing::warn!("Failed to transfer file {} after {} attempts: {}", file, max_retries, e);
+                                    let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Failed(e.to_string()))).await;
+                                    failed_count_atomic.fetch_add(1, Ordering::Relaxed);
+                                    break;
+                                }
+                                
+                                // Exponential backoff before checking size and retrying
+                                let delay = std::time::Duration::from_millis(100 * 2u64.pow(attempt as u32));
+                                tokio::time::sleep(delay).await;
+
+                                // Query the remote server for current file size to resume
+                                if let Ok(remote_size) = ssh_client.get_remote_file_size(&remote_path, is_windows_dest).await {
+                                    offset = remote_size;
+                                    tracing::info!("Upload dropped, resuming file {} from offset {} (attempt {}/{})", file, offset, attempt + 1, max_retries);
+                                } else {
+                                    tracing::warn!("Could not determine remote size for {}, resuming from 0", file);
+                                    offset = 0;
+                                }
+                            }
                         }
                     }
 
@@ -430,7 +443,7 @@ impl TransferEngine {
         if let Err(e) = stream_result {
             return Err(e);
         }
-        
+
         failed_count += failed_count_atomic.load(Ordering::Relaxed);
 
         drop(validation_tx);
@@ -526,7 +539,9 @@ impl TransferEngine {
         let free_space: u64 = if is_windows {
             let powershell_cmd = format!(
                 r#"Get-PSDrive -Name (Split-Path "{}" -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
-                self.destination_dir.replace("\"", "\"\"").replace('\\', "\\\\")
+                self.destination_dir
+                    .replace("\"", "\"\"")
+                    .replace('\\', "\\\\")
             );
 
             self.ssh_client

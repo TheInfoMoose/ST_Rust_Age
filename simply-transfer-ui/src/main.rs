@@ -439,6 +439,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut total_files = 0;
                 let mut current_completed_files = 0;
                 let mut bytes_transferred_in_interval = 0;
+                let mut speed_ema: f32 = 0.0;
 
                 loop {
                     tokio::select! {
@@ -537,7 +538,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         status_txt = format!("Completed: {} Success, {} Failed", successful, failed);
                                         phase_txt = "Transfer Complete".to_string();
                                         active_phase = "Transfer Complete".to_string();
-                                        local_t_q.clear();
                                         let _ = notify_rust::Notification::new()
                                             .summary("Simply Transfer")
                                             .body(&format!("Transfer completed: {} successful, {} failed.", successful, failed))
@@ -546,7 +546,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     TransferEvent::TransferFailed(err) => {
                                         status_txt = format!("Transfer Aborted: {}", err);
                                         active_phase = "Transfer Complete".to_string();
-                                        local_t_q.clear();
                                         let _ = notify_rust::Notification::new()
                                             .summary("Simply Transfer Error")
                                             .body(&format!("Transfer aborted: {}", err))
@@ -560,11 +559,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if elapsed >= 0.1 {
                                 if bytes_transferred_in_interval > 0 {
                                     let speed_mbps = (bytes_transferred_in_interval as f32 / elapsed) / 1_048_576.0;
-                                    let dyn_latency = if speed_mbps > 5.0 { "<1ms" } else { "2-4ms" };
-                                    metric_upload_txt = format!("{:.1} MB/s", speed_mbps);
+                                    if speed_ema == 0.0 {
+                                        speed_ema = speed_mbps;
+                                    } else {
+                                        speed_ema = speed_ema * 0.7 + speed_mbps * 0.3;
+                                    }
+                                    let dyn_latency = if speed_ema > 5.0 { "<1ms" } else { "2-4ms" };
+                                    metric_upload_txt = format!("{:.1} MB/s", speed_ema);
                                     metric_latency_txt = dyn_latency.to_string();
                                     bytes_transferred_in_interval = 0;
                                 } else if elapsed >= 1.0 {
+                                    speed_ema = 0.0;
                                     metric_upload_txt = "0.0 MB/s".to_string();
                                     metric_latency_txt = "0ms".to_string();
                                 }
@@ -1743,5 +1748,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.run()?;
 
-    Ok(())
+    // Explicitly drop the context guard
+    drop(_guard);
+    
+    // Bypass the Tokio Thread Local drop panics by issuing a hard OS-level process exit
+    std::process::exit(0);
 }

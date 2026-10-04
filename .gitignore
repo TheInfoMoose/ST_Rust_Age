@@ -55,3 +55,4 @@ connections_macos.json
 connections_windows.json
 .ssh/
 .agents/
+QWEN_ARCHITECTURE_REFERENCE.md

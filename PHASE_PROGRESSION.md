@@ -28,13 +28,18 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 
 ## Phase 4: High-Performance Transport & Resiliency (ACTIVE)
 **Objective:** Saturate Gigabit Ethernet links and allow concurrent multi-session configurations over the new P2P Daemon.
-* ~~**[x]** **Custom Binary Stream Transit:** Implement raw binary data streaming over the P2P SSH tunnel (Option 2), replacing the bottlenecked SFTP module.~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Custom Binary Stream Transit:** Implement raw binary data streaming over the P2P SSH tunnel.~~ *(DEPRECATED: 2026-10-03 - Superseded by OOB QUIC Channel due to SSH packet fragmentation limits)*
 * ~~**[x]** **Receiver Path Normalization:** Have the destination daemon handle local path writing natively to bypass Windows OS path-escaping bugs.~~ *(Completed: 2026-10-03)*
-* **[ ]** **Network Resiliency & Reconnection:** Add exponential backoff, socket re-negotiation, and byte-level resume for interrupted transfers.
-* **[ ]** **Multi-transfer UI Decoupling:** Decouple global UI setup models (`connections.json`) from active background transfers so users can configure Connection B while Connection A is actively transmitting. (Migrated from `FUTURE_ISSUE_MULTITRANSFER_SETUP.md`).
+* ~~**[x]** **Network Resiliency & Reconnection:** Add exponential backoff, socket re-negotiation, and byte-level resume for interrupted transfers.~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Out-of-Band Dedicated Data Channel (QUIC Piviot):** Shift bulk data transit to a direct `quinn` UDP/QUIC socket. SSH will be used solely for the control/auth plane (passing ephemeral ports and OTP tokens). This will bypass `russh` packet bottlenecks entirely. (Moved from Phase 5 Backlog).~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Fix Hash Mismatch / Resume Corruption:** Replace `append(true)` with atomic `seek()` alignment on the remote daemon to prevent chunk-tearing corruption during reconnections.~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Fix UI Cancellation Loop:** Wrap the data transmission loop in a `tokio::select!` block listening to the `ControlSignal::Cancel` channel for instantaneous teardown.~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Fix Thread Panic on App Close:** Implement `std::process::exit(0)` bypass on application exit to prevent Tokio runtime TLS drop panics.~~ *(Completed: 2026-10-03)*
+* ~~**[x]** **Native Hash Validation:** Replace OS-level shell hashing (PowerShell/sha256sum) with a custom SSH interception layer (`simply-transfer-hash|`) to natively compute validation hashes on the destination daemon for perfect parity and reliability.~~ *(Completed: 2026-10-04)*
+* **[ ]** **Multi-transfer UI Decoupling:** Decouple global UI setup models (`connections.json`) from active background transfers so users can configure Connection B while Connection A is actively transmitting.
 
 ## Phase 5: Platform Polish & Technical Debt (Backlog)
 **Objective:** Enhance platform-specific user experience and track upstream ecosystem maintenance.
-* **[ ]** **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion (`Start-Process powershell -Verb RunAs`). The UAC prompt should remain, but the terminal window should be hidden. (Migrated from `FUTURE_ISSUE_POWERSHELL_PROMPT.md`).
-* **[ ]** **Replace `ttf-parser` Dependency:** Monitor upstream `slint` / `winit` / `ab_glyph` dependencies to transition away from unmaintained `ttf-parser` (Advisory ID: `RUSTSEC-2026-0192`) when viable replacements emerge. Remove the `--ignore RUSTSEC-2026-0192` flag from CI once resolved. (Migrated from `FUTURE_ISSUE_REPLACE_TTF_PARSER.md`).
-* **[ ]** **Out-of-Band Dedicated Data Channel (Option 3):** Evaluate shifting bulk data transit to a direct QUIC / TLS socket (using SSH merely as the control/auth plane) if Gigabit limits cannot be fully saturated by the P2P daemon.
+* **[ ]** **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion (`Start-Process powershell -Verb RunAs`). The UAC prompt should remain, but the terminal window should be hidden.
+* **[ ]** **Replace `ttf-parser` Dependency:** Monitor upstream `slint` / `winit` / `ab_glyph` dependencies to transition away from unmaintained `ttf-parser` (Advisory ID: `RUSTSEC-2026-0192`) when viable replacements emerge. Remove the `--ignore RUSTSEC-2026-0192` flag from CI once resolved.
+* ~~**[x]** **Out-of-Band Dedicated Data Channel (Option 3):** Evaluate shifting bulk data transit to a direct QUIC / TLS socket.~~ *(Migrated to Phase 4: 2026-10-03)*

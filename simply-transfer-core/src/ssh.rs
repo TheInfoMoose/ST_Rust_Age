@@ -33,12 +33,21 @@ pub trait SshClient: Send + Sync {
         passphrase: Option<&str>,
     ) -> Result<(), SshError>;
 
-    /// Open an SFTP session to upload a file, optionally reporting progress in bytes.
+    /// Query the size of a remote file for byte-level resume.
+    async fn get_remote_file_size(
+        &self,
+        remote_path: &str,
+        is_windows_dest: bool,
+    ) -> Result<u64, SshError>;
+
+    /// Open an SFTP/Binary session to upload a file, optionally reporting progress in bytes.
     async fn upload_file(
         &self,
-        local_path: &Path,
+        local_path: &std::path::Path,
         remote_path: &str,
+        offset: u64,
         progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+        cancel_rx: tokio::sync::watch::Receiver<crate::engine::ControlSignal>,
     ) -> Result<(), SshError>;
 
     /// Execute a remote command and return stdout.
@@ -89,11 +98,21 @@ impl SshClient for MockSshClient {
         }
     }
 
+    async fn get_remote_file_size(
+        &self,
+        _remote_path: &str,
+        _is_windows_dest: bool,
+    ) -> Result<u64, SshError> {
+        Ok(0)
+    }
+
     async fn upload_file(
         &self,
         local_path: &Path,
         remote_path: &str,
+        _offset: u64,
         _progress_callback: Option<Box<dyn Fn(u64) + Send>>,
+        _cancel_rx: tokio::sync::watch::Receiver<crate::engine::ControlSignal>,
     ) -> Result<(), SshError> {
         let dest = Path::new(remote_path);
         if let Some(parent) = dest.parent() {
