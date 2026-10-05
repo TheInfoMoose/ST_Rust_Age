@@ -166,7 +166,7 @@ component CompletedQueueRow inherits Rectangle {
     HorizontalBox {
         padding: 0; spacing: 10px;
         Rectangle { width: 60%; Text { width: 100%; text: root.file.name; overflow: elide; } }
-        Rectangle { width: 40%; Text { width: 100%; text: root.file.status; color: root.file.status_color; horizontal-alignment: right; overflow: elide; } }
+        Rectangle { width: 40%; Text { width: 100%; text: root.file.status; color: root.file.status_color; horizontal-alignment: center; overflow: elide; } }
     }
 }
 
@@ -176,10 +176,10 @@ component MetricsGrid inherits Rectangle {
     in property <string> eta: "0s";
 
     HorizontalBox {
-        padding: 0; spacing: 0;
-        Rectangle { width: 33%; HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; } Text { text: root.upload_speed; width: 80px; horizontal-alignment: left; } } }
-        Rectangle { width: 33%; HorizontalBox { padding: 0; alignment: center; Text { text: "Download:"; } Text { text: root.download_speed; width: 80px; horizontal-alignment: left; } } }
-        Rectangle { width: 34%; HorizontalBox { padding: 0; alignment: end; Text { text: "ETA:"; } Text { text: root.eta; width: 80px; horizontal-alignment: right; } } }
+        padding: 0; spacing: 20px; alignment: start;
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; } Text { text: root.upload_speed; width: 80px; horizontal-alignment: left; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Download:"; } Text { text: root.download_speed; width: 80px; horizontal-alignment: left; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "ETA:"; } Text { text: root.eta; width: 80px; horizontal-alignment: left; } }
     }
 }
 

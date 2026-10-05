@@ -1,5 +1,3 @@
-#![windows_subsystem = "windows"]
-
 use simply_transfer_core::engine::{
     ControlSignal, FileTransferStatus, TransferEngine, TransferEvent,
 };
@@ -123,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut target_conn_name = String::new();
         let mut transfer_start_time = tokio::time::Instant::now();
         let mut current_completed_bytes: u64 = 0;
+        let mut last_ui_update = std::time::Instant::now();
         
         while let Ok(event) = global_rx.recv().await {
             match event {
@@ -181,13 +180,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         
                         let local_t_q_clone = local_t_q.clone();
                         let ui_clone = ui_global_weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = ui_clone.upgrade() {
-                                ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(local_t_q_clone)).into());
-                                ui.set_metric_download(clone_mu.into());
-                                ui.set_metric_eta(clone_eta.into());
-                            }
-                        });
+                        
+                        if last_ui_update.elapsed() >= std::time::Duration::from_millis(500) {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_clone.upgrade() {
+                                    ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(local_t_q_clone)).into());
+                                    ui.set_metric_download(clone_mu.into());
+                                    ui.set_metric_eta(clone_eta.into());
+                                }
+                            });
+                            last_ui_update = std::time::Instant::now();
+                        }
                     } else if let simply_transfer_core::engine::FileTransferStatus::Completed = status {
                         local_t_q.clear();
                         let ui_clone = ui_global_weak.clone();
@@ -504,7 +507,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
                 let mut buffer = Vec::with_capacity(5000);
 
                 let mut local_t_q: Vec<TransferQueueItem> = Vec::new();
@@ -614,6 +617,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         name: file.into(),
                                                         status: format!("Failed: {}", err).into(),
                                                         status_color: slint::Color::from_rgb_u8(200, 50, 50),
+                                                    });
+                                                }
+                                            }
+                                            FileTransferStatus::Skipped => {
+                                                log_event("transfer", &format!("Skipped: {}", file));
+                                                if let Some(existing) = local_c_q.iter_mut().find(|i| i.name.as_str() == file.as_str()) {
+                                                    existing.status = "Skipped".into();
+                                                    existing.status_color = slint::Color::from_rgb_u8(200, 150, 50);
+                                                } else {
+                                                    local_c_q.push(CompletedItem {
+                                                        name: file.into(),
+                                                        status: "Skipped".into(),
+                                                        status_color: slint::Color::from_rgb_u8(200, 150, 50),
                                                     });
                                                 }
                                             }

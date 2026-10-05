@@ -131,12 +131,57 @@ impl TransferEngine {
         let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
         self.check_disk_space(total_required_bytes).await?;
 
-        // TODO: In a full implementation, send `local_registry` to the remote peer,
-        // and receive a `TransferManifest` back. For now, we mock the manifest
-        // assuming all files need to be transferred.
+        let mut to_skip = Vec::new();
+        let mut to_transfer = Vec::new();
+
+        let dest_paths: Vec<String> = local_registry
+            .files
+            .keys()
+            .map(|rel| {
+                std::path::Path::new(&self.destination_dir)
+                    .join(rel)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+
+        if !dest_paths.is_empty() {
+            let cmd = format!("simply-transfer-exists|{}", dest_paths.join("|"));
+            let result = self
+                .ssh_client
+                .execute_command(&cmd)
+                .await
+                .unwrap_or_default();
+
+            let existing_absolute: std::collections::HashSet<&str> =
+                result.trim().split('|').collect();
+
+            let dest_dir_path = std::path::Path::new(&self.destination_dir);
+            let mut existing_set = std::collections::HashSet::new();
+            for path in existing_absolute {
+                if let Ok(relative) = std::path::Path::new(path).strip_prefix(dest_dir_path) {
+                    existing_set.insert(relative.to_string_lossy().to_string());
+                } else {
+                    existing_set.insert(path.to_owned());
+                }
+            }
+
+            for (rel_path, file_info) in &local_registry.files {
+                // Ensure uniform path separators for the HashSet check
+                let normalized_rel = rel_path.replace("\\", "/");
+                if existing_set.contains(&normalized_rel) || existing_set.contains(rel_path) {
+                    to_skip.push(rel_path.clone());
+                } else {
+                    to_transfer.push(rel_path.clone());
+                }
+            }
+        } else {
+            to_transfer.extend(local_registry.files.keys().cloned());
+        }
+
         let manifest = TransferManifest {
-            to_transfer: local_registry.files.keys().cloned().collect(),
-            to_skip: Vec::new(),
+            to_transfer,
+            to_skip,
         };
 
         self.event_sender

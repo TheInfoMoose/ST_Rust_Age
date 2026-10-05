@@ -336,6 +336,28 @@ impl Handler for TransferServer {
         let cmd_str = String::from_utf8_lossy(program).to_string();
         tracing::info!("Executing command via exec_request: {}", cmd_str);
 
+        if cmd_str.starts_with("simply-transfer-exists|") {
+            let paths_str = cmd_str.trim_start_matches("simply-transfer-exists|");
+            let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
+
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let mut existing_paths = Vec::new();
+                for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
+                    if tokio::fs::metadata(path).await.is_ok() {
+                        existing_paths.push(path.clone());
+                    }
+                }
+                let response = format!("{}\n", existing_paths.join("|"));
+                let _ = handle
+                    .data(channel, russh::CryptoVec::from_slice(response.as_bytes()))
+                    .await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
         if cmd_str.starts_with("simply-transfer-hash|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-hash|");
             let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();

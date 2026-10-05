@@ -73,3 +73,11 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * ~~**[x]** **Destination Active Transfer View:** Ensure the destination device displays the active transfer, including file progress, transmission metrics, and completion/validation status.~~ *(Completed: 2026-10-04)*
 * **[ ]** **In-App Logging:** Reinstate logs inside Settings > Logs so users no longer have to rely on terminal output.
 * ~~**[x]** **Windows Console Suppression:** Ensure launching the release version of the Windows app does not spawn a terminal/cmd window.~~ *(Completed: 2026-10-04)*
+
+## Phase 7: Advanced Data Management & Automation (ACTIVE)
+**Objective:** Add robust preflight checks, advanced UI snapshot indicators, automated scheduling, and in-app diagnostic logs.
+
+* **[ ]** **Advanced Preflight Checks:** Enhance the preflight check to query the destination to ensure the files being sent do not already exist, preventing accidental overwrites.
+* **[ ]** **Snapshot Flagging (UI):** Add visual indicators to the file picker modal and the transfer queue to denote if a file will use snapshotting, specifically differentiating between VSS (Windows), LVM (Linux), and APFS (macOS).
+* **[ ]** **Transfer Scheduling & Sync:** Leverage the persistent P2P daemon to enable scheduled and recurring folder sync capabilities.
+* **[ ]** **In-App Logging Integration:** Ensure connection, transfer, sync, and scheduled transfer logs are persisted and fully accessible from within the Settings > Logs UI.
