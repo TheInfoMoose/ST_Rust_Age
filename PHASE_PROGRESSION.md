@@ -43,7 +43,7 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 ## Phase 5: Platform Polish & Technical Debt (Backlog)
 **Objective:** Enhance platform-specific user experience and track upstream ecosystem maintenance.
 * ~~**[x]** **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion (`Start-Process powershell -Verb RunAs`). The UAC prompt should remain, but the terminal window should be hidden.~~ *(Completed: 2026-10-04)*
-* **[ ]** **Replace `ttf-parser` Dependency:** Monitor upstream `slint` / `winit` / `ab_glyph` dependencies to transition away from unmaintained `ttf-parser` (Advisory ID: `RUSTSEC-2026-0192`) when viable replacements emerge. Remove the `--ignore RUSTSEC-2026-0192` flag from CI once resolved.
+* ~~**[x]** **Replace `ttf-parser` Dependency:** Monitor upstream `slint` / `winit` / `ab_glyph` dependencies to transition away from unmaintained `ttf-parser` (Advisory ID: `RUSTSEC-2026-0192`) when viable replacements emerge. Remove the `--ignore RUSTSEC-2026-0192` flag from CI once resolved.~~ *(Completed: 2026-10-04)*
 * ~~**[x]** **Out-of-Band Dedicated Data Channel (Option 3):** Evaluate shifting bulk data transit to a direct QUIC / TLS socket.~~ *(Migrated to Phase 4: 2026-10-03)*
 ## Phase 6: UI/UX & Functional Polish (ACTIVE)
 **Objective:** Resolve layout overlaps, fix metric alignments, and ensure in-app functionality operates seamlessly.
