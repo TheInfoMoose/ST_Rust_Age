@@ -1,0 +1,16 @@
+[
+  {
+    "mappings": [
+      [
+        "/home/zak/Documents/Stuff",
+        "C:\\Remote"
+      ],
+      [
+        "/home/zak/Modlists/HOH/plugins",
+        "C:\\Remote"
+      ]
+    ],
+    "sleep_duration": 60,
+    "transfer_type": "Continuous Sync"
+  }
+]

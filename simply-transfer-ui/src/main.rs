@@ -1055,7 +1055,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(clean_token) {
                                                         conn_pub = parsed.pub_key;
                                                     }
-                                                    let incoming_actual_token = pub_key.split(';').next().unwrap_or(&pub_key).trim().to_string();
+                                                    let incoming_actual_token = dest_pub.split(';').next().unwrap_or(&dest_pub).trim().to_string();
                                                     
                                                     if conn_pub == incoming_actual_token && !conn_pub.is_empty() {
                                                         tracing::info!("Found connection waiting for peer. Updating state to Connected.");
@@ -1697,14 +1697,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let popout_cancel_tx = cancel_tx.clone();
     ui.on_popout_session(move || {
         let popout = SessionPopout::new().unwrap();
-        
+
         let p_tx = popout_pause_tx.clone();
         popout.on_pause_transfer(move || {
             if let Ok(guard) = p_tx.lock()
                 && let Some(tx) = guard.as_ref()
             {
                 let current = tx.borrow().clone();
-                let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
+                let next = if current == ControlSignal::Pause {
+                    ControlSignal::Run
+                } else {
+                    ControlSignal::Pause
+                };
                 let _ = tx.send(next);
             }
         });
@@ -2067,7 +2071,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for item in arr {
                         if let (Some(src), Some(dest)) = (
                             item.get(0).and_then(|v| v.as_str()),
-                            item.get(1).and_then(|v| v.as_str())
+                            item.get(1).and_then(|v| v.as_str()),
                         ) {
                             slint_schedules.push(ScheduleData {
                                 id: format!("{}", idx).into(),
@@ -2092,16 +2096,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
                             let _ = std::fs::write("schedules.json", json_string);
                         }
-                        
+
                         // Update UI model
                         let mut slint_schedules = Vec::new();
                         for (new_idx, schedule) in schedules.iter().enumerate() {
-                            let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                            let transfer_type =
+                                schedule["transfer_type"].as_str().unwrap_or("").to_string();
                             if let Some(arr) = schedule["mappings"].as_array() {
                                 for item in arr {
                                     if let (Some(src), Some(dest)) = (
                                         item.get(0).and_then(|v| v.as_str()),
-                                        item.get(1).and_then(|v| v.as_str())
+                                        item.get(1).and_then(|v| v.as_str()),
                                     ) {
                                         slint_schedules.push(ScheduleData {
                                             id: format!("{}", new_idx).into(),
@@ -2114,7 +2119,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
+                            ui.set_schedules(
+                                std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into(),
+                            );
                         }
                     }
                 }
