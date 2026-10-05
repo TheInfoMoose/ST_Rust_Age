@@ -2032,6 +2032,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let ui_weak = ui.as_weak();
+    // Initialize Schedule Tab UI
+    if let Ok(contents) = std::fs::read_to_string("schedules.json") {
+        if let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+            let mut slint_schedules = Vec::new();
+            for (idx, schedule) in schedules.iter().enumerate() {
+                let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                if let Some(arr) = schedule["mappings"].as_array() {
+                    for item in arr {
+                        if let (Some(src), Some(dest)) = (
+                            item.get(0).and_then(|v| v.as_str()),
+                            item.get(1).and_then(|v| v.as_str())
+                        ) {
+                            slint_schedules.push(ScheduleData {
+                                id: format!("{}", idx).into(),
+                                source: src.into(),
+                                dest: dest.into(),
+                                r#type: transfer_type.clone().into(),
+                            });
+                        }
+                    }
+                }
+            }
+            ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
+        }
+    }
+
+    ui.on_delete_schedule(move |id| {
+        if let Ok(contents) = std::fs::read_to_string("schedules.json") {
+            if let Ok(mut schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+                if let Ok(idx) = id.as_str().parse::<usize>() {
+                    if idx < schedules.len() {
+                        schedules.remove(idx);
+                        if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
+                            let _ = std::fs::write("schedules.json", json_string);
+                        }
+                        
+                        // Update UI model
+                        let mut slint_schedules = Vec::new();
+                        for (new_idx, schedule) in schedules.iter().enumerate() {
+                            let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                            if let Some(arr) = schedule["mappings"].as_array() {
+                                for item in arr {
+                                    if let (Some(src), Some(dest)) = (
+                                        item.get(0).and_then(|v| v.as_str()),
+                                        item.get(1).and_then(|v| v.as_str())
+                                    ) {
+                                        slint_schedules.push(ScheduleData {
+                                            id: format!("{}", new_idx).into(),
+                                            source: src.into(),
+                                            dest: dest.into(),
+                                            r#type: transfer_type.clone().into(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ui) = ui_weak.upgrade() {
+                            ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     // Load and run persistent schedules
     {
         let global_tx_clone = global_tx.clone();

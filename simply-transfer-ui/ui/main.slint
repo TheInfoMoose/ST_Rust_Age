@@ -1,5 +1,12 @@
 import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox, Palette } from "std-widgets.slint";
 
+export struct ScheduleData {
+    id: string,
+    source: string,
+    dest: string,
+    type: string,
+}
+
 export struct TransferQueueItem {
     name: string,
     size: string,
@@ -263,6 +270,8 @@ export component MainWindow inherits Window {
     in property <string> os_memory_info: "RAM: Unknown";
     // Properties updated by backend
     in property <int> active_tab: 0;
+    in property <[ScheduleData]> schedules: [];
+    callback delete_schedule(string);
     in property <[TransferQueueItem]> transfer_queue: [];
     in property <[CompletedItem]> completed_queue: [];
     in property <string> overall_status: "Completed: 0 / 0 files";
@@ -559,6 +568,50 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+                }
+            }
+        }
+
+        Tab {
+            title: "Schedules";
+            
+            ListView {
+                // Remove height: 100% since ListView expands automatically in Slint
+                
+                for schedule in root.schedules: Rectangle {
+                    width: parent.width;
+                    height: 60px;
+                    border-width: 1px;
+                    border-color: #ccc;
+                    
+                    Text {
+                        text: schedule.source + " → " + schedule.dest + " (" + schedule.type + ")";
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    
+                    TouchArea {
+                        width: 80px;
+                        height: parent.height;
+                        x: parent.width - self.width;
+                        
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            background: #ff4444;
+                            
+                            Text {
+                                text: "Delete";
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                color: white;
+                            }
+                        }
+                        
+                        clicked => {
+                            root.delete_schedule(schedule.id);
+                        }
+                    }
                 }
             }
         }
