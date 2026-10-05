@@ -235,10 +235,33 @@ impl SshClient for RusshClient {
                     }
                 }
                 _ = cancel_rx.changed() => {
-                    if *cancel_rx.borrow() == crate::engine::ControlSignal::Cancel {
-                        let _ = bi.0.finish();
-                        connection.close(0u32.into(), b"cancelled");
-                        return Err(SshError::FileTransferFailed("Transfer cancelled".into()));
+                    let signal = cancel_rx.borrow().clone();
+                    match signal {
+                        crate::engine::ControlSignal::Cancel => {
+                            let _ = bi.0.finish();
+                            connection.close(0u32.into(), b"cancelled");
+                            return Err(SshError::FileTransferFailed("Transfer cancelled".into()));
+                        }
+                        crate::engine::ControlSignal::Pause => {
+                            // Wait for either Resume or Cancel
+                            loop {
+                                tokio::select! {
+                                    _ = cancel_rx.changed() => {
+                                        let pause_signal = cancel_rx.borrow().clone();
+                                        match pause_signal {
+                                            crate::engine::ControlSignal::Cancel => {
+                                                let _ = bi.0.finish();
+                                                connection.close(0u32.into(), b"cancelled");
+                                                return Err(SshError::FileTransferFailed("Transfer cancelled".into()));
+                                            }
+                                            crate::engine::ControlSignal::Run => break,
+                                            _ => continue, // Ignore other signals
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => continue, // Ignore other signals
                     }
                 }
             }

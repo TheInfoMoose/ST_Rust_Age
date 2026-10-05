@@ -68,10 +68,10 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 * **[x]** ~~**Global ETA Calculation:** Ensure the file transfer ETA reflects the overall transfer completion rather than erratically estimating based on individual batches.~~ *(Completed: 2026-10-04)*
 
 ### Sub-phase C: App Functionality & Polish
-* **[ ]** **Active Transfer Modal:** Add necessary functional controls to the active transfer popout modal.
-* **[ ]** **Pause Transfer Validation:** Validate and fix the functionality of the "Pause Transfer" button.
+* ~~**[x]** **Active Transfer Modal:** Add necessary functional controls to the active transfer popout modal.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **Pause Transfer Validation:** Validate and fix the functionality of the "Pause Transfer" button.~~ *(Completed: 2026-10-04)*
 * ~~**[x]** **Destination Active Transfer View:** Ensure the destination device displays the active transfer, including file progress, transmission metrics, and completion/validation status.~~ *(Completed: 2026-10-04)*
-* **[ ]** **In-App Logging:** Reinstate logs inside Settings > Logs so users no longer have to rely on terminal output.
+* ~~**[x]** **In-App Logging:** Reinstate logs inside Settings > Logs so users no longer have to rely on terminal output.~~ *(Completed: 2026-10-04)*
 * ~~**[x]** **Windows Console Suppression:** Ensure launching the release version of the Windows app does not spawn a terminal/cmd window.~~ *(Completed: 2026-10-04)*
 
 ## Phase 7: Advanced Data Management & Automation (ACTIVE)

@@ -218,11 +218,30 @@ export component SessionPopout inherits Window {
     in property <[TransferQueueItem]> transfer_queue;
     in property <string> phase_text: "Live Transfer Queue";
 
+    in-out property <bool> is_transfer_paused: false;
+    callback pause_transfer();
+    callback cancel_transfer();
+
     VerticalBox {
         Text { text: root.phase_text; font-weight: 700; font-size: 16px; }
         ListView {
             for file in root.transfer_queue : TransferQueueRow {
                 file: file;
+            }
+        }
+        HorizontalBox {
+            Button {
+                text: root.is_transfer_paused ? "Resume Transfer" : "Pause Transfer";
+                clicked => {
+                    root.is_transfer_paused = !root.is_transfer_paused;
+                    root.pause_transfer();
+                }
+            }
+            Button {
+                text: "Cancel Transfer";
+                clicked => {
+                    root.cancel_transfer();
+                }
             }
         }
     }

@@ -1693,8 +1693,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let popout_pause_tx = pause_tx.clone();
+    let popout_cancel_tx = cancel_tx.clone();
     ui.on_popout_session(move || {
         let popout = SessionPopout::new().unwrap();
+        
+        let p_tx = popout_pause_tx.clone();
+        popout.on_pause_transfer(move || {
+            if let Ok(guard) = p_tx.lock()
+                && let Some(tx) = guard.as_ref()
+            {
+                let current = tx.borrow().clone();
+                let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
+                let _ = tx.send(next);
+            }
+        });
+
+        let c_tx = popout_cancel_tx.clone();
+        popout.on_cancel_transfer(move || {
+            if let Ok(mut guard) = c_tx.lock()
+                && let Some(tx) = guard.take()
+            {
+                let _ = tx.send(ControlSignal::Cancel);
+            }
+        });
+
         popout.show().unwrap();
         Box::leak(Box::new(popout));
     });
