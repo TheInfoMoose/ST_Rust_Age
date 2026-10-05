@@ -15,6 +15,10 @@ impl VssSnapshotDriver {
 }
 
 impl SnapshotDriver for VssSnapshotDriver {
+    fn snapshot_type(&self) -> &'static str {
+        "VSS"
+    }
+
     fn create_snapshot(&self, volume_path: &Path) -> Result<Snapshot, SnapshotError> {
         let drive = volume_path
             .to_string_lossy()

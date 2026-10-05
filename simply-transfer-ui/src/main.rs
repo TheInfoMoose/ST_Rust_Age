@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut transfer_start_time = tokio::time::Instant::now();
         let mut current_completed_bytes: u64 = 0;
         let mut last_ui_update = std::time::Instant::now();
+        let mut current_snapshot_type = String::from("Live");
         
         while let Ok(event) = global_rx.recv().await {
             match event {
@@ -152,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             name: file.clone().into(),
                             size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
                             progress,
+                            snapshot_type: current_snapshot_type.clone().into(),
                         };
                         
                         if local_t_q.is_empty() {
@@ -528,6 +530,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut current_file_size = 0;
                 let mut bytes_transferred_in_interval = 0;
                 let mut speed_ema: f32 = 0.0;
+                let mut current_snapshot_type = String::from("Live");
 
                 let mut batch_rx_opt = Some(batch_rx);
                 loop {
@@ -566,6 +569,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     name: file.into(),
                                                     size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
                                                     progress,
+                                                    snapshot_type: current_snapshot_type.clone().into(),
                                                 }];
                                                 
                                                 if progress_bytes > last_progress_bytes {
@@ -636,10 +640,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             _ => {}
                                         }
                                     }
-                                    TransferEvent::ManifestGenerated { total_files: total, total_bytes } => {
+                                    TransferEvent::ManifestGenerated { total_files: total, total_bytes, snapshot_type } => {
                                         total_files = total;
                                         overall_total_bytes = total_bytes;
                                         status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
+                                        current_snapshot_type = snapshot_type;
                                     }
                                     TransferEvent::TransferComplete { successful, failed } => {
                                         status_txt = format!("Completed: {} Success, {} Failed", successful, failed);

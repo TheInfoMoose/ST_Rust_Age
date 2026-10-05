@@ -4,6 +4,7 @@ export struct TransferQueueItem {
     name: string,
     size: string,
     progress: float,
+    snapshot_type: string,
 }
 
 export struct CompletedItem {
@@ -154,9 +155,27 @@ component TransferQueueRow inherits Rectangle {
     height: 25px;
     HorizontalBox {
         padding: 0; spacing: 10px;
-        Rectangle { width: 50%; Text { width: 100%; text: root.file.name; overflow: elide; } }
+        Rectangle { width: 45%; Text { width: 100%; text: root.file.name; overflow: elide; } }
         Rectangle { width: 20%; Text { width: 100%; text: root.file.size; horizontal-alignment: right; overflow: elide; } }
-        Rectangle { width: 30%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
+        Rectangle { width: 25%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
+        Rectangle {
+            width: 10%;
+            height: 18px;
+            border-radius: 4px;
+            background: root.file.snapshot_type == "VSS" ? #4CAF50 : 
+                        root.file.snapshot_type == "APFS" ? #2196F3 : 
+                        root.file.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+            Text {
+                text: root.file.snapshot_type;
+                color: white;
+                font-size: 10px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
     }
 }
 

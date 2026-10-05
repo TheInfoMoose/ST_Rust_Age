@@ -49,6 +49,7 @@ pub enum TransferEvent {
     ManifestGenerated {
         total_files: usize,
         total_bytes: u64,
+        snapshot_type: String,
     },
     FileStatusChanged(String, FileTransferStatus),
     TransferComplete {
@@ -188,6 +189,7 @@ impl TransferEngine {
             .send(TransferEvent::ManifestGenerated {
                 total_files: manifest.to_transfer.len(),
                 total_bytes: total_required_bytes,
+                snapshot_type: self.snapshot_driver.snapshot_type().to_string(),
             })
             .await
             .ok();

@@ -16,6 +16,10 @@ impl LinuxSnapshotDriver {
 }
 
 impl SnapshotDriver for LinuxSnapshotDriver {
+    fn snapshot_type(&self) -> &'static str {
+        "LVM"
+    }
+
     fn create_snapshot(&self, volume_path: &Path) -> Result<Snapshot, SnapshotError> {
         let snap_id = format!(
             "st_snap_{}",
