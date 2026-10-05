@@ -185,11 +185,17 @@ impl TransferEngine {
             to_skip,
         };
 
+        let final_snapshot_type = if snapshot.is_some() {
+            self.snapshot_driver.snapshot_type().to_string()
+        } else {
+            "Live".to_string()
+        };
+
         self.event_sender
             .send(TransferEvent::ManifestGenerated {
                 total_files: manifest.to_transfer.len(),
                 total_bytes: total_required_bytes,
-                snapshot_type: self.snapshot_driver.snapshot_type().to_string(),
+                snapshot_type: final_snapshot_type,
             })
             .await
             .ok();

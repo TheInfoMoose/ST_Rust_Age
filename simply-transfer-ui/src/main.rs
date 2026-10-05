@@ -87,6 +87,21 @@ use std::sync::OnceLock;
 static P2P_SERVER: OnceLock<simply_transfer_core::russh_server::TransferServer> = OnceLock::new();
 
 #[rustfmt::skip]
+fn get_file_snapshot_type(filename: &str) -> String {
+    let ext_lower = std::path::Path::new(filename)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    
+    let snapshot_extensions = ["qbw", "qbb", "pst", "mdf", "ldf", "ndf", "vhd", "vhdx", "vmdk"];
+    
+    if snapshot_extensions.contains(&ext_lower.as_str()) {
+        simply_transfer_snapshots::get_native_driver().snapshot_type().to_string()
+    } else {
+        "".to_string()
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
@@ -95,26 +110,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()
         .unwrap();
-        
+
     // Enter the runtime context so `tokio::spawn` works in Slint callbacks
     let _guard = rt.enter();
 
-    let (global_tx, mut global_rx) = tokio::sync::broadcast::channel::<simply_transfer_core::engine::TransferEvent>(1000);
+    let (global_tx, mut global_rx) =
+        tokio::sync::broadcast::channel::<simply_transfer_core::engine::TransferEvent>(1000);
 
     let host_key = russh_keys::key::KeyPair::generate_ed25519().unwrap();
     let mut p2p_server = simply_transfer_core::russh_server::TransferServer::new();
     p2p_server.set_event_sender(global_tx.clone());
     P2P_SERVER.set(p2p_server.clone()).ok();
-    
+
     rt.spawn(async move {
-        if let Err(e) = simply_transfer_core::russh_server::run_server(2222, p2p_server, host_key).await {
+        if let Err(e) =
+            simply_transfer_core::russh_server::run_server(2222, p2p_server, host_key).await
+        {
             tracing::error!("P2P Daemon globally crashed: {}", e);
         }
     });
 
     let ui = MainWindow::new()?;
     let ui_global_weak = ui.as_weak();
-    
+
     tokio::spawn(async move {
         let mut local_t_q: Vec<TransferQueueItem> = Vec::new();
         let mut overall_total_bytes: u64 = 0;
@@ -123,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut current_completed_bytes: u64 = 0;
         let mut last_ui_update = std::time::Instant::now();
         let mut current_snapshot_type = String::from("Live");
-        
+
         while let Ok(event) = global_rx.recv().await {
             match event {
                 simply_transfer_core::engine::TransferEvent::TransferStarted(peer) => {
@@ -132,12 +150,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     current_completed_bytes = 0;
                     target_conn_name = peer.clone();
                     transfer_start_time = tokio::time::Instant::now();
-                    
+
                     let ui_clone = ui_global_weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_clone.upgrade() {
                             ui.set_active_tab(1); // Assuming 1 is Dashboard or Active Transfer
-                            ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+                            ui.set_transfer_queue(
+                                std::rc::Rc::new(slint::VecModel::from(Vec::new())).into(),
+                            );
                             ui.set_phase_text("Live Transfer Queue".into());
                             ui.set_overall_status("Receiving...".into());
                             ui.set_current_phase("Receiving".into());
@@ -145,60 +165,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
                 simply_transfer_core::engine::TransferEvent::FileStatusChanged(file, status) => {
-                    if let simply_transfer_core::engine::FileTransferStatus::Transferring { progress_bytes, total_bytes } = status {
+                    if let simply_transfer_core::engine::FileTransferStatus::Transferring {
+                        progress_bytes,
+                        total_bytes,
+                    } = status
+                    {
                         overall_total_bytes = overall_total_bytes.max(total_bytes);
-                        let progress = if total_bytes > 0 { progress_bytes as f32 / total_bytes as f32 } else { 0.0 };
-                        
+                        let progress = if total_bytes > 0 {
+                            progress_bytes as f32 / total_bytes as f32
+                        } else {
+                            0.0
+                        };
+
                         let item = TransferQueueItem {
                             name: file.clone().into(),
                             size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
                             progress,
                             snapshot_type: current_snapshot_type.clone().into(),
                         };
-                        
+
                         if local_t_q.is_empty() {
                             local_t_q.push(item);
                         } else {
                             local_t_q[0] = item;
                         }
-                        
+
                         current_completed_bytes = progress_bytes;
-                        
+
                         let elapsed_secs = transfer_start_time.elapsed().as_secs();
-                        let clone_eta = if current_completed_bytes > 0 && overall_total_bytes > current_completed_bytes && elapsed_secs > 0 {
-                            let bytes_per_sec = current_completed_bytes as f64 / elapsed_secs as f64;
-                            let remaining_bytes = overall_total_bytes.saturating_sub(current_completed_bytes);
+                        let clone_eta = if current_completed_bytes > 0
+                            && overall_total_bytes > current_completed_bytes
+                            && elapsed_secs > 0
+                        {
+                            let bytes_per_sec =
+                                current_completed_bytes as f64 / elapsed_secs as f64;
+                            let remaining_bytes =
+                                overall_total_bytes.saturating_sub(current_completed_bytes);
                             let remaining_secs = (remaining_bytes as f64 / bytes_per_sec) as u64;
-                            format!("{:02}:{:02}:{:02}", remaining_secs / 3600, (remaining_secs % 3600) / 60, remaining_secs % 60)
+                            format!(
+                                "{:02}:{:02}:{:02}",
+                                remaining_secs / 3600,
+                                (remaining_secs % 3600) / 60,
+                                remaining_secs % 60
+                            )
                         } else {
                             "Calculating...".to_string()
                         };
-                        
+
                         let clone_mu = if elapsed_secs > 0 {
-                            format!("{:.2} MB/s", (current_completed_bytes as f64 / 1_048_576.0) / elapsed_secs as f64)
+                            format!(
+                                "{:.2} MB/s",
+                                (current_completed_bytes as f64 / 1_048_576.0)
+                                    / elapsed_secs as f64
+                            )
                         } else {
                             "0.0 MB/s".to_string()
                         };
-                        
+
                         let local_t_q_clone = local_t_q.clone();
                         let ui_clone = ui_global_weak.clone();
-                        
+
                         if last_ui_update.elapsed() >= std::time::Duration::from_millis(500) {
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_clone.upgrade() {
-                                    ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(local_t_q_clone)).into());
+                                    ui.set_transfer_queue(
+                                        std::rc::Rc::new(slint::VecModel::from(local_t_q_clone))
+                                            .into(),
+                                    );
                                     ui.set_metric_download(clone_mu.into());
                                     ui.set_metric_eta(clone_eta.into());
                                 }
                             });
                             last_ui_update = std::time::Instant::now();
                         }
-                    } else if let simply_transfer_core::engine::FileTransferStatus::Completed = status {
+                    } else if let simply_transfer_core::engine::FileTransferStatus::Completed =
+                        status
+                    {
                         local_t_q.clear();
                         let ui_clone = ui_global_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_clone.upgrade() {
-                                ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+                                ui.set_transfer_queue(
+                                    std::rc::Rc::new(slint::VecModel::from(Vec::new())).into(),
+                                );
                                 ui.set_overall_status("Completed".into());
                                 ui.set_current_phase("Idle".into());
                             }
@@ -211,17 +260,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let loaded = load_connections();
-    let slint_conns: Vec<ConnectionItem> = loaded.into_iter().map(|c| ConnectionItem {
-        name: c.name.into(),
-        host: c.host.into(),
-        state: "Checking...".into(),
-        state_color: slint::Color::from_rgb_u8(128, 128, 128),
-        transfer_rate: c.transfer_rate.into(),
-        duration: c.duration.into(),
-        eta: c.eta.into(),
-        transfer_type: c.transfer_type.into(),
-        token: c.token.into(),
-    }).collect();
+    let slint_conns: Vec<ConnectionItem> = loaded
+        .into_iter()
+        .map(|c| ConnectionItem {
+            name: c.name.into(),
+            host: c.host.into(),
+            state: "Checking...".into(),
+            state_color: slint::Color::from_rgb_u8(128, 128, 128),
+            transfer_rate: c.transfer_rate.into(),
+            duration: c.duration.into(),
+            eta: c.eta.into(),
+            transfer_type: c.transfer_type.into(),
+            token: c.token.into(),
+        })
+        .collect();
     ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
 
     let ui_weak_hb = ui.as_weak();
@@ -229,7 +281,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             interval.tick().await;
-            
+
             let (tx, rx) = tokio::sync::oneshot::channel();
             let ui_weak_clone = ui_weak_hb.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -237,16 +289,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let conns: Vec<_> = ui.get_connections().iter().collect();
                     let mut conn_data = Vec::new();
                     for (i, c) in conns.iter().enumerate() {
-                        conn_data.push((i, c.host.to_string(), c.token.to_string(), c.state.to_string(), c.transfer_type.to_string()));
+                        conn_data.push((
+                            i,
+                            c.host.to_string(),
+                            c.token.to_string(),
+                            c.state.to_string(),
+                            c.transfer_type.to_string(),
+                        ));
                     }
                     let _ = tx.send(conn_data);
                 }
             });
-            
+
             if let Ok(conn_data) = rx.await {
                 let mut updates = Vec::new();
                 for (i, host, token, state, transfer_type) in conn_data {
-                    if state.starts_with("Transmitting") || state == "Waiting for peer..." || state == "Connected" {
+                    if state.starts_with("Transmitting")
+                        || state == "Waiting for peer..."
+                        || state == "Connected"
+                    {
                         continue;
                     }
                     if transfer_type != "Remote Transfer" {
@@ -255,29 +316,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut target_ip = String::new();
                     let token_parts: Vec<&str> = token.split(';').collect();
                     let actual_token = token_parts[0];
-                    let my_pub_key = if token_parts.len() > 1 { Some(token_parts[1]) } else { None };
+                    let my_pub_key = if token_parts.len() > 1 {
+                        Some(token_parts[1])
+                    } else {
+                        None
+                    };
 
                     if host.contains('@') {
                         target_ip = host.split('@').nth(1).unwrap_or("").to_string();
                     } else if host == "Remote" {
-                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(actual_token) {
+                        if let Ok(parsed) =
+                            simply_transfer_crypto::token::ConnectionToken::parse(actual_token)
+                        {
                             target_ip = parsed.ip;
                         }
                     } else {
                         target_ip = host.clone();
                     }
-                    
+
                     if !target_ip.is_empty() {
                         let is_tcp_open = tokio::time::timeout(
                             std::time::Duration::from_secs(2),
-                            tokio::net::TcpStream::connect(format!("{}:2222", target_ip))
-                        ).await.map(|res| res.is_ok()).unwrap_or(false);
-                        
+                            tokio::net::TcpStream::connect(format!("{}:2222", target_ip)),
+                        )
+                        .await
+                        .map(|res| res.is_ok())
+                        .unwrap_or(false);
+
                         let mut is_authenticated = false;
                         let mut dest_user = String::new();
                         if host.contains('@') {
                             dest_user = host.split('@').next().unwrap_or("").to_string();
-                        } else if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(actual_token) {
+                        } else if let Ok(parsed) =
+                            simply_transfer_crypto::token::ConnectionToken::parse(actual_token)
+                        {
                             if let Some(u) = parsed.user {
                                 dest_user = u;
                             } else {
@@ -287,21 +359,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             dest_user = "simply-transfer".to_string();
                         }
 
-                        if is_tcp_open && !dest_user.is_empty()
-                            && let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(actual_token) {
-                                let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                                let key_to_use = my_pub_key.unwrap_or(&parsed.pub_key);
-                                if let Ok(priv_pem) = mgr.get_private_key_pem(key_to_use) {
-                                    let mut ssh = simply_transfer_core::russh_client::RusshClient::new();
-                                    use simply_transfer_core::ssh::SshClient;
-                                    if ssh.connect(&target_ip, 2222).await.is_ok()
-                                        && ssh.authenticate_publickey(&dest_user, &priv_pem, None).await.is_ok()
-                                    {
-                                        is_authenticated = true;
-                                    }
+                        if is_tcp_open
+                            && !dest_user.is_empty()
+                            && let Ok(parsed) =
+                                simply_transfer_crypto::token::ConnectionToken::parse(actual_token)
+                        {
+                            let mgr = simply_transfer_crypto::keys::KeyPairManager::new(
+                                "com.simplytransfer.app",
+                            );
+                            let key_to_use = my_pub_key.unwrap_or(&parsed.pub_key);
+                            if let Ok(priv_pem) = mgr.get_private_key_pem(key_to_use) {
+                                let mut ssh =
+                                    simply_transfer_core::russh_client::RusshClient::new();
+                                use simply_transfer_core::ssh::SshClient;
+                                if ssh.connect(&target_ip, 2222).await.is_ok()
+                                    && ssh
+                                        .authenticate_publickey(&dest_user, &priv_pem, None)
+                                        .await
+                                        .is_ok()
+                                {
+                                    is_authenticated = true;
                                 }
                             }
-                        
+                        }
+
                         let new_state = if is_authenticated {
                             "Connected"
                         } else if is_tcp_open {
@@ -309,25 +390,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             "Disconnected"
                         };
-                        
+
                         if new_state != state {
                             updates.push((i, new_state.to_string(), is_authenticated));
                         }
                     }
                 }
-                
+
                 if !updates.is_empty() {
                     let ui_weak_clone = ui_weak_hb.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak_clone.upgrade() {
-                            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                            let mut conns: Vec<ConnectionItem> =
+                                ui.get_connections().iter().collect();
                             for (i, new_state, is_connected) in updates {
                                 if i < conns.len() {
                                     conns[i].state = new_state.into();
-                                    conns[i].state_color = if is_connected { slint::Color::from_rgb_u8(50, 200, 50) } else { slint::Color::from_rgb_u8(200, 50, 50) };
+                                    conns[i].state_color = if is_connected {
+                                        slint::Color::from_rgb_u8(50, 200, 50)
+                                    } else {
+                                        slint::Color::from_rgb_u8(200, 50, 50)
+                                    };
                                 }
                             }
-                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                            ui.set_connections(
+                                std::rc::Rc::new(slint::VecModel::from(conns)).into(),
+                            );
                         }
                     });
                 }
@@ -352,9 +440,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_handle = ui.as_weak();
-    
+
     // Shared control channel for the active transfer
-    let active_control_tx: Arc<Mutex<Option<watch::Sender<ControlSignal>>>> = Arc::new(Mutex::new(None));
+    let active_control_tx: Arc<Mutex<Option<watch::Sender<ControlSignal>>>> =
+        Arc::new(Mutex::new(None));
     let start_tx = active_control_tx.clone();
     let pause_tx = active_control_tx.clone();
     let cancel_tx = active_control_tx.clone();
@@ -1010,17 +1099,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_browser_is_remote(false);
             ui.set_dest_browser_is_remote(true);
             ui.set_browser_target_idx(idx);
-            
+
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
-            
+
             let mut start_source = "/".to_string();
             if idx < mappings.len() && !mappings[idx].source.is_empty() {
                 start_source = mappings[idx].source.to_string();
             }
             ui.set_browser_current_path(start_source.clone().into());
             ui.invoke_fetch_directory(start_source.into(), false, false);
-            
+
             let mut start_dest = "/".to_string();
             if idx < mappings.len() && !mappings[idx].destination.is_empty() {
                 start_dest = mappings[idx].destination.to_string();
@@ -1029,7 +1118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.invoke_fetch_directory(start_dest.into(), true, true);
         }
     });
-    
+
     let ui_weak = ui.as_weak();
     ui.on_fetch_directory(move |path, is_remote, is_dest| {
         let ui_weak = ui_weak.clone();
@@ -1154,12 +1243,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         format!("{}{}{}", resolved_path, sep, name)
                                     };
                                     nodes.push(FileNode {
-                                        name: name.into(),
+                                        name: name.clone().into(),
                                         is_dir,
                                         path: full_path.into(),
                                         is_selected: false,
                                         depth: 0,
                                         is_expanded: false,
+                                        snapshot_type: get_file_snapshot_type(&name).into(),
                                     });
                                 }
                             }
@@ -1178,6 +1268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         is_selected: false,
                         depth: 0,
                         is_expanded: false,
+                        snapshot_type: "".into(),
                     });
                 }
             } else if let Ok(entries) = std::fs::read_dir(&path_str) {
@@ -1185,6 +1276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
                     nodes.push(FileNode {
+                        snapshot_type: get_file_snapshot_type(&name).into(),
                         name: name.into(),
                         is_dir,
                         path: entry.path().to_string_lossy().to_string().into(),
@@ -1225,9 +1317,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 ui.get_browser_nodes().iter().collect()
             };
-            
-            let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path);
-            
+
+            let index = browser_nodes
+                .iter()
+                .position(|n| n.path.as_str() == node_path);
+
             if let Some(index) = index {
                 let mut new_nodes = Vec::new();
                 for i in 0..=index {
@@ -1237,19 +1331,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     new_nodes.push(n);
                 }
-                
+
                 let current_depth = browser_nodes[index].depth;
                 let mut i = index + 1;
                 while i < browser_nodes.len() && browser_nodes[i].depth > current_depth {
                     i += 1;
                 }
-                
+
                 for j in i..browser_nodes.len() {
                     new_nodes.push(browser_nodes[j].clone());
                 }
-                
+
                 if is_dest {
-                    ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                    ui.set_dest_browser_nodes(
+                        std::rc::Rc::new(slint::VecModel::from(new_nodes)).into(),
+                    );
                 } else {
                     ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
                 }
@@ -1378,6 +1474,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     is_selected: false,
                                     depth,
                                     is_expanded: false,
+                                    snapshot_type: get_file_snapshot_type(&name).into(),
                                 });
                             }
                         }
@@ -1388,6 +1485,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
                     nodes.push(FileNode {
+                        snapshot_type: get_file_snapshot_type(&name).into(),
                         name: name.into(),
                         is_dir,
                         path: entry.path().to_string_lossy().to_string().into(),
@@ -1444,7 +1542,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_is_browser_open(false);
             let idx = ui.get_browser_target_idx() as usize;
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
-            
+
             if idx < mappings.len() {
                 let dest = if dest_paths.row_count() > 0 {
                     dest_paths.row_data(0).unwrap().to_string()
@@ -1455,18 +1553,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if source_paths.row_count() > 0 {
                     mappings[idx].source = source_paths.row_data(0).unwrap();
                     mappings[idx].destination = dest.clone().into();
-                    
+
                     for i in 1..source_paths.row_count() {
-                        mappings.insert(idx + i, DirectoryMapping {
-                            source: source_paths.row_data(i).unwrap(),
-                            destination: dest.clone().into(),
-                        });
+                        mappings.insert(
+                            idx + i,
+                            DirectoryMapping {
+                                source: source_paths.row_data(i).unwrap(),
+                                destination: dest.clone().into(),
+                            },
+                        );
                     }
                 } else {
                     mappings[idx].source = ui.get_browser_current_path();
                     mappings[idx].destination = dest.clone().into();
                 }
-                
+
                 ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
             }
         }
@@ -1476,15 +1577,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_toggle_browser_selection(move |path, is_dest| {
         if let Some(ui) = ui_weak.upgrade() {
             let path_str = path.to_string();
-            
+
             let nodes: Vec<_> = if is_dest {
                 ui.get_dest_browser_nodes().iter().collect()
             } else {
                 ui.get_browser_nodes().iter().collect()
             };
-            
+
             let mut updated_nodes = Vec::new();
-            
+
             for mut node in nodes {
                 if node.path == path_str {
                     node.is_selected = !node.is_selected;
@@ -1493,16 +1594,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 updated_nodes.push(node);
             }
-            
+
             let selected_paths: Vec<slint::SharedString> = updated_nodes
                 .iter()
                 .filter(|node| node.is_selected)
                 .map(|node| node.path.clone())
                 .collect();
-                
+
             let nodes_model = std::rc::Rc::new(slint::VecModel::from(updated_nodes));
             let selection_model = std::rc::Rc::new(slint::VecModel::from(selected_paths));
-                
+
             if is_dest {
                 ui.set_dest_browser_nodes(nodes_model.into());
                 ui.set_dest_browser_selection(selection_model.into());
@@ -1517,7 +1618,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_add_mapping(move || {
         if let Some(ui) = ui_weak.upgrade() {
             let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
-            mappings.push(DirectoryMapping { source: "".into(), destination: "".into() });
+            mappings.push(DirectoryMapping {
+                source: "".into(),
+                destination: "".into(),
+            });
             ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
         }
     });
@@ -1572,9 +1676,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idx < conns.len() {
                 let token = conns[idx].token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    let key_mgr =
+                        simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     let _ = key_mgr.delete_key(&parsed.pub_key);
-                    
+
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
                     tokio::spawn(async move {
                         if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
@@ -1820,11 +1925,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idx < conns.len() {
                 let token = conns[idx].token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
-                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    let key_mgr =
+                        simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     if let Err(e) = key_mgr.delete_key(&parsed.pub_key) {
                         tracing::warn!("Failed to delete key: {}", e);
                     } else {
-                        println!("Successfully deleted key from OS keyring for connection: {}", conns[idx].name);
+                        println!(
+                            "Successfully deleted key from OS keyring for connection: {}",
+                            conns[idx].name
+                        );
                     }
                 }
             }
@@ -1834,7 +1943,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_cancel_key_generation(move |pub_key| {
         let pub_key = pub_key.to_string();
         if !pub_key.is_empty() {
-            let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+            let key_mgr =
+                simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
             if let Err(e) = key_mgr.delete_key(&pub_key) {
                 tracing::warn!("Failed to delete cancelled key: {}", e);
             } else {
@@ -1874,7 +1984,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             // Toggle between Pause and Run for simplicity, assuming the button acts as play/pause
             let current = tx.borrow().clone();
-            let next = if current == ControlSignal::Pause { ControlSignal::Run } else { ControlSignal::Pause };
+            let next = if current == ControlSignal::Pause {
+                ControlSignal::Run
+            } else {
+                ControlSignal::Pause
+            };
             let _ = tx.send(next);
         }
     });
@@ -1892,7 +2006,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Explicitly drop the context guard
     drop(_guard);
-    
+
     // Bypass the Tokio Thread Local drop panics by issuing a hard OS-level process exit
     std::process::exit(0);
 }

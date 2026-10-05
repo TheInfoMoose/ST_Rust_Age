@@ -25,6 +25,7 @@ export struct FileNode {
     is_selected: bool,
     depth: int,
     is_expanded: bool,
+    snapshot_type: string,
 }
 
 export struct ConnectionItem {
@@ -949,7 +950,23 @@ export component MainWindow inherits Window {
                                                 ta_icon := TouchArea { clicked => { root.toggle_browser_selection(node.path, false); } }
                                             }
                                             Rectangle {
-                                                Text { text: node.name; vertical-alignment: center; }
+                                                HorizontalBox {
+                                                    padding: 0; spacing: 5px;
+                                                    Text { text: node.name; vertical-alignment: center; }
+                                                    if node.snapshot_type != "": Rectangle {
+                                                        width: 40px; height: 18px;
+                                                        border-radius: 4px;
+                                                        background: node.snapshot_type == "VSS" ? #4CAF50 : 
+                                                                    node.snapshot_type == "APFS" ? #2196F3 : 
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                        Text {
+                                                            text: node.snapshot_type;
+                                                            color: white; font-size: 10px; font-weight: 700;
+                                                            horizontal-alignment: center; vertical-alignment: center;
+                                                            width: parent.width; height: parent.height;
+                                                        }
+                                                    }
+                                                }
                                                 ta_filename := TouchArea {
                                                     clicked => {
                                                         if node.is_dir {
@@ -991,7 +1008,23 @@ export component MainWindow inherits Window {
                                                 ta_dest_icon := TouchArea { clicked => { root.toggle_browser_selection(node.path, true); } }
                                             }
                                             Rectangle {
-                                                Text { text: node.name; vertical-alignment: center; }
+                                                HorizontalBox {
+                                                    padding: 0; spacing: 5px;
+                                                    Text { text: node.name; vertical-alignment: center; }
+                                                    if node.snapshot_type != "": Rectangle {
+                                                        width: 40px; height: 18px;
+                                                        border-radius: 4px;
+                                                        background: node.snapshot_type == "VSS" ? #4CAF50 : 
+                                                                    node.snapshot_type == "APFS" ? #2196F3 : 
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                        Text {
+                                                            text: node.snapshot_type;
+                                                            color: white; font-size: 10px; font-weight: 700;
+                                                            horizontal-alignment: center; vertical-alignment: center;
+                                                            width: parent.width; height: parent.height;
+                                                        }
+                                                    }
+                                                }
                                                 ta_dest_filename := TouchArea {
                                                     clicked => {
                                                         if node.is_dir {
