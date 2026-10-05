@@ -79,5 +79,5 @@ This document serves as the master tracking file for Simply Transfer V2 developm
 
 * ~~**[x]** **Advanced Preflight Checks:** Enhance the preflight check to query the destination to ensure the files being sent do not already exist, preventing accidental overwrites.~~ *(Completed: 2026-10-04)*
 * ~~**[x]** **Snapshot Flagging (UI):** Add visual indicators to the file picker modal and the transfer queue to denote if a file will use snapshotting, specifically differentiating between VSS (Windows), LVM (Linux), and APFS (macOS).~~ *(Completed: 2026-10-04)*
-* **[ ]** **Transfer Scheduling & Sync:** Leverage the persistent P2P daemon to enable scheduled and recurring folder sync capabilities.
-* **[ ]** **In-App Logging Integration:** Ensure connection, transfer, sync, and scheduled transfer logs are persisted and fully accessible from within the Settings > Logs UI.
+* ~~**[x]** **Transfer Scheduling & Sync:** Leverage the persistent P2P daemon to enable scheduled and recurring folder sync capabilities.~~ *(Completed: 2026-10-04)*
+* ~~**[x]** **In-App Logging Integration:** Ensure connection, transfer, sync, and scheduled transfer logs are persisted and fully accessible from within the Settings > Logs UI.~~ *(Completed: 2026-10-04)*

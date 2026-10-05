@@ -72,7 +72,8 @@ fn log_event(log_type: &str, message: &str) {
 }
 
 fn open_log(filename: &str) {
-    let path = format!("logs/{}", filename);
+    let dir_name = format!("logs_{}", std::env::consts::OS);
+    let path = format!("{}/{}", dir_name, filename);
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", &path])
