@@ -883,6 +883,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if transfer_type == "Continuous Sync" || transfer_type == "Scheduled Transfer" {
                 let log_file = if transfer_type == "Continuous Sync" { "sync" } else { "schedule" };
+                
+                // Save schedule to JSON file
+                let schedule_entry = serde_json::json!({
+                    "transfer_type": transfer_type,
+                    "mappings": all_mappings.clone(),
+                    "sleep_duration": if transfer_type == "Continuous Sync" { 60 } else { 3600 }
+                });
+                
+                let mut schedules = Vec::new();
+                if let Ok(contents) = std::fs::read_to_string("schedules.json") {
+                    if let Ok(existing_schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+                        schedules = existing_schedules;
+                    }
+                }
+                
+                schedules.push(schedule_entry);
+                
+                if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
+                    let _ = std::fs::write("schedules.json", json_string);
+                }
+                
                 log_event(log_file, &format!("Starting background daemon for {}", transfer_type));
                 tracing::info!("Starting background daemon for {}", transfer_type);
                 loop {
@@ -2010,6 +2031,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = tx.send(ControlSignal::Cancel);
         }
     });
+
+    // Load and run persistent schedules
+    {
+        let global_tx_clone = global_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(contents) = std::fs::read_to_string("schedules.json") {
+                if let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+                    for schedule in schedules {
+                        let transfer_type =
+                            schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                        let mappings: Vec<(String, String)> = schedule["mappings"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|item| {
+                                        if let (Some(src), Some(dest)) = (
+                                            item.get(0).and_then(|v| v.as_str()),
+                                            item.get(1).and_then(|v| v.as_str()),
+                                        ) {
+                                            Some((src.to_string(), dest.to_string()))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        let sleep_duration = schedule["sleep_duration"].as_u64().unwrap_or(3600);
+
+                        tracing::info!("Restoring saved schedule: {}", transfer_type);
+
+                        let tx_inner = global_tx_clone.clone();
+                        let log_file = if transfer_type == "Continuous Sync" {
+                            "sync"
+                        } else {
+                            "schedule"
+                        };
+
+                        tokio::spawn(async move {
+                            loop {
+                                tracing::info!("Executing background transfer cycle...");
+                                for (src, dest) in &mappings {
+                                    let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
+                                    let g_tx = tx_inner.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(event) = rx.recv().await {
+                                            let _ = g_tx.send(event);
+                                        }
+                                    });
+                                    // For restored schedules, we run without ssh_client (local sync or we'd need to re-auth)
+                                    let snapshot_driver =
+                                        Arc::new(simply_transfer_snapshots::FallbackSnapshotDriver);
+                                    let engine = TransferEngine::new(
+                                        PathBuf::from(src),
+                                        dest.clone(),
+                                        tx,
+                                        Arc::new(
+                                            simply_transfer_core::russh_client::RusshClient::new(),
+                                        ),
+                                        Arc::new(
+                                            simply_transfer_core::russh_client::RusshClient::new(),
+                                        ),
+                                        snapshot_driver,
+                                        None,
+                                    );
+                                    if let Err(e) = engine.execute().await {
+                                        tracing::error!(
+                                            "Engine execution failed for {}: {:?}",
+                                            src,
+                                            e
+                                        );
+                                    }
+                                }
+                                tracing::info!(
+                                    "Cycle complete. Sleeping for {} seconds...",
+                                    sleep_duration
+                                );
+                                tokio::time::sleep(tokio::time::Duration::from_secs(
+                                    sleep_duration,
+                                ))
+                                .await;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
 
     ui.run()?;
 
