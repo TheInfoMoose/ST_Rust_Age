@@ -93,7 +93,16 @@ fn get_file_snapshot_type(filename: &str) -> String {
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     
-    let snapshot_extensions = ["qbw", "qbb", "pst", "mdf", "ldf", "ndf", "vhd", "vhdx", "vmdk"];
+    let snapshot_extensions = [
+        "qbw", "qbb", "qbm", "qbo", "qbx", "qba", "qby",
+        "nd", "tlg", "iif", "log", "backupbundle", "sparsebundle",
+        "hbk", "bki", "bak", "sql", "dump", "vbk", "vib",
+        "pst", "ost", "ade", "adp", "lbd", "laccdb", "docm",
+        "xlsm", "pptm", "db", "lock", "lck", "_lock", "mdf",
+        "ldf", "sqlite", "sqlite3", "db-wal", "db-shm", "ibd",
+        "frm", "edb", "vhdx", "vhd", "vmdk", "qcow2", "raw",
+        "img", "vdi", "dat", "dmg", "wim", "esd"
+    ];
     
     if snapshot_extensions.contains(&ext_lower.as_str()) {
         simply_transfer_snapshots::get_native_driver().snapshot_type().to_string()
