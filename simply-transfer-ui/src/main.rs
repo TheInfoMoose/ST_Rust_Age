@@ -1248,6 +1248,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut resolved_path = path_str.clone();
                         if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
                             resolved_path = "C:\\".to_string();
+                        } else if !is_windows && (resolved_path.is_empty() || resolved_path == "\\") {
+                            resolved_path = "/".to_string();
                         }
                             
                         let cmd = if is_windows {
