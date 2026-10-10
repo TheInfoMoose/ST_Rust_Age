@@ -198,7 +198,7 @@ impl SshClient for RusshClient {
             .await
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;
 
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncReadExt;
         bi.0.write_all(&token.to_le_bytes())
             .await
             .map_err(|e| SshError::FileTransferFailed(e.to_string()))?;

@@ -1,3 +1,4 @@
+#![allow(unused_assignments, unused_variables)]
 use simply_transfer_core::engine::{
     ControlSignal, FileTransferStatus, TransferEngine, TransferEvent,
 };
@@ -150,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut transfer_start_time = tokio::time::Instant::now();
         let mut current_completed_bytes: u64 = 0;
         let mut last_ui_update = std::time::Instant::now();
-        let mut current_snapshot_type = String::from("Live");
+        let current_snapshot_type = String::from("Live");
 
         while let Ok(event) = global_rx.recv().await {
             match event {
@@ -893,11 +894,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 
                 let mut schedules = Vec::new();
-                if let Ok(contents) = std::fs::read_to_string("schedules.json") {
-                    if let Ok(existing_schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+                if let Ok(contents) = std::fs::read_to_string("schedules.json")
+                    && let Ok(existing_schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
                         schedules = existing_schedules;
                     }
-                }
                 
                 schedules.push(schedule_entry);
                 
@@ -1014,7 +1014,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 tokio::spawn(async move {
                     while let Ok((mut socket, addr)) = listener.accept().await {
-                        let pub_key = pub_key_clone.clone();
+                        let _pub_key = pub_key_clone.clone();
                         let ui_handle = ui_handle.clone();
                         tokio::spawn(async move {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -1276,13 +1276,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         format!("{}{}{}", resolved_path, sep, name)
                                     };
                                     nodes.push(FileNode {
-                                        name: name.clone().into(),
+                                        name: name.into(),
                                         is_dir,
                                         path: full_path.into(),
                                         is_selected: false,
                                         depth: 0,
                                         is_expanded: false,
-                                        snapshot_type: get_file_snapshot_type(&name).into(),
+                                        snapshot_type: get_file_snapshot_type(name).into(),
                                     });
                                 }
                             }
@@ -1507,7 +1507,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     is_selected: false,
                                     depth,
                                     is_expanded: false,
-                                    snapshot_type: get_file_snapshot_type(&name).into(),
+                                    snapshot_type: get_file_snapshot_type(name).into(),
                                 });
                             }
                         }
@@ -2033,8 +2033,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     // Initialize Schedule Tab UI
-    if let Ok(contents) = std::fs::read_to_string("schedules.json") {
-        if let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+    if let Ok(contents) = std::fs::read_to_string("schedules.json")
+        && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
             let mut slint_schedules = Vec::new();
             for (idx, schedule) in schedules.iter().enumerate() {
                 let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
@@ -2056,13 +2056,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
         }
-    }
 
     ui.on_delete_schedule(move |id| {
-        if let Ok(contents) = std::fs::read_to_string("schedules.json") {
-            if let Ok(mut schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
-                if let Ok(idx) = id.as_str().parse::<usize>() {
-                    if idx < schedules.len() {
+        if let Ok(contents) = std::fs::read_to_string("schedules.json")
+            && let Ok(mut schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents)
+                && let Ok(idx) = id.as_str().parse::<usize>()
+                    && idx < schedules.len() {
                         schedules.remove(idx);
                         if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
                             let _ = std::fs::write("schedules.json", json_string);
@@ -2095,17 +2094,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                     }
-                }
-            }
-        }
     });
 
     // Load and run persistent schedules
     {
         let global_tx_clone = global_tx.clone();
         tokio::spawn(async move {
-            if let Ok(contents) = std::fs::read_to_string("schedules.json") {
-                if let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+            if let Ok(contents) = std::fs::read_to_string("schedules.json")
+                && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
                     for schedule in schedules {
                         let transfer_type =
                             schedule["transfer_type"].as_str().unwrap_or("").to_string();
@@ -2132,7 +2128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tracing::info!("Restoring saved schedule: {}", transfer_type);
 
                         let tx_inner = global_tx_clone.clone();
-                        let log_file = if transfer_type == "Continuous Sync" {
+                        let _log_file = if transfer_type == "Continuous Sync" {
                             "sync"
                         } else {
                             "schedule"
@@ -2185,7 +2181,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
-            }
         });
     }
 

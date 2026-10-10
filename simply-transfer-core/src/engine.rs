@@ -167,7 +167,7 @@ impl TransferEngine {
                 }
             }
 
-            for (rel_path, file_info) in &local_registry.files {
+            for (rel_path, _file_info) in &local_registry.files {
                 // Ensure uniform path separators for the HashSet check
                 let normalized_rel = rel_path.replace("\\", "/");
                 if existing_set.contains(&normalized_rel) || existing_set.contains(rel_path) {
