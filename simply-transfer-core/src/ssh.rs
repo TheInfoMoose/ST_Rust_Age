@@ -128,9 +128,20 @@ impl SshClient for MockSshClient {
     }
 
     async fn execute_command(&self, command: &str) -> Result<String, SshError> {
-        // Mock responding to a sha256sum validation
-        if command.contains("sha256sum") || command.contains("Get-FileHash") {
-            Ok("mock_hash  filename".to_string())
+        if command.starts_with("simply-transfer-hash|") {
+            let paths: Vec<&str> = command.split('|').skip(1).collect();
+            let mut output_lines = Vec::new();
+            for p in paths {
+                if let Some(hash) = std::fs::File::open(std::path::Path::new(p))
+                    .ok()
+                    .and_then(|f| simply_transfer_crypto::hash::compute_sha256_stream(f).ok())
+                {
+                    output_lines.push(hash);
+                    continue;
+                }
+                output_lines.push("mock_hash".to_string());
+            }
+            Ok(output_lines.join("\n"))
         } else if command.contains("df -B1") {
             Ok("Filesystem     1B-blocks      Used Available Use% Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
         } else if command.contains("Get-WmiObject")
