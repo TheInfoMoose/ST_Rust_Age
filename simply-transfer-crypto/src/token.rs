@@ -69,3 +69,17 @@ impl ConnectionToken {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_user_token() {
+        let tok = "st:Yl5fXl1OekBPXEJSGUdvBXhSGjQyIiA3WiEULCJCB3sXIFw-ODxhMyAvMi8vMzRQflIDNkISN0A6XAsHCSIBRh45HjEHOyNdTjoEUi8HAXUVFwoNGwALCDMOBQ";
+        let parsed = ConnectionToken::parse(tok).unwrap();
+        assert_eq!(parsed.ip, "172.17.2.214");
+        assert_eq!(parsed.port, 59770);
+        assert_eq!(parsed.user.as_deref(), Some("Zak"));
+    }
+}

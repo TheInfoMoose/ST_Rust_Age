@@ -128,7 +128,13 @@ impl SshClient for MockSshClient {
     }
 
     async fn execute_command(&self, command: &str) -> Result<String, SshError> {
-        if command.starts_with("simply-transfer-hash|") {
+        if command.starts_with("simply-transfer-mkdir|") {
+            let paths: Vec<&str> = command.split('|').skip(1).collect();
+            for p in paths {
+                let _ = std::fs::create_dir_all(p);
+            }
+            Ok("OK\n".to_string())
+        } else if command.starts_with("simply-transfer-hash|") {
             let paths: Vec<&str> = command.split('|').skip(1).collect();
             let mut output_lines = Vec::new();
             for p in paths {
@@ -142,8 +148,8 @@ impl SshClient for MockSshClient {
                 output_lines.push("mock_hash".to_string());
             }
             Ok(output_lines.join("\n"))
-        } else if command.contains("df -B1") {
-            Ok("Filesystem     1B-blocks      Used Available Use% Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
+        } else if command.contains("df") {
+            Ok("Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
         } else if command.contains("Get-WmiObject")
             || command.contains("powershell.exe -NoProfile -Command")
         {

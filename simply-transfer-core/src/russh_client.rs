@@ -5,10 +5,20 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
 
+#[derive(Clone)]
+struct ConnectionInfo {
+    host: String,
+    port: u16,
+    username: String,
+    private_key_pem: String,
+}
+
 #[derive(Default)]
 pub struct RusshClient {
-    handle: Option<Handle<ClientHandler>>,
-    remote_host: Option<String>,
+    handle: tokio::sync::Mutex<Option<Handle<ClientHandler>>>,
+    remote_host: tokio::sync::Mutex<Option<String>>,
+    remote_port: tokio::sync::Mutex<u16>,
+    conn_info: tokio::sync::Mutex<Option<ConnectionInfo>>,
 }
 
 struct ClientHandler;
@@ -28,48 +38,27 @@ impl RusshClient {
         Self::default()
     }
 
-    #[allow(clippy::field_reassign_with_default)]
-    async fn establish_connection(&mut self, host: &str, port: u16) -> Result<(), SshError> {
-        let mut config = Config::default();
-        config.inactivity_timeout = Some(std::time::Duration::from_secs(30));
-        config.window_size = 1024 * 1024 * 100; // 100MB window
-        config.limits.rekey_time_limit = std::time::Duration::from_secs(86400);
-        config.limits.rekey_read_limit = 1024 * 1024 * 1024 * 100; // 100 GB
-        config.limits.rekey_write_limit = 1024 * 1024 * 1024 * 100; // 100 GB
+    fn make_config() -> Arc<Config> {
+        let limits = russh::Limits {
+            rekey_time_limit: std::time::Duration::from_secs(86400),
+            rekey_read_limit: 1024 * 1024 * 1024 * 100, // 100 GB
+            rekey_write_limit: 1024 * 1024 * 1024 * 100, // 100 GB
+        };
 
-        let config = Arc::new(config);
-
-        let client = russh::client::connect(config, (host, port), ClientHandler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
-
-        self.handle = Some(client);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl SshClient for RusshClient {
-    async fn connect(&mut self, host: &str, port: u16) -> Result<(), SshError> {
-        if self.handle.is_some() {
-            return Ok(());
-        }
-
-        self.remote_host = Some(host.to_string());
-        self.establish_connection(host, port).await
+        let config = Config {
+            inactivity_timeout: None,
+            window_size: 1024 * 1024 * 100, // 100MB window
+            limits,
+            ..Default::default()
+        };
+        Arc::new(config)
     }
 
-    async fn authenticate_publickey(
-        &mut self,
+    async fn do_auth(
+        handle: &mut Handle<ClientHandler>,
         username: &str,
         private_key_pem: &str,
-        _passphrase: Option<&str>,
     ) -> Result<(), SshError> {
-        let handle = self
-            .handle
-            .as_mut()
-            .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
-
         let key_pair = russh::keys::PrivateKey::from_openssh(private_key_pem)
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
@@ -89,6 +78,114 @@ impl SshClient for RusshClient {
         }
     }
 
+    async fn open_channel_with_retry(
+        &self,
+    ) -> Result<russh::Channel<russh::client::Msg>, SshError> {
+        let mut handle_guard = self.handle.lock().await;
+
+        if let Some(handle) = handle_guard.as_mut() {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle.channel_open_session(),
+            )
+            .await
+            {
+                Ok(Ok(channel)) => return Ok(channel),
+                Ok(Err(e)) => {
+                    tracing::warn!("Channel open failed ({}), attempting reconnect...", e);
+                }
+                Err(_) => {
+                    tracing::warn!("Channel open timed out, attempting reconnect...");
+                }
+            }
+        }
+
+        let info = self.conn_info.lock().await.clone().ok_or_else(|| {
+            SshError::ConnectionFailed("No saved connection information for auto-reconnect".into())
+        })?;
+
+        tracing::info!(
+            "Attempting SSH auto-reconnect to {}:{}",
+            info.host,
+            info.port
+        );
+        let config = Self::make_config();
+        let mut new_handle =
+            russh::client::connect(config, (info.host.as_str(), info.port), ClientHandler)
+                .await
+                .map_err(|e| SshError::ConnectionFailed(format!("Reconnect failed: {}", e)))?;
+
+        Self::do_auth(&mut new_handle, &info.username, &info.private_key_pem).await?;
+
+        let channel = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            new_handle.channel_open_session(),
+        )
+        .await
+        .map_err(|_| {
+            SshError::CommandExecutionFailed(
+                "Timeout opening session channel after reconnect".into(),
+            )
+        })?
+        .map_err(|e| {
+            SshError::CommandExecutionFailed(format!(
+                "Failed to open session channel after reconnect: {}",
+                e
+            ))
+        })?;
+
+        *handle_guard = Some(new_handle);
+        tracing::info!("SSH auto-reconnect succeeded!");
+        Ok(channel)
+    }
+}
+
+#[async_trait]
+impl SshClient for RusshClient {
+    async fn connect(&mut self, host: &str, port: u16) -> Result<(), SshError> {
+        let mut handle_guard = self.handle.lock().await;
+        if handle_guard.is_some() {
+            return Ok(());
+        }
+
+        *self.remote_host.lock().await = Some(host.to_string());
+        *self.remote_port.lock().await = port;
+
+        let config = Self::make_config();
+        let client = russh::client::connect(config, (host, port), ClientHandler)
+            .await
+            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+
+        *handle_guard = Some(client);
+        Ok(())
+    }
+
+    async fn authenticate_publickey(
+        &mut self,
+        username: &str,
+        private_key_pem: &str,
+        _passphrase: Option<&str>,
+    ) -> Result<(), SshError> {
+        let mut handle_guard = self.handle.lock().await;
+        let handle = handle_guard
+            .as_mut()
+            .ok_or_else(|| SshError::ConnectionFailed("Not connected".to_string()))?;
+
+        Self::do_auth(handle, username, private_key_pem).await?;
+
+        // Save connection info for auto-reconnect
+        let host = self.remote_host.lock().await.clone().unwrap_or_default();
+        let port = *self.remote_port.lock().await;
+        *self.conn_info.lock().await = Some(ConnectionInfo {
+            host,
+            port: if port == 0 { 2222 } else { port },
+            username: username.to_string(),
+            private_key_pem: private_key_pem.to_string(),
+        });
+
+        Ok(())
+    }
+
     async fn get_remote_file_size(
         &self,
         remote_path: &str,
@@ -98,13 +195,14 @@ impl SshClient for RusshClient {
             // Check if file exists first to avoid error spam
             format!(
                 "powershell -NoProfile -Command \"if (Test-Path '{}') {{ (Get-Item '{}').length }} else {{ 0 }}\"",
-                remote_path.replace("\"", "\"\""),
-                remote_path.replace("\"", "\"\"")
+                remote_path.replace("'", "''"),
+                remote_path.replace("'", "''")
             )
         } else {
+            let escaped = remote_path.replace("'", "'\\''");
             format!(
-                "if [ -f \"{}\" ]; then stat -c%s \"{}\"; else echo 0; fi",
-                remote_path, remote_path
+                "f='{}'; if [ -f \"$f\" ]; then stat -c%s \"$f\" 2>/dev/null || stat -f%z \"$f\" 2>/dev/null || wc -c < \"$f\" 2>/dev/null || echo 0; else echo 0; fi",
+                escaped
             )
         };
 
@@ -120,29 +218,33 @@ impl SshClient for RusshClient {
         progress_callback: Option<Box<dyn Fn(u64) + Send>>,
         mut cancel_rx: tokio::sync::watch::Receiver<crate::engine::ControlSignal>,
     ) -> Result<(), SshError> {
-        let handle = self
-            .handle
-            .as_ref()
-            .ok_or(SshError::ConnectionFailed("Not connected".into()))?;
-
-        let mut channel = handle
-            .channel_open_session()
-            .await
-            .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
+        let mut channel = self.open_channel_with_retry().await?;
 
         let subsystem_name = format!("data-quic|{}|{}", offset, remote_path);
         channel
             .request_subsystem(true, &subsystem_name)
             .await
-            .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
+            .map_err(|e| {
+                SshError::CommandExecutionFailed(format!(
+                    "Failed to request subsystem {}: {}",
+                    subsystem_name, e
+                ))
+            })?;
 
         let mut response_str = String::new();
         while let Some(msg) = channel.wait().await {
-            if let russh::ChannelMsg::Data { ref data } = msg {
-                response_str = String::from_utf8_lossy(data).to_string();
-                break;
+            match msg {
+                russh::ChannelMsg::Data { ref data } => {
+                    response_str = String::from_utf8_lossy(data).to_string();
+                    break;
+                }
+                russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
+                    break;
+                }
+                _ => {}
             }
         }
+        let _ = channel.close().await;
 
         if response_str.is_empty() {
             return Err(SshError::FileTransferFailed(
@@ -185,7 +287,8 @@ impl SshClient for RusshClient {
             quic_client_config,
         )));
 
-        let remote_host = self.remote_host.as_deref().unwrap_or("127.0.0.1");
+        let remote_host_opt = self.remote_host.lock().await.clone();
+        let remote_host = remote_host_opt.as_deref().unwrap_or("127.0.0.1");
         let connect_addr: std::net::SocketAddr = format!("{}:{}", remote_host, port)
             .parse()
             .map_err(|e| SshError::FileTransferFailed(format!("Invalid socket address: {}", e)))?;
@@ -294,18 +397,7 @@ impl SshClient for RusshClient {
     }
 
     async fn execute_command(&self, command: &str) -> Result<String, SshError> {
-        let handle = self
-            .handle
-            .as_ref()
-            .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
-
-        let mut channel = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
-            handle.channel_open_session(),
-        )
-        .await
-        .map_err(|_| SshError::CommandExecutionFailed("Timeout opening channel".to_string()))?
-        .map_err(|e| SshError::CommandExecutionFailed(e.to_string()))?;
+        let mut channel = self.open_channel_with_retry().await?;
 
         tokio::time::timeout(
             std::time::Duration::from_secs(60),
@@ -334,6 +426,8 @@ impl SshClient for RusshClient {
                 }
             }
         }
+
+        let _ = channel.close().await;
 
         Ok(output)
     }

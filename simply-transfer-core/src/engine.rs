@@ -126,11 +126,15 @@ impl TransferEngine {
             .map(|out| out.trim() == "Windows")
             .unwrap_or(false);
 
+        let dest_dir =
+            Self::resolve_destination_dir(&self.source_dir, &self.destination_dir, is_windows_dest);
+
         let local_registry = self.build_local_registry(&active_source_dir).await?;
 
         // Pre-flight check: Destination disk space
         let total_required_bytes: u64 = local_registry.files.values().map(|f| f.size).sum();
-        self.check_disk_space(total_required_bytes).await?;
+        self.check_disk_space(total_required_bytes, &dest_dir)
+            .await?;
 
         let mut to_skip = Vec::new();
         let mut to_transfer = Vec::new();
@@ -139,31 +143,51 @@ impl TransferEngine {
             .files
             .keys()
             .map(|rel| {
-                std::path::Path::new(&self.destination_dir)
-                    .join(rel)
-                    .to_string_lossy()
-                    .into_owned()
+                let normalized_rel = if is_windows_dest {
+                    rel.replace('/', "\\")
+                } else {
+                    rel.replace('\\', "/")
+                };
+                if is_windows_dest {
+                    format!(
+                        "{}\\{}",
+                        dest_dir.trim_end_matches('\\').trim_end_matches('/'),
+                        normalized_rel
+                    )
+                } else {
+                    format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_rel)
+                }
             })
             .collect();
 
         if !dest_paths.is_empty() {
-            let cmd = format!("simply-transfer-exists|{}", dest_paths.join("|"));
-            let result = self
-                .ssh_client
-                .execute_command(&cmd)
-                .await
-                .unwrap_or_default();
-
-            let existing_absolute: std::collections::HashSet<&str> =
-                result.trim().split('|').collect();
-
-            let dest_dir_path = std::path::Path::new(&self.destination_dir);
             let mut existing_set = std::collections::HashSet::new();
-            for path in existing_absolute {
-                if let Ok(relative) = std::path::Path::new(path).strip_prefix(dest_dir_path) {
-                    existing_set.insert(relative.to_string_lossy().to_string());
-                } else {
-                    existing_set.insert(path.to_owned());
+
+            for chunk in dest_paths.chunks(100) {
+                let cmd = format!("simply-transfer-exists|{}", chunk.join("|"));
+                match self.ssh_client.execute_command(&cmd).await {
+                    Ok(result) => {
+                        for path in result.trim().split('|').filter(|p| !p.trim().is_empty()) {
+                            let normalized_path = path.replace('\\', "/");
+                            let normalized_dest_dir = dest_dir.replace('\\', "/");
+                            let trimmed_dest = normalized_dest_dir.trim_end_matches('/');
+                            let rel = if let Some(stripped) =
+                                normalized_path.strip_prefix(trimmed_dest)
+                            {
+                                stripped.trim_start_matches('/').to_string()
+                            } else {
+                                normalized_path
+                            };
+                            existing_set.insert(rel);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to query remote existence for batch of {} paths: {}",
+                            chunk.len(),
+                            e
+                        );
+                    }
                 }
             }
 
@@ -209,7 +233,7 @@ impl TransferEngine {
         let mut failed_count = 0;
 
         let (validation_tx, mut validation_rx) = mpsc::channel::<String>(100);
-        let dest_dir = self.destination_dir.clone();
+        let val_dest_dir = dest_dir.clone();
         let ssh_client_val = self.validation_ssh_client.clone();
         let event_sender_val = self.event_sender.clone();
         let active_source_dir_val = active_source_dir.clone();
@@ -244,11 +268,11 @@ impl TransferEngine {
                     let full_remote_path = if is_windows_dest {
                         format!(
                             "{}\\{}",
-                            dest_dir.trim_end_matches('\\').trim_end_matches('/'),
+                            val_dest_dir.trim_end_matches('\\').trim_end_matches('/'),
                             normalized_file
                         )
                     } else {
-                        format!("{}/{}", dest_dir.trim_end_matches('/'), normalized_file)
+                        format!("{}/{}", val_dest_dir.trim_end_matches('/'), normalized_file)
                     };
 
                     remote_paths.push(full_remote_path);
@@ -345,64 +369,68 @@ impl TransferEngine {
         // Phase 2: Transmission
         self.emit_phase(2, "Transmission".to_string()).await;
 
-        // Collect all unique parent directories first
-        let mut parent_dirs = std::collections::HashSet::new();
-        for file in &manifest.to_transfer {
-            let normalized_file = if is_windows_dest {
-                file.replace('/', "\\")
-            } else {
-                file.replace('\\', "/")
-            };
+        // If source is a directory, ensure the destination directory and all its subdirectories exist
+        let is_dir_transfer = !self.source_dir.is_file() && !active_source_dir.is_file();
+        if is_dir_transfer {
+            let mut dirs_to_create = vec![dest_dir.clone()];
 
-            let remote_path = if is_windows_dest {
-                format!(
-                    "{}\\{}",
-                    self.destination_dir
-                        .trim_end_matches('\\')
-                        .trim_end_matches('/'),
-                    normalized_file
-                )
-            } else {
-                format!(
-                    "{}/{}",
-                    self.destination_dir.trim_end_matches('/'),
-                    normalized_file
-                )
-            };
-
-            let parent = std::path::Path::new(&remote_path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            if !parent.is_empty() {
-                parent_dirs.insert(parent);
+            for entry in WalkDir::new(&active_source_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                if entry.file_type().is_dir() {
+                    let path = entry.path();
+                    if let Some(rel) = path
+                        .strip_prefix(&active_source_dir)
+                        .ok()
+                        .filter(|r| !r.as_os_str().is_empty())
+                    {
+                        let rel_str = rel.to_string_lossy();
+                        let normalized = if is_windows_dest {
+                            rel_str.replace('/', "\\")
+                        } else {
+                            rel_str.replace('\\', "/")
+                        };
+                        let remote_dir = if is_windows_dest {
+                            format!(
+                                "{}\\{}",
+                                dest_dir.trim_end_matches('\\').trim_end_matches('/'),
+                                normalized
+                            )
+                        } else {
+                            format!("{}/{}", dest_dir.trim_end_matches('/'), normalized)
+                        };
+                        dirs_to_create.push(remote_dir);
+                    }
+                }
             }
-        }
 
-        // Create all parent directories in chunks of 50
-        if !parent_dirs.is_empty() {
-            let dirs: Vec<String> = parent_dirs.into_iter().collect();
-            for chunk in dirs.chunks(50) {
-                if is_windows_dest {
-                    let dir_list: String = chunk
-                        .iter()
-                        .map(|d| format!("\"{}\"", d.replace("\"", "\"\"")))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let cmd = format!(
-                        "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force -Path {}\"",
-                        dir_list
-                    );
-                    let _ = self.ssh_client.execute_command(&cmd).await;
-                } else {
-                    let dir_list: String = chunk
-                        .iter()
-                        .map(|d| format!("\"{}\"", d.replace("\"", "\\\"")))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let cmd = format!("mkdir -p {}", dir_list);
-                    let _ = self.ssh_client.execute_command(&cmd).await;
+            for chunk in dirs_to_create.chunks(100) {
+                let cmd = format!("simply-transfer-mkdir|{}", chunk.join("|"));
+                match self.ssh_client.execute_command(&cmd).await {
+                    Ok(res) if res.trim() == "OK" => {}
+                    _ => {
+                        if is_windows_dest {
+                            let dir_list: String = chunk
+                                .iter()
+                                .map(|d| format!("'{}'", d.replace('\'', "''")))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let fallback_cmd = format!(
+                                "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force -Path @({})\"",
+                                dir_list
+                            );
+                            let _ = self.ssh_client.execute_command(&fallback_cmd).await;
+                        } else {
+                            let dir_list: String = chunk
+                                .iter()
+                                .map(|d| format!("'{}'", d.replace('\'', "'\\''")))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            let fallback_cmd = format!("mkdir -p {}", dir_list);
+                            let _ = self.ssh_client.execute_command(&fallback_cmd).await;
+                        }
+                    }
                 }
             }
         }
@@ -418,7 +446,7 @@ impl TransferEngine {
                 let rx_clone = self.control_rx.clone();
                 let ssh_client = self.ssh_client.clone();
                 let active_source_dir = active_source_dir.clone();
-                let dest_dir = self.destination_dir.clone();
+                let dest_dir = dest_dir.clone();
                 let event_sender = self.event_sender.clone();
                 let validation_tx = validation_tx.clone();
                 let failed_count_atomic = failed_count_atomic.clone();
@@ -487,6 +515,7 @@ impl TransferEngine {
                                 break;
                             }
                             Err(e) => {
+                                tracing::warn!("Upload attempt {}/{} failed for {}: {}", attempt + 1, max_retries, file, e);
                                 if attempt == max_retries {
                                     tracing::warn!("Failed to transfer file {} after {} attempts: {}", file, max_retries, e);
                                     let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Failed(e.to_string()))).await;
@@ -601,7 +630,43 @@ impl TransferEngine {
         Ok(registry)
     }
 
-    async fn check_disk_space(&self, required_bytes: u64) -> Result<(), EngineError> {
+    pub(crate) fn resolve_destination_dir(
+        source_path: &Path,
+        destination_dir: &str,
+        is_windows_dest: bool,
+    ) -> String {
+        let source_str = source_path.to_string_lossy();
+        let trimmed_source = source_str.trim_end_matches('/').trim_end_matches('\\');
+
+        if trimmed_source.is_empty() || trimmed_source.ends_with(':') {
+            return destination_dir.to_string();
+        }
+
+        let folder_name = match trimmed_source.rsplit(['/', '\\']).next() {
+            Some(name) if !name.is_empty() => name,
+            _ => return destination_dir.to_string(),
+        };
+
+        if source_path.is_file() || Path::new(trimmed_source).is_file() {
+            return destination_dir.to_string();
+        }
+
+        let normalized_dest = if is_windows_dest {
+            destination_dir.replace('/', "\\")
+        } else {
+            destination_dir.replace('\\', "/")
+        };
+        let trimmed_dest = normalized_dest.trim_end_matches('/').trim_end_matches('\\');
+
+        let sep = if is_windows_dest { "\\" } else { "/" };
+        format!("{}{}{}", trimmed_dest, sep, folder_name)
+    }
+
+    async fn check_disk_space(
+        &self,
+        required_bytes: u64,
+        dest_dir: &str,
+    ) -> Result<(), EngineError> {
         let is_windows = self
             .ssh_client
             .execute_command("cmd.exe /c echo Windows")
@@ -609,51 +674,90 @@ impl TransferEngine {
             .map(|o| o.trim() == "Windows")
             .unwrap_or(false);
 
-        let free_space: u64 = if is_windows {
+        let free_space_opt: Option<u64> = if is_windows {
             let powershell_cmd = format!(
                 r#"Get-PSDrive -Name (Split-Path "{}" -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
-                self.destination_dir
-                    .replace("\"", "\"\"")
-                    .replace('\\', "\\\\")
+                dest_dir.replace("\"", "\"\"").replace('\\', "\\\\")
             );
 
-            self.ssh_client
+            match self
+                .ssh_client
                 .execute_command(&format!(
                     "powershell.exe -NoProfile -Command \"{}\"",
                     powershell_cmd
                 ))
                 .await
-                .map(|output| output.trim().parse::<u64>().unwrap_or(0))
-                .map_err(|e| {
-                    EngineError::Network(format!("Failed to get Windows disk space: {}", e))
-                })?
+            {
+                Ok(output) => {
+                    let parsed = output.trim().parse::<u64>().ok();
+                    if parsed.is_none() {
+                        tracing::warn!("Could not parse Windows disk space output: {:?}", output);
+                    }
+                    parsed
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get Windows disk space: {}", e);
+                    None
+                }
+            }
         } else {
-            let df_cmd = format!("df -B1 \"{}\"", self.destination_dir.replace("\"", "\\\""));
+            let normalized_dest = dest_dir.replace('\\', "/");
+            let cleaned_dest = if normalized_dest.len() >= 2
+                && normalized_dest.as_bytes()[1] == b':'
+                && normalized_dest.as_bytes()[0].is_ascii_alphabetic()
+            {
+                &normalized_dest[2..]
+            } else {
+                normalized_dest.as_str()
+            };
+            let posix_dest = if !cleaned_dest.starts_with('/') && !cleaned_dest.starts_with('.') {
+                format!("/{}", cleaned_dest)
+            } else {
+                cleaned_dest.to_string()
+            };
+            let escaped_dir = posix_dest.replace('\'', "'\\''");
+            let df_cmd = format!(
+                "d='{}'; while [ ! -d \"$d\" ] && [ \"$d\" != \"/\" ] && [ \"$d\" != \".\" ]; do d=$(dirname \"$d\"); done; df -k -P \"$d\" 2>/dev/null; if [ -d \"/System/Volumes/Data\" ]; then df -k -P \"/System/Volumes/Data\" 2>/dev/null; fi; if [ -n \"$HOME\" ] && [ -d \"$HOME\" ]; then df -k -P \"$HOME\" 2>/dev/null; fi",
+                escaped_dir
+            );
 
-            self.ssh_client
-                .execute_command(&df_cmd)
-                .await
-                .map(|output| {
-                    output
-                        .lines()
-                        .nth(1)
-                        .and_then(|line| {
-                            line.split_whitespace()
-                                .nth(3)
-                                .and_then(|s| s.parse::<u64>().ok())
-                        })
-                        .unwrap_or(0)
-                })
-                .map_err(|e| {
-                    EngineError::Network(format!("Failed to get Linux disk space: {}", e))
-                })?
+            match self.ssh_client.execute_command(&df_cmd).await {
+                Ok(output) => {
+                    let parsed = parse_df_available_bytes(&output);
+                    if parsed.is_none() {
+                        tracing::warn!("Could not parse POSIX df output: {:?}", output);
+                    }
+                    parsed
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to execute POSIX df command: {}", e);
+                    None
+                }
+            }
         };
 
-        if free_space < required_bytes {
-            return Err(EngineError::ValidationFailed(format!(
-                "Insufficient disk space. Required: {} bytes, Available: {} bytes",
-                required_bytes, free_space
-            )));
+        if let Some(free_space) = free_space_opt {
+            tracing::info!(
+                "Destination free disk space: {} bytes (required: {} bytes)",
+                free_space,
+                required_bytes
+            );
+            if free_space == 0 && required_bytes > 0 {
+                tracing::warn!(
+                    "Destination reported 0 available bytes for '{}' (likely a read-only snapshot or virtual filesystem). Proceeding without pre-flight space check.",
+                    dest_dir
+                );
+            } else if free_space < required_bytes {
+                return Err(EngineError::ValidationFailed(format!(
+                    "Insufficient disk space. Required: {} bytes, Available: {} bytes",
+                    required_bytes, free_space
+                )));
+            }
+        } else {
+            tracing::warn!(
+                "Unable to determine remote free disk space for '{}'. Proceeding without pre-flight space check.",
+                dest_dir
+            );
         }
 
         Ok(())
@@ -673,6 +777,39 @@ impl TransferEngine {
             .await
             .ok();
     }
+}
+
+pub(crate) fn parse_df_available_bytes(output: &str) -> Option<u64> {
+    let mut max_avail: Option<u64> = None;
+
+    for line in output.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.is_empty() || tokens[0] == "Filesystem" {
+            continue;
+        }
+
+        // In POSIX `df -k -P` output format:
+        // Filesystem 1024-blocks Used Available Capacity Mounted on
+        // Capacity is always a percentage ending in '%', e.g. "56%".
+        // The token immediately preceding Capacity is always Available (in 1024-byte blocks).
+        let avail_opt = if let Some(cap_idx) = tokens.iter().position(|t| t.ends_with('%')) {
+            if cap_idx > 0 {
+                tokens[cap_idx - 1].parse::<u64>().ok()
+            } else {
+                None
+            }
+        } else {
+            // Fallback to standard column 3 (0-indexed: 0=fs, 1=total, 2=used, 3=avail)
+            tokens.get(3).and_then(|s| s.parse::<u64>().ok())
+        };
+
+        if let Some(avail_kb) = avail_opt {
+            let bytes = avail_kb.saturating_mul(1024);
+            max_avail = Some(max_avail.map_or(bytes, |cur| cur.max(bytes)));
+        }
+    }
+
+    max_avail
 }
 
 #[cfg(test)]
@@ -735,5 +872,119 @@ mod tests {
         assert_eq!(completed_files, 1);
         assert_eq!(validated_files, 1);
         assert!(transfer_complete);
+    }
+
+    #[test]
+    fn test_parse_df_available_bytes() {
+        // Linux output
+        let linux_output = "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme0n1p3  1950801920 1086302456 857593032      56% /home\n";
+        assert_eq!(
+            parse_df_available_bytes(linux_output),
+            Some(857593032 * 1024)
+        );
+
+        // macOS output
+        let macos_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3s1s1 488245288 12345678 400000000 3% /System/Volumes/Data\n";
+        assert_eq!(
+            parse_df_available_bytes(macos_output),
+            Some(400000000 * 1024)
+        );
+
+        // Mount / filesystem with space in name
+        let space_fs_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n//user@mac/Macintosh HD 488245288 12345678 400000000 3% /Volumes/Macintosh HD\n";
+        assert_eq!(
+            parse_df_available_bytes(space_fs_output),
+            Some(400000000 * 1024)
+        );
+
+        // macOS multi-line output where root mount has 0 available but data mount has capacity
+        let macos_multiline_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3s1s1 488245288 15423840 0 100% /\n/dev/disk3s5 488245288 12345678 350000000 4% /System/Volumes/Data\n";
+        assert_eq!(
+            parse_df_available_bytes(macos_multiline_output),
+            Some(350000000 * 1024)
+        );
+
+        // Error / invalid output
+        let invalid_output = "df: illegal option -- B\nusage: df ...\n";
+        assert_eq!(parse_df_available_bytes(invalid_output), None);
+    }
+
+    #[test]
+    fn test_resolve_destination_dir() {
+        let temp = tempdir().unwrap();
+        let folder = temp.path().join("tools");
+        std::fs::create_dir(&folder).unwrap();
+
+        // Unix destination: parent folder should be appended
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, "/Users/moose_dev/Dev", false),
+            "/Users/moose_dev/Dev/tools"
+        );
+
+        // Unix destination with trailing slash
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, "/Users/moose_dev/Dev/", false),
+            "/Users/moose_dev/Dev/tools"
+        );
+
+        // Unix destination ending with same folder name: folder is still nested inside target
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, "/Users/moose_dev/Dev/tools", false),
+            "/Users/moose_dev/Dev/tools/tools"
+        );
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, "/Users/moose_dev/Dev/tools/", false),
+            "/Users/moose_dev/Dev/tools/tools"
+        );
+
+        // Windows destination
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, r"C:\Users\moose_dev\Dev", true),
+            r"C:\Users\moose_dev\Dev\tools"
+        );
+
+        // Windows destination ending with same folder name: folder is still nested inside target
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&folder, r"C:\Users\moose_dev\Dev\TOOLS", true),
+            r"C:\Users\moose_dev\Dev\TOOLS\tools"
+        );
+
+        // Windows source path with trailing backslash
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(
+                Path::new(r"C:\Users\Zak\tools\"),
+                "/Users/moose_dev/Dev",
+                false
+            ),
+            "/Users/moose_dev/Dev/tools"
+        );
+
+        // Windows source to Linux destination with backslashes in destination string
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(
+                Path::new(r"C:\Users\Zak\tools"),
+                r"\home\zak\Remote",
+                false
+            ),
+            "/home/zak/Remote/tools"
+        );
+
+        // Windows drive root: should not append drive letter as folder
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(
+                Path::new(r"C:\"),
+                "/Users/moose_dev/Dev",
+                false
+            ),
+            "/Users/moose_dev/Dev"
+        );
+
+        // Single file source: destination directory should remain unchanged
+        let file = temp.path().join("file.txt");
+        std::fs::write(&file, b"content").unwrap();
+        assert_eq!(
+            TransferEngine::resolve_destination_dir(&file, "/Users/moose_dev/Dev", false),
+            "/Users/moose_dev/Dev"
+        );
     }
 }

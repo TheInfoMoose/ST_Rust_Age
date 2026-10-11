@@ -27,11 +27,26 @@ impl Default for TransferServer {
 
 impl TransferServer {
     pub fn new() -> Self {
-        let home_dir = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let keys_file_path = PathBuf::from(format!(
+        let home_dir = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        let ide_path = PathBuf::from(format!(
             "{}/.gemini/antigravity-ide/p2p_authorized_keys.json",
             home_dir
         ));
+        let keys_file_path = if ide_path.exists() {
+            ide_path
+        } else {
+            let ide_parent = PathBuf::from(format!("{}/.gemini/antigravity-ide", home_dir));
+            if ide_parent.exists() {
+                ide_parent.join("p2p_authorized_keys.json")
+            } else {
+                PathBuf::from(format!(
+                    "{}/.simply-transfer/p2p_authorized_keys.json",
+                    home_dir
+                ))
+            }
+        };
 
         let loaded_keys = if keys_file_path.exists() {
             if let Ok(file) = File::open(&keys_file_path) {
@@ -39,11 +54,16 @@ impl TransferServer {
                 if let Ok(keys_map) = serde_json::from_reader::<_, HashMap<String, String>>(reader)
                 {
                     let mut public_keys = HashMap::new();
-                    for (fingerprint, key_base64) in keys_map {
-                        if let Ok(public_key) = PublicKey::from_openssh(&key_base64).or_else(|_| {
-                            PublicKey::from_openssh(&format!("ssh-ed25519 {}", key_base64))
-                        }) {
-                            public_keys.insert(fingerprint, public_key);
+                    for (stored_fp, key_base64) in keys_map {
+                        if let Ok(public_key) = parse_public_key(&key_base64) {
+                            let canonical_fp = public_key.fingerprint(HashAlg::Sha256).to_string();
+                            let raw_fp = canonical_fp
+                                .strip_prefix("SHA256:")
+                                .unwrap_or(&canonical_fp)
+                                .to_string();
+                            public_keys.insert(stored_fp.clone(), public_key.clone());
+                            public_keys.insert(canonical_fp, public_key.clone());
+                            public_keys.insert(raw_fp, public_key);
                         }
                     }
                     public_keys
@@ -73,9 +93,17 @@ impl TransferServer {
     }
 
     pub async fn add_authorized_key(&self, key: PublicKey) {
-        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        let canonical_fp = key.fingerprint(HashAlg::Sha256).to_string();
+        let raw_fp = canonical_fp
+            .strip_prefix("SHA256:")
+            .unwrap_or(&canonical_fp)
+            .to_string();
 
-        self.authorized_keys.write().await.insert(fingerprint, key);
+        {
+            let mut keys = self.authorized_keys.write().await;
+            keys.insert(canonical_fp.clone(), key.clone());
+            keys.insert(raw_fp, key.clone());
+        }
 
         let keys = self.authorized_keys.read().await;
 
@@ -85,9 +113,10 @@ impl TransferServer {
         }
 
         let mut keys_map: HashMap<String, String> = HashMap::new();
-        for (fingerprint, public_key) in keys.iter() {
+        for public_key in keys.values() {
+            let fp = public_key.fingerprint(HashAlg::Sha256).to_string();
             if let Ok(openssh) = public_key.to_openssh() {
-                keys_map.insert(fingerprint.clone(), openssh);
+                keys_map.insert(fp, openssh);
             }
         }
 
@@ -133,6 +162,7 @@ impl Handler for TransferServer {
         public_key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
+        let raw_fp = fingerprint.strip_prefix("SHA256:").unwrap_or(&fingerprint);
 
         let keys = self.authorized_keys.read().await;
         tracing::info!(
@@ -142,7 +172,11 @@ impl Handler for TransferServer {
             keys.keys()
         );
 
-        if keys.contains_key(&fingerprint) {
+        let is_authorized = keys.contains_key(&fingerprint)
+            || keys.contains_key(raw_fp)
+            || keys.values().any(|k| k == public_key);
+
+        if is_authorized {
             tracing::info!("Key accepted for {}", user);
             Ok(Auth::Accept)
         } else {
@@ -244,6 +278,8 @@ impl Handler for TransferServer {
 
             let response = format!("{}|{}|{}", port, token, cert_b64);
             let _ = session.data(channel, response.into_bytes());
+            let _ = session.eof(channel);
+            let _ = session.close(channel);
 
             let event_sender_clone = self.event_sender.clone();
 
@@ -262,17 +298,22 @@ impl Handler for TransferServer {
                                             "Incoming".to_string(),
                                         ));
                                 }
-                                let path = std::path::Path::new(&remote_path);
+                                let normalized_remote_path = if cfg!(windows) {
+                                    remote_path.replace('/', "\\")
+                                } else {
+                                    remote_path.replace('\\', "/")
+                                };
+                                let path = std::path::Path::new(&normalized_remote_path);
                                 if let Some(parent) = path.parent() {
                                     let _ = tokio::fs::create_dir_all(parent).await;
                                 }
 
                                 let file_result = if offset == 0 {
-                                    tokio::fs::File::create(&remote_path).await
+                                    tokio::fs::File::create(&normalized_remote_path).await
                                 } else {
                                     tokio::fs::OpenOptions::new()
                                         .write(true)
-                                        .open(&remote_path)
+                                        .open(&normalized_remote_path)
                                         .await
                                 };
 
@@ -349,6 +390,28 @@ impl Handler for TransferServer {
         let cmd_str = String::from_utf8_lossy(program).to_string();
         tracing::info!("Executing command via exec_request: {}", cmd_str);
 
+        if cmd_str.starts_with("simply-transfer-mkdir|") {
+            let paths_str = cmd_str.trim_start_matches("simply-transfer-mkdir|");
+            let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
+
+            let handle = session.handle();
+            tokio::spawn(async move {
+                for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
+                    let normalized = if cfg!(windows) {
+                        path.replace('/', "\\")
+                    } else {
+                        path.replace('\\', "/")
+                    };
+                    let _ = tokio::fs::create_dir_all(&normalized).await;
+                }
+                let _ = handle.data(channel, b"OK\n".to_vec()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
         if cmd_str.starts_with("simply-transfer-exists|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-exists|");
             let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
@@ -357,7 +420,12 @@ impl Handler for TransferServer {
             tokio::spawn(async move {
                 let mut existing_paths = Vec::new();
                 for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
-                    if tokio::fs::metadata(path).await.is_ok() {
+                    let normalized = if cfg!(windows) {
+                        path.replace('/', "\\")
+                    } else {
+                        path.replace('\\', "/")
+                    };
+                    if tokio::fs::metadata(&normalized).await.is_ok() {
                         existing_paths.push(path.clone());
                     }
                 }
@@ -384,7 +452,12 @@ impl Handler for TransferServer {
                     let mut out = String::new();
                     for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
                         tracing::info!("Hashing remote file: {}", path);
-                        let local_hash = if let Ok(f) = std::fs::File::open(path) {
+                        let normalized = if cfg!(windows) {
+                            path.replace('/', "\\")
+                        } else {
+                            path.replace('\\', "/")
+                        };
+                        let local_hash = if let Ok(f) = std::fs::File::open(&normalized) {
                             simply_transfer_crypto::hash::compute_sha256_stream(f)
                                 .unwrap_or_else(|_| "hash_failed".to_string())
                         } else {
@@ -510,7 +583,105 @@ pub fn generate_host_key() -> russh::keys::PrivateKey {
 }
 
 pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
-    PublicKey::from_openssh(key_str.trim())
-        .or_else(|_| PublicKey::from_openssh(&format!("ssh-ed25519 {}", key_str.trim())))
+    let clean = key_str.split(';').next().unwrap_or(key_str).trim();
+    let actual_key = if clean.starts_with("st:") {
+        if let Ok(token) = simply_transfer_crypto::token::ConnectionToken::parse(clean) {
+            token.pub_key
+        } else {
+            clean.to_string()
+        }
+    } else {
+        clean.to_string()
+    };
+    let trimmed = actual_key.trim();
+    PublicKey::from_openssh(trimmed)
+        .or_else(|_| PublicKey::from_openssh(&format!("ssh-ed25519 {}", trimmed)))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_transfer_server_auth_publickey_matching() {
+        let mut server = TransferServer {
+            authorized_keys_file_path: PathBuf::from("/nonexistent/keys.json"),
+            authorized_keys: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            file_writers: Arc::new(Mutex::new(HashMap::new())),
+            event_sender: None,
+        };
+
+        let key = generate_host_key();
+        let pub_key = key.public_key().clone();
+        let canonical_fp = pub_key.fingerprint(HashAlg::Sha256).to_string();
+        let raw_fp = canonical_fp
+            .strip_prefix("SHA256:")
+            .unwrap_or(&canonical_fp)
+            .to_string();
+
+        // Initially rejected
+        let res = server.auth_publickey("test_user", &pub_key).await;
+        assert!(matches!(res, Ok(Auth::Reject { .. })));
+
+        // Test matching when legacy raw fingerprint is in map
+        server
+            .authorized_keys
+            .write()
+            .await
+            .insert(raw_fp.clone(), pub_key.clone());
+        let res = server.auth_publickey("test_user", &pub_key).await;
+        assert!(matches!(res, Ok(Auth::Accept)));
+
+        // Test matching when canonical fingerprint is in map
+        server.authorized_keys.write().await.clear();
+        server
+            .authorized_keys
+            .write()
+            .await
+            .insert(canonical_fp.clone(), pub_key.clone());
+        let res = server.auth_publickey("test_user", &pub_key).await;
+        assert!(matches!(res, Ok(Auth::Accept)));
+
+        // Test matching via direct PublicKey equality fallback
+        server.authorized_keys.write().await.clear();
+        server
+            .authorized_keys
+            .write()
+            .await
+            .insert("arbitrary_key_id".to_string(), pub_key.clone());
+        let res = server.auth_publickey("test_user", &pub_key).await;
+        assert!(matches!(res, Ok(Auth::Accept)));
+    }
+
+    #[test]
+    fn test_parse_public_key_formats() {
+        let key = generate_host_key();
+        let pub_key = key.public_key().clone();
+        let openssh_str = pub_key.to_openssh().unwrap();
+        let raw_b64 = openssh_str.strip_prefix("ssh-ed25519 ").unwrap();
+
+        // 1. Standard openssh string
+        let parsed = parse_public_key(&openssh_str).unwrap();
+        assert_eq!(parsed, pub_key);
+
+        // 2. Raw base64 string
+        let parsed = parse_public_key(raw_b64).unwrap();
+        assert_eq!(parsed, pub_key);
+
+        // 3. Semicolon delimited token string
+        let delimited = format!("{};sender_key_id", openssh_str);
+        let parsed = parse_public_key(&delimited).unwrap();
+        assert_eq!(parsed, pub_key);
+
+        // 4. st: ConnectionToken string
+        let token_str = simply_transfer_crypto::token::ConnectionToken::generate(
+            "127.0.0.1",
+            2222,
+            &openssh_str,
+            None,
+        );
+        let parsed = parse_public_key(&token_str).unwrap();
+        assert_eq!(parsed, pub_key);
+    }
 }
