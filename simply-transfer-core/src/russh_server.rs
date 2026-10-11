@@ -1,6 +1,6 @@
-use russh::ChannelId;
 use russh::keys::{HashAlg, PublicKey};
-use russh::server::{Auth, Handler, Server, Session};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Server, Session};
+use russh::{Channel, ChannelId};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -152,6 +152,17 @@ impl Handler for TransferServer {
                 partial_success: false,
             })
         }
+    }
+
+    async fn channel_open_session(
+        &mut self,
+        channel: Channel<russh::server::Msg>,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        tracing::info!("Session channel opened: {:?}", channel.id());
+        reply.accept().await;
+        Ok(())
     }
 
     async fn subsystem_request(

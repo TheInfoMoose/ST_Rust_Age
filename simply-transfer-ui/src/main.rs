@@ -1264,7 +1264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         match ssh_client.execute_command(&cmd).await {
                             Ok(output) => {
-                                tracing::info!("PowerShell command executed successfully: {}", cmd);
+                                tracing::info!("Remote file listing command executed successfully: {}", cmd);
                                 tracing::info!("Raw output length: {}", output.len());
                                 tracing::debug!("Raw output content: {:?}", output);
                                 success = true;
@@ -1291,7 +1291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                             Err(e) => {
-                                tracing::error!("PowerShell command failed: {} - Error: {}", cmd, e);
+                                tracing::error!("Remote file listing command failed: {} - Error: {}", cmd, e);
                             }
                         }
                     }
