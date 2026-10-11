@@ -1,8 +1,6 @@
-use async_trait::async_trait;
+use russh::ChannelId;
+use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, Handler, Server, Session};
-use russh::{Channel, ChannelId};
-use russh_keys::PublicKeyBase64;
-use russh_keys::key;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
@@ -16,7 +14,7 @@ use tokio::sync::{Mutex, mpsc};
 #[derive(Clone)]
 pub struct TransferServer {
     pub authorized_keys_file_path: PathBuf,
-    pub authorized_keys: Arc<tokio::sync::RwLock<HashMap<String, key::PublicKey>>>,
+    pub authorized_keys: Arc<tokio::sync::RwLock<HashMap<String, PublicKey>>>,
     file_writers: Arc<Mutex<HashMap<ChannelId, mpsc::Sender<Vec<u8>>>>>,
     pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
 }
@@ -42,7 +40,9 @@ impl TransferServer {
                 {
                     let mut public_keys = HashMap::new();
                     for (fingerprint, key_base64) in keys_map {
-                        if let Ok(public_key) = russh_keys::parse_public_key_base64(&key_base64) {
+                        if let Ok(public_key) = PublicKey::from_openssh(&key_base64).or_else(|_| {
+                            PublicKey::from_openssh(&format!("ssh-ed25519 {}", key_base64))
+                        }) {
                             public_keys.insert(fingerprint, public_key);
                         }
                     }
@@ -72,8 +72,8 @@ impl TransferServer {
         self.event_sender = Some(sender);
     }
 
-    pub async fn add_authorized_key(&self, key: key::PublicKey) {
-        let fingerprint = key.fingerprint().to_string();
+    pub async fn add_authorized_key(&self, key: PublicKey) {
+        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
 
         self.authorized_keys.write().await.insert(fingerprint, key);
 
@@ -86,7 +86,9 @@ impl TransferServer {
 
         let mut keys_map: HashMap<String, String> = HashMap::new();
         for (fingerprint, public_key) in keys.iter() {
-            keys_map.insert(fingerprint.clone(), public_key.public_key_base64());
+            if let Ok(openssh) = public_key.to_openssh() {
+                keys_map.insert(fingerprint.clone(), openssh);
+            }
         }
 
         if let Ok(file) = File::create(path) {
@@ -103,6 +105,15 @@ impl TransferServer {
             }
         }
     }
+
+    pub async fn add_authorized_key_from_str(&self, key_str: &str) -> bool {
+        if let Ok(key) = parse_public_key(key_str) {
+            self.add_authorized_key(key).await;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Server for TransferServer {
@@ -113,16 +124,15 @@ impl Server for TransferServer {
     }
 }
 
-#[async_trait]
 impl Handler for TransferServer {
     type Error = russh::Error;
 
     async fn auth_publickey(
         &mut self,
         user: &str,
-        public_key: &key::PublicKey,
+        public_key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
-        let fingerprint = public_key.fingerprint().to_string();
+        let fingerprint = public_key.fingerprint(HashAlg::Sha256).to_string();
 
         let keys = self.authorized_keys.read().await;
         tracing::info!(
@@ -139,17 +149,9 @@ impl Handler for TransferServer {
             tracing::warn!("Key rejected for {}", user);
             Ok(Auth::Reject {
                 proceed_with_methods: None,
+                partial_success: false,
             })
         }
-    }
-
-    async fn channel_open_session(
-        &mut self,
-        channel: Channel<russh::server::Msg>,
-        _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
-        tracing::info!("Session channel opened: {:?}", channel.id());
-        Ok(true)
     }
 
     async fn subsystem_request(
@@ -230,7 +232,7 @@ impl Handler for TransferServer {
             let cert_b64 = STANDARD.encode(&cert_der);
 
             let response = format!("{}|{}|{}", port, token, cert_b64);
-            session.data(channel, russh::CryptoVec::from_slice(response.as_bytes()));
+            let _ = session.data(channel, response.into_bytes());
 
             let event_sender_clone = self.event_sender.clone();
 
@@ -349,9 +351,7 @@ impl Handler for TransferServer {
                     }
                 }
                 let response = format!("{}\n", existing_paths.join("|"));
-                let _ = handle
-                    .data(channel, russh::CryptoVec::from_slice(response.as_bytes()))
-                    .await;
+                let _ = handle.data(channel, response.into_bytes()).await;
                 let _ = handle.eof(channel).await;
                 let _ = handle.close(channel).await;
             });
@@ -392,9 +392,7 @@ impl Handler for TransferServer {
                     output_str.len()
                 );
 
-                let _ = handle
-                    .data(channel, russh::CryptoVec::from_slice(output_str.as_bytes()))
-                    .await;
+                let _ = handle.data(channel, output_str.into_bytes()).await;
                 let _ = handle.exit_status_request(channel, 0).await;
                 let _ = handle.eof(channel).await;
                 let _ = handle.close(channel).await;
@@ -418,18 +416,18 @@ impl Handler for TransferServer {
 
         match output {
             Ok(out) => {
-                session.data(channel, russh::CryptoVec::from_slice(&out.stdout));
-                session.extended_data(channel, 1, russh::CryptoVec::from_slice(&out.stderr));
-                session.exit_status_request(channel, out.status.code().unwrap_or(0) as u32);
+                let _ = session.data(channel, out.stdout);
+                let _ = session.extended_data(channel, 1, out.stderr);
+                let _ = session.exit_status_request(channel, out.status.code().unwrap_or(0) as u32);
             }
             Err(e) => {
                 tracing::error!("Failed to execute command: {}", e);
-                session.exit_status_request(channel, 1);
+                let _ = session.exit_status_request(channel, 1);
             }
         }
 
-        session.eof(channel);
-        session.close(channel);
+        let _ = session.eof(channel);
+        let _ = session.close(channel);
         Ok(())
     }
 
@@ -467,7 +465,7 @@ impl Handler for TransferServer {
 pub async fn run_server(
     port: u16,
     server: TransferServer,
-    host_key: key::KeyPair,
+    host_key: russh::keys::PrivateKey,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = russh::server::Config {
         keys: vec![host_key],
@@ -493,4 +491,15 @@ pub async fn run_server(
             }
         });
     }
+}
+
+pub fn generate_host_key() -> russh::keys::PrivateKey {
+    russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+        .expect("Failed to generate Ed25519 host key")
+}
+
+pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
+    PublicKey::from_openssh(key_str.trim())
+        .or_else(|_| PublicKey::from_openssh(&format!("ssh-ed25519 {}", key_str.trim())))
+        .map_err(|e| e.to_string())
 }

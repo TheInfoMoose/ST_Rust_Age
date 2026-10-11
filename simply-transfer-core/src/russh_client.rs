@@ -13,12 +13,11 @@ pub struct RusshClient {
 
 struct ClientHandler;
 
-#[async_trait]
 impl russh::client::Handler for ClientHandler {
     type Error = russh::Error;
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        _server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         Ok(true) // Accept all keys for now
     }
@@ -71,21 +70,23 @@ impl SshClient for RusshClient {
             .as_mut()
             .ok_or(SshError::ConnectionFailed("Not connected".to_string()))?;
 
-        let key_pair = russh_keys::decode_secret_key(private_key_pem, None)
+        let key_pair = russh::keys::PrivateKey::from_openssh(private_key_pem)
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
+        let private_key_with_hash =
+            russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
+
         let auth_res = handle
-            .authenticate_publickey(username, Arc::new(key_pair))
+            .authenticate_publickey(username, private_key_with_hash)
             .await
             .map_err(|e| SshError::AuthenticationFailed(e.to_string()))?;
 
-        if !auth_res {
-            return Err(SshError::AuthenticationFailed(
+        match auth_res {
+            russh::client::AuthResult::Success => Ok(()),
+            _ => Err(SshError::AuthenticationFailed(
                 "Key rejected by server".to_string(),
-            ));
+            )),
         }
-
-        Ok(())
     }
 
     async fn get_remote_file_size(

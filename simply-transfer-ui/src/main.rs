@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (global_tx, mut global_rx) =
         tokio::sync::broadcast::channel::<simply_transfer_core::engine::TransferEvent>(1000);
 
-    let host_key = russh_keys::key::KeyPair::generate_ed25519().unwrap();
+    let host_key = simply_transfer_core::russh_server::generate_host_key();
     let mut p2p_server = simply_transfer_core::russh_server::TransferServer::new();
     p2p_server.set_event_sender(global_tx.clone());
     P2P_SERVER.set(p2p_server.clone()).ok();
@@ -1037,11 +1037,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                     if !dest_pub.trim().is_empty() {
                                         tracing::info!("Ingesting dest_pub from TCP handshake");
-                                        if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim())
-                                            && let Some(srv) = P2P_SERVER.get() {
-                                                srv.add_authorized_key(dest_pub_parsed).await;
+                                        if let Some(srv) = P2P_SERVER.get() {
+                                            if srv.add_authorized_key_from_str(dest_pub.trim()).await {
                                                 tracing::info!("Authorized key added to global P2P Daemon!");
                                             }
+                                        }
 
                                         let my_user = "simply-transfer".to_string();
                                         let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
@@ -1912,14 +1912,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                 // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
                                 tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
-                                if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(parsed.pub_key.trim())
-                                    && let Some(srv) = P2P_SERVER.get() {
-                                        let srv_clone = srv.clone();
-                                        tokio::spawn(async move {
-                                            srv_clone.add_authorized_key(dest_pub_parsed).await;
+                                if let Some(srv) = P2P_SERVER.get() {
+                                    let srv_clone = srv.clone();
+                                    let pub_key_clone = parsed.pub_key.trim().to_string();
+                                    tokio::spawn(async move {
+                                        if srv_clone.add_authorized_key_from_str(&pub_key_clone).await {
                                             tracing::info!("Receiver's authorized key added to global P2P Daemon!");
-                                        });
-                                    }
+                                        }
+                                    });
+                                }
 
                                 if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
                                     let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
