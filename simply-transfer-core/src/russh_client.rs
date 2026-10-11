@@ -29,6 +29,7 @@ impl RusshClient {
         Self::default()
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     async fn establish_connection(&mut self, host: &str, port: u16) -> Result<(), SshError> {
         let mut config = Config::default();
         config.inactivity_timeout = Some(std::time::Duration::from_secs(30));
@@ -270,7 +271,7 @@ impl SshClient for RusshClient {
         let _ = bi.0.finish();
 
         let mut ack_buf = [0u8; 2];
-        if let Ok(_) = bi.1.read_exact(&mut ack_buf).await {
+        if bi.1.read_exact(&mut ack_buf).await.is_ok() {
             if &ack_buf != b"OK" {
                 tracing::warn!("Did not receive valid application-layer ACK");
                 connection.close(0u32.into(), b"failed");

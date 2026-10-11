@@ -167,7 +167,7 @@ impl TransferEngine {
                 }
             }
 
-            for (rel_path, _file_info) in &local_registry.files {
+            for rel_path in local_registry.files.keys() {
                 // Ensure uniform path separators for the HashSet check
                 let normalized_rel = rel_path.replace("\\", "/");
                 if existing_set.contains(&normalized_rel) || existing_set.contains(rel_path) {
@@ -422,7 +422,7 @@ impl TransferEngine {
                 let event_sender = self.event_sender.clone();
                 let validation_tx = validation_tx.clone();
                 let failed_count_atomic = failed_count_atomic.clone();
-                let is_windows_dest = is_windows_dest;
+
 
                 async move {
                     if let Some(ref rx) = rx_clone {

@@ -1,3 +1,6 @@
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::redundant_pattern_matching)]
+#![allow(clippy::collapsible_if)]
 #![allow(unused_assignments, unused_variables)]
 use simply_transfer_core::engine::{
     ControlSignal, FileTransferStatus, TransferEngine, TransferEvent,
@@ -94,7 +97,7 @@ fn get_file_snapshot_type(filename: &str) -> String {
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    
+
     let snapshot_extensions = [
         "qbw", "qbb", "qbm", "qbo", "qbx", "qba", "qby",
         "nd", "tlg", "iif", "log", "backupbundle", "sparsebundle",
@@ -105,7 +108,7 @@ fn get_file_snapshot_type(filename: &str) -> String {
         "frm", "edb", "vhdx", "vhd", "vmdk", "qcow2", "raw",
         "img", "vdi", "dat", "dmg", "wim", "esd"
     ];
-    
+
     if snapshot_extensions.contains(&ext_lower.as_str()) {
         simply_transfer_snapshots::get_native_driver().snapshot_type().to_string()
     } else {
@@ -479,7 +482,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target_host = host.clone();
                 conn_name = conns[idx].name.to_string();
                 let token_str = conns[idx].token.to_string();
-                
+
                 let token_parts: Vec<&str> = token_str.split(';').collect();
                 actual_token_str = token_parts[0].to_string();
                 if token_parts.len() > 1 {
@@ -501,7 +504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+
         if dest_user.is_empty() {
             if let Some(ui) = ui_handle.upgrade() {
                 ui.set_overall_status("Pending Remote Verification: Please verify token or use user@IP".into());
@@ -516,7 +519,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let (all_mappings, transfer_type, session_name) = if let Some(ui) = ui_handle.upgrade() {
             ui.set_active_tab(1);
-            
+
             let mut sessions: Vec<slint::SharedString> = ui.get_active_sessions().iter().collect();
             let session_name = if conn_name.trim().is_empty() { format!("Transfer to {}", dest_ip) } else { conn_name.clone() };
             if !sessions.contains(&session_name.clone().into()) {
@@ -529,7 +532,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_selected_session_idx(pos as i32);
                 }
             }
-            
+
             // Clear previous transfer state
             ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
             ui.set_completed_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
@@ -537,9 +540,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_overall_status("Preparing...".into());
             ui.set_current_phase("Idle".into());
             ui.set_is_transfer_paused(false);
-            
+
             ui.set_remote_verified_host(format!("{}@{}", dest_user, dest_ip).into());
-            
+
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
             let t_type = ui.get_transfer_type_val().to_string();
@@ -568,7 +571,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !dest_ip.is_empty() {
                 use simply_transfer_core::ssh::SshClient;
                 let mut priv_pem = String::new();
-                
+
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&actual_token_str) {
                     let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     let key_to_use = my_pub_key.as_deref().unwrap_or(&parsed.pub_key);
@@ -576,7 +579,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         priv_pem = pem;
                     }
                 }
-                
+
                 if priv_pem.is_empty() {
                     tracing::error!("Failed to retrieve private key from keyring for authentication.");
                 } else {
@@ -671,7 +674,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     progress,
                                                     snapshot_type: current_snapshot_type.clone().into(),
                                                 }];
-                                                
+
                                                 if progress_bytes > last_progress_bytes {
                                                     bytes_transferred_in_interval += progress_bytes - last_progress_bytes;
                                                 } else if progress_bytes < last_progress_bytes {
@@ -686,7 +689,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 current_file_size = 0;
                                                 status_txt = format!("Completed: {} / {} files", current_completed_files, total_files);
                                                 log_event("transfer", &format!("Transferred: {}", file));
-                                                
+
                                                 if let Some(existing) = local_c_q.iter_mut().find(|i| i.name.as_str() == file.as_str()) {
                                                     existing.status = "Completed".into();
                                                     existing.status_color = slint::Color::from_rgb_u8(200, 200, 50);
@@ -766,7 +769,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     TransferEvent::TransferStarted(_) => {}
                                 }
                             }
-                            
+
                             let now = tokio::time::Instant::now();
                             let elapsed = now.duration_since(last_tick).as_secs_f32();
                             if elapsed >= 0.1 {
@@ -821,7 +824,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let active_sessions: Vec<_> = ui.get_active_sessions().iter().collect();
                                     let selected_idx = ui.get_selected_session_idx() as usize;
                                     let is_active = selected_idx < active_sessions.len() && active_sessions[selected_idx] == session_name_clone.as_str();
-                                    
+
                                     if is_active {
                                         let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
                                         ui.set_transfer_queue(t_model.into());
@@ -836,12 +839,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         ui.set_metric_eta(clone_ml.clone().into());
                                         ui.set_current_phase(clone_active_phase.clone().into());
                                     }
-                                    
+
                                     if clone_active_phase != "Idle" {
                                         let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
                                         let mut target_idx = None;
                                         for (idx, conn) in conns.iter().enumerate() {
-                                            if conn.name.as_str() == target_conn_name_for_closure.as_str() && 
+                                            if conn.name.as_str() == target_conn_name_for_closure.as_str() &&
                                                conn.host.as_str() == target_host_for_closure.as_str() {
                                                 target_idx = Some(idx);
                                                 break;
@@ -853,7 +856,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             conns[idx].duration = clone_duration.into();
                                             conns[idx].eta = clone_eta.into();
                                             conns[idx].transfer_rate = clone_mu.clone().into();
-                                            
+
                                             let model = ui.get_connections();
                                             if let Some(vec_model) = model.as_any().downcast_ref::<slint::VecModel<ConnectionItem>>() {
                                                 vec_model.set_row_data(idx, conns[idx].clone());
@@ -885,32 +888,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if transfer_type == "Continuous Sync" || transfer_type == "Scheduled Transfer" {
                 let log_file = if transfer_type == "Continuous Sync" { "sync" } else { "schedule" };
-                
+
                 // Save schedule to JSON file
                 let schedule_entry = serde_json::json!({
                     "transfer_type": transfer_type,
                     "mappings": all_mappings.clone(),
+                    "connection_name": conn_name.clone(),
                     "sleep_duration": if transfer_type == "Continuous Sync" { 60 } else { 3600 }
                 });
-                
+
                 let mut schedules = Vec::new();
                 if let Ok(contents) = std::fs::read_to_string("schedules.json")
                     && let Ok(existing_schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
                         schedules = existing_schedules;
                     }
-                
+
                 schedules.push(schedule_entry);
-                
+
                 if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
                     let _ = std::fs::write("schedules.json", json_string);
                 }
-                
+
                 log_event(log_file, &format!("Starting background daemon for {}", transfer_type));
                 tracing::info!("Starting background daemon for {}", transfer_type);
                 loop {
                     log_event(log_file, "Executing background transfer cycle...");
                     tracing::info!("Executing background transfer cycle...");
-                    
+
                     for (src, dest) in &all_mappings {
                         let engine = TransferEngine::new(
                             PathBuf::from(src),
@@ -926,15 +930,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tracing::error!("Engine execution failed for {}: {:?}", src, e);
                         }
                     }
-                    
+
                     log_event(log_file, "Cycle completed successfully, waiting for next interval.");
-                    
+
                     let sleep_duration = if transfer_type == "Continuous Sync" {
                         60 // Mock 1 min sync
                     } else {
                         3600 // Mock 1 hr schedule
                     };
-                    
+
                     tracing::info!("Cycle complete. Sleeping for {} seconds...", sleep_duration);
                     tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration)).await;
                 }
@@ -966,7 +970,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let mut conn_to_save = new_conn.clone();
-            
+
             tokio::spawn(async move {
                 if !simply_transfer_core::ssh_server::SshServer::is_installed() {
                     log_event("connection", "SSH server is not installed. Prompting for privileges to install it...");
@@ -976,7 +980,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         log_event("connection", "SSH server installed successfully.");
                     }
                 }
-                
+
                 if !simply_transfer_core::ssh_server::SshServer::is_running() {
                     log_event("connection", "SSH server is not running. Prompting for privileges to start it...");
                     if let Err(e) = simply_transfer_core::ssh_server::SshServer::start_server() {
@@ -989,7 +993,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if conn_to_save.transfer_type != "Remote Transfer" {
                 let pub_key = conn_to_save.token.to_string();
-                
+
                 // We must embed OUR local IP in the token so the remote device knows where to reach us.
                 // The 'host' field here is the destination IP, so we should NOT use it for the token.
                 let mut local_ip = String::new();
@@ -999,29 +1003,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     local_ip = addr.ip().to_string();
                 }
-                
+
                 if local_ip.trim().is_empty() || local_ip == "0.0.0.0" {
                     local_ip = "127.0.0.1".to_string();
                 }
-                
+
                 let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
                 let port = listener.local_addr().unwrap().port();
                 listener.set_nonblocking(true).unwrap();
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-                
+
                 let pub_key_clone = pub_key.clone();
                 let ui_handle = ui_weak.clone();
-                
+
                 tokio::spawn(async move {
                     while let Ok((mut socket, addr)) = listener.accept().await {
-                        let _pub_key = pub_key_clone.clone();
+
                         let ui_handle = ui_handle.clone();
                         tokio::spawn(async move {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
                             let (reader, mut writer) = socket.split();
                             let mut buf_reader = tokio::io::BufReader::new(reader);
                             let mut line = String::new();
-                            
+
                             if buf_reader.read_line(&mut line).await.is_ok()
                                 && let Ok(req) = serde_json::from_str::<serde_json::Value>(&line)
                             {
@@ -1030,7 +1034,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let dest_user = req["user"].as_str().unwrap_or("simply-transfer").to_string();
                                     let dest_pub = req.get("pub_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                     tracing::info!("Received verify request from {}@{}", dest_user, dest_ip);
-                                    
+
                                     if !dest_pub.trim().is_empty() {
                                         tracing::info!("Ingesting dest_pub from TCP handshake");
                                         if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(dest_pub.trim())
@@ -1038,11 +1042,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 srv.add_authorized_key(dest_pub_parsed).await;
                                                 tracing::info!("Authorized key added to global P2P Daemon!");
                                             }
-                                        
+
                                         let my_user = "simply-transfer".to_string();
                                         let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
                                         let _ = writer.write_all(res.as_bytes()).await;
-                                        
+
                                         let new_host = dest_ip.clone();
                                         tracing::info!("Attempting to map TCP handshake for remote host: {}", new_host);
                                         let _ = slint::invoke_from_event_loop(move || {
@@ -1056,7 +1060,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         conn_pub = parsed.pub_key;
                                                     }
                                                     let incoming_actual_token = dest_pub.split(';').next().unwrap_or(&dest_pub).trim().to_string();
-                                                    
+
                                                     if conn_pub == incoming_actual_token && !conn_pub.is_empty() {
                                                         tracing::info!("Found connection waiting for peer. Updating state to Connected.");
                                                         conn.host = new_host.clone().into();
@@ -1067,7 +1071,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
                                                 ui.set_overall_status("Connection Confirmed".into());
                                                 ui.set_remote_verification_status("Connected".into());
-                                                
+
                                                 save_connections(&conns);
                                             }
                                         });
@@ -1090,7 +1094,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 });
-                
+
                 let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                 let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key, Some(&my_user));
                 conn_to_save.token = generated_token.into();
@@ -1113,7 +1117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
             }
-            
+
             conns.push(conn_to_save);
             save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
@@ -1154,12 +1158,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_fetch_directory(move |path, is_remote, is_dest| {
         let ui_weak = ui_weak.clone();
         let path_str = path.to_string();
-        
+
         let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
         let mut t_type = String::new();
-        
+
         if is_remote
             && let Some(ui) = ui_weak.upgrade() {
                 let conns: Vec<_> = ui.get_connections().iter().collect();
@@ -1169,7 +1173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let token = conns[idx].token.to_string();
                     t_type = conns[idx].transfer_type.to_string();
                     token_str = token.clone();
-                    
+
                     if host.contains('@') {
                         let parts: Vec<&str> = host.split('@').collect();
                         dest_user = parts[0].to_string();
@@ -1185,7 +1189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            
+
         if is_remote && dest_user.is_empty() {
             let _ = notify_rust::Notification::new()
                 .summary("Verification Pending")
@@ -1196,16 +1200,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             let mut nodes = Vec::new();
             let mut success = false;
-            
+
             if is_remote {
-                
+
                 if !dest_ip.is_empty() {
                     use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
-                    
+
                     let mut ssh_client = RusshClient::new();
                     let mut priv_pem_str = String::new();
-                    
+
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         // Extract the sender's public key ID from the token (second part after semicolon)
@@ -1223,7 +1227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         };
-                        
+
                         if let Ok(pem) = mgr.get_private_key_pem(&private_key_id) {
                             priv_pem_str = pem;
                         } else {
@@ -1232,7 +1236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         tracing::error!("on_fetch_directory: Failed to parse token {}", token_str);
                     }
-                    
+
                     if priv_pem_str.is_empty() {
                         tracing::error!("on_fetch_directory: Private key not available for authentication.");
                     } else if let Err(e) = ssh_client.connect(&dest_ip, 2222).await {
@@ -1244,14 +1248,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await
                             .map(|out| out.trim() == "Windows")
                             .unwrap_or(false);
-                            
+
                         let mut resolved_path = path_str.clone();
                         if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
                             resolved_path = "C:\\".to_string();
                         } else if !is_windows && (resolved_path.is_empty() || resolved_path == "\\") {
                             resolved_path = "/".to_string();
                         }
-                            
+
                         let cmd = if is_windows {
                             format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", resolved_path)
                         } else {
@@ -1292,7 +1296,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                
+
                 if !success {
                     nodes.push(FileNode {
                         name: if dest_ip.is_empty() { "[Invalid Remote Configuration]".into() } else { "[Remote Connection Failed]".into() },
@@ -1319,13 +1323,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
             }
-            
+
             nodes.sort_by(|a, b| {
                 if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
                 else if !a.is_dir && b.is_dir { std::cmp::Ordering::Greater }
                 else { a.name.cmp(&b.name) }
             });
-            
+
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let model = std::rc::Rc::new(slint::VecModel::from(nodes));
@@ -1390,7 +1394,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_expand_browser_node(move |node, is_remote, is_dest| {
         let node_path = node.path.to_string();
         let ui_weak = ui_weak.clone();
-        
+
         let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
@@ -1417,7 +1421,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+
         if let Some(ui) = ui_weak.upgrade() {
             let browser_nodes: Vec<_> = if is_dest {
                 ui.get_dest_browser_nodes().iter().collect()
@@ -1439,17 +1443,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             let mut nodes = Vec::new();
             let depth = node.depth + 1;
-            
+
             if is_remote {
                 if !dest_ip.is_empty() {
                     use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
-                    
+
                     let mut ssh_client = RusshClient::new();
                     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let mut tmp_pem = ssh_dir.join("simply-transfer-tmp.pem");
-                    
+
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                         // Extract the sender's public key ID from the token (second part after semicolon)
@@ -1458,7 +1462,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             parsed.pub_key.clone() // fallback to receiver's public key
                         };
-                        
+
                         if let Ok(priv_pem) = mgr.get_private_key_pem(&private_key_id) {
                             let _ = std::fs::write(&tmp_pem, priv_pem.as_bytes());
                             #[cfg(unix)]
@@ -1472,13 +1476,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         tmp_pem = ssh_dir.join("simply-transfer-remote.pem");
                     }
-                    
+
                     if let Err(_) = ssh_client.connect(&dest_ip, 2222).await {}
                     else if let Err(_) = ssh_client.authenticate_publickey(&dest_user, &std::fs::read_to_string(&tmp_pem).unwrap_or_default(), None).await {}
                     else {
                         let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
                             .await.map(|out| out.trim() == "Windows").unwrap_or(false);
-                            
+
                         let mut resolved_path = node_path.clone();
                         let cmd = if is_windows {
                             if resolved_path.is_empty() { resolved_path = "C:\\".to_string(); }
@@ -1528,13 +1532,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
             }
-            
+
             nodes.sort_by(|a, b| {
                 if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
                 else if !a.is_dir && b.is_dir { std::cmp::Ordering::Greater }
                 else { a.name.cmp(&b.name) }
             });
-            
+
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     let browser_nodes: Vec<_> = if is_dest {
@@ -1543,21 +1547,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.get_browser_nodes().iter().collect()
                     };
                     let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path.as_str());
-                    
+
                     if let Some(index) = index {
                         let mut new_nodes = Vec::new();
                         for i in 0..=index {
                             new_nodes.push(browser_nodes[i].clone());
                         }
-                        
+
                         for n in nodes {
                             new_nodes.push(n);
                         }
-                        
+
                         for i in index + 1..browser_nodes.len() {
                             new_nodes.push(browser_nodes[i].clone());
                         }
-                        
+
                         if is_dest {
                             ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
                         } else {
@@ -1695,14 +1699,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-
-
     let ui_weak = ui.as_weak();
     ui.on_delete_connection(move |idx| {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let idx = idx as usize;
             if idx < conns.len() {
+                let deleted_conn_name = conns[idx].name.to_string(); // Extracted connection name
                 let token = conns[idx].token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                     let key_mgr =
@@ -1721,6 +1724,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 save_connections(&conns);
                 let model = std::rc::Rc::new(slint::VecModel::from(conns));
                 ui.set_connections(model.into());
+
+                // Load existing schedules and filter out those tied to this connection
+                let mut updated_schedules = Vec::new();
+                if let Ok(file) = std::fs::File::open("schedules.json")
+                    && let Ok(loaded_schedules) =
+                        serde_json::from_reader::<_, Vec<serde_json::Value>>(file)
+                {
+                    for schedule in loaded_schedules {
+                        // Only keep schedules not associated with the deleted connection
+                        if !schedule
+                            .get("connection_name")
+                            .is_some_and(|v| v.as_str() == Some(&deleted_conn_name))
+                        {
+                            updated_schedules.push(schedule);
+                        }
+                    }
+                }
+
+                // Save filtered schedules back to disk
+                if let Ok(mut file) = std::fs::File::create("schedules.json") {
+                    if let Err(e) = serde_json::to_writer_pretty(&mut file, &updated_schedules) {
+                        eprintln!("Failed to write schedules: {}", e);
+                    }
+                } else {
+                    eprintln!("Failed to create schedules.json");
+                }
+
+                // Rebuild UI model with updated schedule data
+                let mut slint_schedules = Vec::new();
+                for (new_idx, schedule) in updated_schedules.iter().enumerate() {
+                    let transfer_type =
+                        schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                    if let Some(arr) = schedule["mappings"].as_array() {
+                        for item in arr {
+                            if let (Some(src), Some(dest)) = (
+                                item.get(0).and_then(|v| v.as_str()),
+                                item.get(1).and_then(|v| v.as_str()),
+                            ) {
+                                slint_schedules.push(ScheduleData {
+                                    id: format!("{}", new_idx).into(),
+                                    source: src.into(),
+                                    dest: dest.into(),
+                                    r#type: transfer_type.clone().into(),
+                                });
+                            }
+                        }
+                    }
+                }
+                ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
             }
         }
     });
@@ -1759,26 +1811,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 log_event("connection", "SSH server started successfully.");
             }
-            
+
             log_event("connection", &format!("Validating remote token: {}", token));
-            
+
             let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                 Ok(parsed) => {
                     // Ingest the public key to authorized_keys
                     let pub_key_line = format!("ssh-ed25519 {} simply-transfer", parsed.pub_key);
-                    
+
                     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
                     let ssh_dir = std::path::Path::new(&home).join(".ssh");
                     let _ = std::fs::create_dir_all(&ssh_dir);
                     let auth_keys = ssh_dir.join("authorized_keys");
-                    
+
                     let mut key_exists = false;
                     if let Ok(content) = std::fs::read_to_string(&auth_keys)
                         && content.contains(&parsed.pub_key)
                     {
                         key_exists = true;
                     }
-                    
+
                     if !key_exists {
                         use std::io::Write;
                         if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&auth_keys) {
@@ -1788,7 +1840,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         log_event("connection", "Public key already in authorized_keys.");
                     }
-                    
+
                     #[cfg(target_os = "windows")]
                     {
                         let admin_keys = "C:\\ProgramData\\ssh\\administrators_authorized_keys";
@@ -1817,7 +1869,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    
+
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
@@ -1825,18 +1877,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600));
                         let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
                     }
-                    
+
                     // Trigger remote handshake (TCP connect to source device)
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
                     log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
-                    
+
                     // Generate our own key pair and transmit it over SSH
                     let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     let mut my_pub_key_id = String::new();
                     if let Ok(pub_b) = key_mgr.generate_and_store() {
                         my_pub_key_id = pub_b.clone();
                     }
-                    
+
                     // Use a short timeout for the handshake
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(15),
@@ -1853,11 +1905,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 std::time::Duration::from_secs(10),
                                 reader.read_line(&mut line)
                             ).await;
-                            
+
                             if let Ok(Ok(_)) = read_result {
                                 if line.contains("\"ok\"") {
                                     log_event("connection", "Remote token validated and handshake succeeded.");
-                                
+
                                 // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
                                 tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
                                 if let Ok(dest_pub_parsed) = russh_keys::parse_public_key_base64(parsed.pub_key.trim())
@@ -1925,7 +1977,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (false, format!("Invalid Token Format: {}", e))
                 }
             };
-            
+
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_is_remote_verified(verified);
@@ -2034,66 +2086,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_weak = ui.as_weak();
     // Initialize Schedule Tab UI
     if let Ok(contents) = std::fs::read_to_string("schedules.json")
-        && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
-            let mut slint_schedules = Vec::new();
-            for (idx, schedule) in schedules.iter().enumerate() {
-                let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
-                if let Some(arr) = schedule["mappings"].as_array() {
-                    for item in arr {
-                        if let (Some(src), Some(dest)) = (
-                            item.get(0).and_then(|v| v.as_str()),
-                            item.get(1).and_then(|v| v.as_str()),
-                        ) {
-                            slint_schedules.push(ScheduleData {
-                                id: format!("{}", idx).into(),
-                                source: src.into(),
-                                dest: dest.into(),
-                                r#type: transfer_type.clone().into(),
-                            });
-                        }
+        && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents)
+    {
+        let mut slint_schedules = Vec::new();
+        for (idx, schedule) in schedules.iter().enumerate() {
+            let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
+            if let Some(arr) = schedule["mappings"].as_array() {
+                for item in arr {
+                    if let (Some(src), Some(dest)) = (
+                        item.get(0).and_then(|v| v.as_str()),
+                        item.get(1).and_then(|v| v.as_str()),
+                    ) {
+                        slint_schedules.push(ScheduleData {
+                            id: format!("{}", idx).into(),
+                            source: src.into(),
+                            dest: dest.into(),
+                            r#type: transfer_type.clone().into(),
+                        });
                     }
                 }
             }
-            ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
         }
+        ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
+    }
 
     ui.on_delete_schedule(move |id| {
-        if let Ok(contents) = std::fs::read_to_string("schedules.json")
-            && let Ok(mut schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents)
-                && let Ok(idx) = id.as_str().parse::<usize>()
-                    && idx < schedules.len() {
-                        schedules.remove(idx);
-                        if let Ok(json_string) = serde_json::to_string_pretty(&schedules) {
-                            let _ = std::fs::write("schedules.json", json_string);
-                        }
+        // Parse schedule ID
+        let idx = match id.as_str().parse::<usize>() {
+            Ok(idx) => idx,
+            Err(_) => return,
+        };
 
-                        // Update UI model
-                        let mut slint_schedules = Vec::new();
-                        for (new_idx, schedule) in schedules.iter().enumerate() {
-                            let transfer_type =
-                                schedule["transfer_type"].as_str().unwrap_or("").to_string();
-                            if let Some(arr) = schedule["mappings"].as_array() {
-                                for item in arr {
-                                    if let (Some(src), Some(dest)) = (
-                                        item.get(0).and_then(|v| v.as_str()),
-                                        item.get(1).and_then(|v| v.as_str()),
-                                    ) {
-                                        slint_schedules.push(ScheduleData {
-                                            id: format!("{}", new_idx).into(),
-                                            source: src.into(),
-                                            dest: dest.into(),
-                                            r#type: transfer_type.clone().into(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_schedules(
-                                std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into(),
-                            );
-                        }
+        // Read and parse schedules
+        let contents = match std::fs::read_to_string("schedules.json") {
+            Ok(contents) => contents,
+            Err(_) => return,
+        };
+
+        let schedules = match serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
+            Ok(schedules) => schedules,
+            Err(_) => return,
+        };
+
+        // Check if index is valid
+        if idx >= schedules.len() {
+            return;
+        }
+
+        // Remove schedule at index
+        let mut updated_schedules = schedules.clone();
+        updated_schedules.remove(idx);
+
+        // Write back to file
+        match serde_json::to_string_pretty(&updated_schedules) {
+            Ok(json_string) => {
+                if std::fs::write("schedules.json", json_string).is_err() {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+
+        // Update UI model
+        let mut slint_schedules = Vec::new();
+        for (new_idx, schedule) in updated_schedules.iter().enumerate() {
+            let transfer_type = schedule["transfer_type"].as_str().unwrap_or("").to_string();
+            if let Some(arr) = schedule["mappings"].as_array() {
+                for item in arr {
+                    if let (Some(src), Some(dest)) = (
+                        item.get(0).and_then(|v| v.as_str()),
+                        item.get(1).and_then(|v| v.as_str()),
+                    ) {
+                        slint_schedules.push(ScheduleData {
+                            id: format!("{}", new_idx).into(),
+                            source: src.into(),
+                            dest: dest.into(),
+                            r#type: transfer_type.clone().into(),
+                        });
                     }
+                }
+            }
+        }
+
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_schedules(std::rc::Rc::new(slint::VecModel::from(slint_schedules)).into());
+        }
     });
 
     // Load and run persistent schedules
@@ -2101,86 +2178,127 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let global_tx_clone = global_tx.clone();
         tokio::spawn(async move {
             if let Ok(contents) = std::fs::read_to_string("schedules.json")
-                && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents) {
-                    for schedule in schedules {
-                        let transfer_type =
-                            schedule["transfer_type"].as_str().unwrap_or("").to_string();
-                        let mappings: Vec<(String, String)> = schedule["mappings"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|item| {
-                                        if let (Some(src), Some(dest)) = (
-                                            item.get(0).and_then(|v| v.as_str()),
-                                            item.get(1).and_then(|v| v.as_str()),
-                                        ) {
-                                            Some((src.to_string(), dest.to_string()))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-
-                        let sleep_duration = schedule["sleep_duration"].as_u64().unwrap_or(3600);
-
-                        tracing::info!("Restoring saved schedule: {}", transfer_type);
-
-                        let tx_inner = global_tx_clone.clone();
-                        let _log_file = if transfer_type == "Continuous Sync" {
-                            "sync"
-                        } else {
-                            "schedule"
-                        };
-
-                        tokio::spawn(async move {
-                            loop {
-                                tracing::info!("Executing background transfer cycle...");
-                                for (src, dest) in &mappings {
-                                    let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
-                                    let g_tx = tx_inner.clone();
-                                    tokio::spawn(async move {
-                                        while let Some(event) = rx.recv().await {
-                                            let _ = g_tx.send(event);
-                                        }
-                                    });
-                                    // For restored schedules, we run without ssh_client (local sync or we'd need to re-auth)
-                                    let snapshot_driver =
-                                        Arc::new(simply_transfer_snapshots::FallbackSnapshotDriver);
-                                    let engine = TransferEngine::new(
-                                        PathBuf::from(src),
-                                        dest.clone(),
-                                        tx,
-                                        Arc::new(
-                                            simply_transfer_core::russh_client::RusshClient::new(),
-                                        ),
-                                        Arc::new(
-                                            simply_transfer_core::russh_client::RusshClient::new(),
-                                        ),
-                                        snapshot_driver,
-                                        None,
-                                    );
-                                    if let Err(e) = engine.execute().await {
-                                        tracing::error!(
-                                            "Engine execution failed for {}: {:?}",
-                                            src,
-                                            e
-                                        );
+                && let Ok(schedules) = serde_json::from_str::<Vec<serde_json::Value>>(&contents)
+            {
+                for schedule in schedules {
+                    let transfer_type =
+                        schedule["transfer_type"].as_str().unwrap_or("").to_string();
+                    let mappings: Vec<(String, String)> = schedule["mappings"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| {
+                                    if let (Some(src), Some(dest)) = (
+                                        item.get(0).and_then(|v| v.as_str()),
+                                        item.get(1).and_then(|v| v.as_str()),
+                                    ) {
+                                        Some((src.to_string(), dest.to_string()))
+                                    } else {
+                                        None
                                     }
-                                }
-                                tracing::info!(
-                                    "Cycle complete. Sleeping for {} seconds...",
-                                    sleep_duration
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let sleep_duration = schedule["sleep_duration"].as_u64().unwrap_or(3600);
+
+                    tracing::info!("Restoring saved schedule: {}", transfer_type);
+
+                    let tx_inner = global_tx_clone.clone();
+                    let log_type = if transfer_type == "Continuous Sync" {
+                        "sync"
+                    } else {
+                        "schedule"
+                    };
+
+                    tokio::spawn(async move {
+                        loop {
+                            tracing::info!("Executing background transfer cycle...");
+                            for (src, dest) in &mappings {
+                                let (tx, mut rx) = tokio::sync::mpsc::channel(1000);
+                                let g_tx = tx_inner.clone();
+                                tokio::spawn(async move {
+                                    let mut total_bytes = 0u64;
+                                    let mut transferred_files = Vec::new();
+                                    while let Some(event) = rx.recv().await {
+                                        match &event {
+                                            TransferEvent::TransferStarted(_) => {
+                                                log_event(log_type, "Connected successfully.");
+                                            }
+                                            TransferEvent::ManifestGenerated {
+                                                total_bytes: bytes,
+                                                ..
+                                            } => {
+                                                total_bytes = *bytes;
+                                            }
+                                            TransferEvent::FileStatusChanged(
+                                                file,
+                                                FileTransferStatus::Completed,
+                                            ) => {
+                                                transferred_files.push(file.clone());
+                                            }
+                                            TransferEvent::FileStatusChanged(_, _) => {}
+                                            TransferEvent::TransferComplete {
+                                                successful,
+                                                failed,
+                                            } => {
+                                                log_event(
+                                                    log_type,
+                                                    &format!(
+                                                        "Task complete: {} successful, {} failed",
+                                                        successful, failed
+                                                    ),
+                                                );
+                                                log_event(
+                                                    log_type,
+                                                    &format!("Total size: {} bytes", total_bytes),
+                                                );
+                                                log_event(
+                                                    log_type,
+                                                    &format!(
+                                                        "Files transferred: {:?}",
+                                                        transferred_files
+                                                    ),
+                                                );
+                                            }
+                                            TransferEvent::TransferFailed(err) => {
+                                                log_event(
+                                                    log_type,
+                                                    &format!("Task failed: {}", err),
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                        let _ = g_tx.send(event);
+                                    }
+                                });
+                                // For restored schedules, we run without ssh_client (local sync or we'd need to re-auth)
+                                let snapshot_driver =
+                                    Arc::new(simply_transfer_snapshots::FallbackSnapshotDriver);
+                                let engine = TransferEngine::new(
+                                    PathBuf::from(src),
+                                    dest.clone(),
+                                    tx,
+                                    Arc::new(simply_transfer_core::russh_client::RusshClient::new()),
+                                    Arc::new(simply_transfer_core::russh_client::RusshClient::new()),
+                                    snapshot_driver,
+                                    None,
                                 );
-                                tokio::time::sleep(tokio::time::Duration::from_secs(
-                                    sleep_duration,
-                                ))
-                                .await;
+                                if let Err(e) = engine.execute().await {
+                                    tracing::error!("Engine execution failed for {}: {:?}", src, e);
+                                }
                             }
-                        });
-                    }
+                            tracing::info!(
+                                "Cycle complete. Sleeping for {} seconds...",
+                                sleep_duration
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_secs(sleep_duration))
+                                .await;
+                        }
+                    });
                 }
+            }
         });
     }
 
