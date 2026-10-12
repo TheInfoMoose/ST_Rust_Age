@@ -90,6 +90,8 @@ impl SshServer {
                     "'-Command Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0'",
                     "-Verb",
                     "RunAs",
+                    "-WindowStyle",
+                    "Hidden",
                     "-Wait",
                 ])
                 .status()
@@ -127,9 +129,13 @@ impl SshServer {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok(output) = Command::new("systemsetup").arg("-getremotelogin").output() {
-                let status = String::from_utf8_lossy(&output.stdout);
-                return status.contains("On");
+            // systemsetup -getremotelogin requires sudo, which will fail silently here.
+            // Checking if port 22 is listening is a robust alternative.
+            if std::net::TcpStream::connect("127.0.0.1:22").is_ok() {
+                return true;
+            }
+            if std::net::TcpStream::connect("[::1]:22").is_ok() {
+                return true;
             }
             false
         }
@@ -183,8 +189,14 @@ impl SshServer {
 
         #[cfg(target_os = "macos")]
         {
-            let script =
-                "do shell script \"systemsetup -setremotelogin on\" with administrator privileges";
+            // Deliberately trigger macOS TCC so the app/terminal populates in the Full Disk Access list
+            let home = std::env::var("HOME").unwrap_or_default();
+            if !home.is_empty() {
+                let _ = std::fs::read_dir(format!("{}/Library/Messages", home));
+                let _ = std::fs::metadata("/Library/Application Support/com.apple.TCC/TCC.db");
+            }
+
+            let script = "do shell script \"systemsetup -f -setremotelogin on || /bin/launchctl load -w /System/Library/LaunchDaemons/ssh.plist\" with administrator privileges";
             let status = Command::new("osascript")
                 .arg("-e")
                 .arg(script)
@@ -194,7 +206,12 @@ impl SshServer {
             if status.success() {
                 Ok(())
             } else {
-                Err("User cancelled or failed to start Remote Login via osascript.".into())
+                // Open System Settings directly to Full Disk Access so the user can just toggle it
+                let _ = Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+                    .status();
+
+                Err("Failed to start Remote Login via osascript. We have opened System Settings for you; please grant Full Disk Access to your Terminal app or Simply Transfer, then try again.".into())
             }
         }
 
@@ -208,6 +225,8 @@ impl SshServer {
                     "'-Command Start-Service sshd'",
                     "-Verb",
                     "RunAs",
+                    "-WindowStyle",
+                    "Hidden",
                     "-Wait",
                 ])
                 .status()

@@ -6,3 +6,6 @@ members = [
     "simply-transfer-crypto"
 ]
 resolver = "2"
+
+[patch.crates-io]
+ttf-parser = { git = "https://github.com/RazrFalcon/ttf-parser" }

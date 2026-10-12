@@ -18,6 +18,10 @@ impl ApfsSnapshotDriver {
 }
 
 impl SnapshotDriver for ApfsSnapshotDriver {
+    fn snapshot_type(&self) -> &'static str {
+        "APFS"
+    }
+
     fn create_snapshot(&self, _volume_path: &Path) -> Result<Snapshot, SnapshotError> {
         warn!("APFS snapshotting requires elevated privileges (tmutil / diskutil).");
 

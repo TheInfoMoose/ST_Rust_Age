@@ -1,9 +1,17 @@
 import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox, Palette } from "std-widgets.slint";
 
+export struct ScheduleData {
+    id: string,
+    source: string,
+    dest: string,
+    type: string,
+}
+
 export struct TransferQueueItem {
     name: string,
     size: string,
     progress: float,
+    snapshot_type: string,
 }
 
 export struct CompletedItem {
@@ -21,6 +29,10 @@ export struct FileNode {
     name: string,
     is_dir: bool,
     path: string,
+    is_selected: bool,
+    depth: int,
+    is_expanded: bool,
+    snapshot_type: string,
 }
 
 export struct ConnectionItem {
@@ -50,6 +62,108 @@ component StyledBox inherits Rectangle {
     border-color: AppTheme.border;
     border-radius: 6px;
 }
+
+
+component CustomComboBox inherits Rectangle {
+    callback selected(string);
+    
+    in property <[string]> model: [];
+    in-out property <string> current-value: model.length > 0 ? model[0] : "";
+    in-out property <int> current-index: 0;
+    
+    in-out property <bool> popup-visible: false;
+    
+    height: 32px;
+    width: 200px;
+    
+    Rectangle {
+        background: AppTheme.window_bg;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: AppTheme.accent;
+        
+        Text {
+            text: current-value;
+            color: Palette.foreground;
+            vertical-alignment: center;
+            horizontal-alignment: left;
+            font-size: 14px;
+            x: 8px;
+        }
+        
+        Rectangle {
+            height: 16px;
+            width: 16px;
+            x: parent.width - 24px;
+            y: (parent.height - 16px) / 2;
+            background: AppTheme.accent;
+            border-radius: 3px;
+            Text {
+                text: "v";
+                color: white;
+                font-size: 10px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+        
+        TouchArea {
+            clicked => {
+                popup.show();
+            }
+        }
+    }
+    
+    popup := PopupWindow {
+        x: 0;
+        y: parent.height;
+        width: parent.width;
+        height: min(200px, (model.length * 32px));
+        close-policy: close-on-click;
+        
+        Rectangle {
+            background: AppTheme.window_bg;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: AppTheme.accent;
+            width: parent.width;
+            height: parent.height;
+            
+            ListView {
+                for item[index] in model: Rectangle {
+                    height: 32px;
+                    width: parent.width;
+                    background: index == current-index ? AppTheme.accent : (ma2.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
+                    
+                    Text {
+                        text: item;
+                        color: index == current-index ? white : Palette.foreground;
+                        vertical-alignment: center;
+                        horizontal-alignment: left;
+                        x: 8px;
+                    }
+                    
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: AppTheme.accent;
+                    }
+                    
+                    ma2 := TouchArea {
+                        clicked => {
+                            popup-visible = false;
+                            current-value = item;
+                            current-index = index;
+                            selected(item);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 component RustRadioButton inherits Rectangle {
     in property <string> text;
@@ -146,30 +260,64 @@ component RustCheckBox inherits Rectangle {
     }
 }
 
-export component SessionPopout inherits Window {
-    title: "Session Monitor";
-    width: 600px;
-    height: 400px;
-
-    in property <[TransferQueueItem]> transfer_queue;
-    in property <string> phase_text: "Live Transfer Queue";
-
-    VerticalBox {
-        Text { text: root.phase_text; font-weight: 700; font-size: 16px; }
-        ListView {
-            for file in root.transfer_queue : HorizontalBox {
-                Text { text: file.name; }
-                Text { text: file.size; }
-                ProgressIndicator { progress: file.progress; }
+component TransferQueueRow inherits Rectangle {
+    in property <TransferQueueItem> file;
+    height: 25px;
+    HorizontalBox {
+        padding: 0; spacing: 10px;
+        Rectangle { width: 45%; Text { width: 100%; text: root.file.name; overflow: elide; } }
+        Rectangle { width: 20%; Text { width: 100%; text: root.file.size; horizontal-alignment: right; overflow: elide; } }
+        Rectangle { width: 25%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
+        Rectangle {
+            width: 10%;
+            height: 18px;
+            border-radius: 4px;
+            background: root.file.snapshot_type == "VSS" ? #4CAF50 : 
+                        root.file.snapshot_type == "APFS" ? #2196F3 : 
+                        root.file.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+            Text {
+                text: root.file.snapshot_type;
+                color: white;
+                font-size: 10px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
             }
         }
     }
 }
 
+component CompletedQueueRow inherits Rectangle {
+    in property <CompletedItem> file;
+    height: 25px;
+    HorizontalBox {
+        padding: 0; spacing: 10px;
+        Rectangle { width: 60%; Text { width: 100%; text: root.file.name; overflow: elide; } }
+        Rectangle { width: 40%; Text { width: 100%; text: root.file.status; color: root.file.status_color; horizontal-alignment: center; overflow: elide; } }
+    }
+}
+
+component MetricsGrid inherits Rectangle {
+    in property <string> upload_speed: "0 MB/s";
+    in property <string> download_speed: "0 MB/s";
+    in property <string> eta: "0s";
+
+    HorizontalBox {
+        padding: 0; spacing: 20px; alignment: start;
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; } Text { text: root.upload_speed; width: 8%; min-width: 80px; horizontal-alignment: left; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Download:"; } Text { text: root.download_speed; width: 8%; min-width: 80px; horizontal-alignment: left; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "ETA:"; } Text { text: root.eta; width: 8%; min-width: 80px; horizontal-alignment: left; } }
+    }
+}
+
+
+
 export component MainWindow inherits Window {
     title: "Simply Transfer v2";
-    width: 1000px;
-    height: 750px;
+    min-width: 1000px;
+    min-height: 750px;
     background: AppTheme.window_bg;
 
     // Callbacks for Rust backend
@@ -184,7 +332,7 @@ export component MainWindow inherits Window {
     callback remove_key();
     callback pause_transfer();
     callback cancel_transfer();
-    callback popout_session();
+
     callback cancel_key_generation(string);
     callback purge_orphaned_keys() -> int;
     
@@ -197,14 +345,19 @@ export component MainWindow inherits Window {
     callback update_mapping_destination(int, string);
     
     // Remote browser callbacks
-    callback fetch_directory(string, bool); // path, is_remote
-    callback commit_browser_selection(string); // path
+    callback fetch_directory(string, bool, bool); // path, is_remote, is_dest
+    callback commit_browser_selection([string], [string]); // source_paths, dest_paths
+    callback toggle_browser_selection(string, bool); // path, is_dest
+    callback expand_browser_node(FileNode, bool, bool); // node, is_remote, is_dest
+    callback collapse_browser_node(FileNode, bool); // node, is_dest
     
     // System Info States
     in property <string> os_processor_info: "Processor: Unknown";
     in property <string> os_memory_info: "RAM: Unknown";
     // Properties updated by backend
-    in property <int> active_tab: 0;
+    in-out property <int> active_tab: 0;
+    in property <[ScheduleData]> schedules: [];
+    callback delete_schedule(string);
     in property <[TransferQueueItem]> transfer_queue: [];
     in property <[CompletedItem]> completed_queue: [];
     in property <string> overall_status: "Completed: 0 / 0 files";
@@ -216,8 +369,14 @@ export component MainWindow inherits Window {
     in-out property <int> browser_target_idx: 0;
     in-out property <string> browser_current_path: "/";
     in-out property <[FileNode]> browser_nodes: [];
-    in-out property <string> browser_selection: "";
+    in-out property <[string]> browser_selection: [];
     in-out property <bool> browser_is_source: false;
+    
+    // Destination browser state
+    in-out property <string> dest_browser_current_path: "/";
+    in-out property <bool> dest_browser_is_remote: false;
+    in-out property <[FileNode]> dest_browser_nodes: [];
+    in-out property <[string]> dest_browser_selection: [];
     
     // Dashboard States
     in-out property <[ConnectionItem]> connections: [];
@@ -225,7 +384,9 @@ export component MainWindow inherits Window {
     property <bool> is_editing_connection: false;
     property <bool> is_adding_connection: false;
     property <int> add_connection_tab: 0;
+    property <int> active_transfer_tab: 0;
     in-out property <bool> is_remote_verified: false;
+    in-out property <string> remote_verified_full_token: "";
     in-out property <string> remote_verification_status: "";
     in-out property <string> remote_verified_host: "";
 
@@ -240,8 +401,11 @@ export component MainWindow inherits Window {
     // Active Transfers States
     in property <[string]> active_sessions: [];
     in-out property <int> selected_session_idx: 0;
-    in-out property <string> transfer_metrics_text: "Upload: 0 MB/s | Download: 0 MB/s | Latency: 0ms";
+    in-out property <string> metric_upload: "0.0 MB/s";
+    in-out property <string> metric_download: "0.0 MB/s";
+    in-out property <string> metric_eta: "0s";
     in-out property <string> current_phase: "Idle";
+    in-out property <bool> is_transfer_paused: false;
     property <int> tick: 0;
     property <string> ellipsis: root.tick == 0 ? "" : (root.tick == 1 ? "." : (root.tick == 2 ? ".." : "..."));
     
@@ -268,15 +432,57 @@ export component MainWindow inherits Window {
         }
     }
 
-    TabWidget {
-        current-index: root.active_tab;
-
-        Tab {
-            title: "Dashboard";
-            HorizontalBox {
+    // --- Main VerticalBox (Child of MainWindow) ---
+    VerticalBox {
+        padding: 0px; spacing: 0px;
+        // --- HorizontalBox for Top Navigation Tabs (Child of Main VerticalBox) ---
+        HorizontalBox {
+            spacing: 0px;
+            Rectangle { width: 15px; Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; } }
+            
+            Rectangle {
+                width: 15%; height: 35px; min-width: 140px;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                border-color: AppTheme.border; border-width: 1px;
+                // --- Dashboard Tab ---
+                background: root.active_tab == 0 ? AppTheme.accent : (t_dash.has-hover ? AppTheme.list_hover : transparent);
+                Rectangle { y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px; background: root.active_tab == 0 ? AppTheme.accent : (t_dash.has-hover ? AppTheme.list_hover : AppTheme.window_bg); }
+                Text { text: "Dashboard"; font-weight: root.active_tab == 0 ? 700 : 500; horizontal-alignment: center; vertical-alignment: center; width: parent.width; color: root.active_tab == 0 ? white : Palette.foreground; }
+                t_dash := TouchArea { clicked => { root.active_tab = 0; } }
+            }
+            Rectangle {
+                width: 15%; height: 35px; min-width: 140px;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                border-color: AppTheme.border; border-width: 1px;
+                // --- Transfer Tab ---
+                background: root.active_tab == 1 ? AppTheme.accent : (t_trans.has-hover ? AppTheme.list_hover : transparent);
+                Rectangle { y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px; background: root.active_tab == 1 ? AppTheme.accent : (t_trans.has-hover ? AppTheme.list_hover : AppTheme.window_bg); }
+                Text { text: "Transfer"; font-weight: root.active_tab == 1 ? 700 : 500; horizontal-alignment: center; vertical-alignment: center; width: parent.width; color: root.active_tab == 1 ? white : Palette.foreground; }
+                t_trans := TouchArea { clicked => { root.active_tab = 1; } }
+            }
+            Rectangle {
+                width: 15%; height: 35px; min-width: 140px;
+                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                border-color: AppTheme.border; border-width: 1px;
+                // --- Settings Tab ---
+                background: root.active_tab == 2 ? AppTheme.accent : (t_set.has-hover ? AppTheme.list_hover : transparent);
+                Rectangle { y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px; background: root.active_tab == 2 ? AppTheme.accent : (t_set.has-hover ? AppTheme.list_hover : AppTheme.window_bg); }
+                Text { text: "Settings"; font-weight: root.active_tab == 2 ? 700 : 500; horizontal-alignment: center; vertical-alignment: center; width: parent.width; color: root.active_tab == 2 ? white : Palette.foreground; }
+                t_set := TouchArea { clicked => { root.active_tab = 2; } }
+            }
+            Rectangle { horizontal-stretch: 1; Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; } }
+        }
+        
+        // --- Dashboard Tab View ---
+        if root.active_tab == 0: Rectangle {
+            vertical-stretch: 1;
                 // Left Column: Active Connections
+                // --- StyledBox for Active Connections (Child of Dashboard Columns) ---
                 StyledBox {
-                    width: 300px;
+                    x: 15px;
+                    y: 15px;
+                    width: parent.width * 0.35 - 22.5px;
+                    height: parent.height - 30px;
                     VerticalBox {
                         padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                         HorizontalBox {
@@ -290,15 +496,16 @@ export component MainWindow inherits Window {
                                 touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; root.is_adding_connection = false; } }
                                 HorizontalBox {
                                     padding-left: 16px; padding-right: 16px;
-                                    Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 110px; font-weight: 700; overflow: elide; }
+                                    Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 11%; min-width: 110px; font-weight: 700; overflow: elide; }
                                     Text { text: item.state; color: item.state_color; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
-                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 60px; font-weight: 700; }
+                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 6%; min-width: 60px; font-weight: 700; }
                                 }
                             }
                         }
                         Rectangle { height: 10px; }
                         HorizontalBox {
                             padding-left: 16px; padding-right: 16px;
+                            // --- Button ---
                             RustButton {
                                 text: "+";
                                 clicked => { 
@@ -311,12 +518,17 @@ export component MainWindow inherits Window {
                 }
 
                 // Right Column: Connection Details
+                // --- StyledBox for Connection Details (Child of Dashboard Columns) ---
                 StyledBox {
-                    horizontal-stretch: 1;
+                    x: parent.width * 0.35 + 7.5px;
+                    y: 15px;
+                    width: parent.width * 0.65 - 22.5px;
+                    height: parent.height - 30px;
                     VerticalBox {
                         padding: 15px;
                     if !root.is_adding_connection && !root.is_editing_connection && root.connections.length > 0: HorizontalBox {
                         alignment: end;
+                        // --- Button ---
                         Button {
                             text: "-";
                             clicked => { 
@@ -348,8 +560,10 @@ export component MainWindow inherits Window {
                         HorizontalBox {
                             Text { text: "Destination Token:"; vertical-alignment: center; }
                             LineEdit { text: root.connections[root.selected_connection_idx].token; read-only: true; }
+                            // --- Button ---
                             Button { text: "Copy"; clicked => { root.copy_token(); } }
                         }
+                        // --- Button ---
                         Button { 
                             text: "Edit Connection"; 
                             clicked => { root.is_editing_connection = true; } 
@@ -359,6 +573,7 @@ export component MainWindow inherits Window {
                     if root.is_editing_connection && root.connections.length > 0: VerticalBox {
                         HorizontalBox {
                             alignment: end;
+                            // --- Button ---
                             Button {
                                 text: "-";
                                 clicked => { 
@@ -370,12 +585,14 @@ export component MainWindow inherits Window {
                         Text { text: "Edit Connection"; font-weight: 700; font-size: 18px; }
                         Rectangle { height: 10px; }
                         spacing: 8px;
-                        HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } edit_name := LineEdit { text: root.connections[root.selected_connection_idx].name; } }
-                        HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } edit_host := LineEdit { text: root.connections[root.selected_connection_idx].host; } }
+                        HorizontalBox { Text { text: "Name:"; width: 10%; min-width: 100px; vertical-alignment: center; } edit_name := LineEdit { text: root.connections[root.selected_connection_idx].name; } }
+                        HorizontalBox { Text { text: "Host:"; width: 10%; min-width: 100px; vertical-alignment: center; } edit_host := LineEdit { text: root.connections[root.selected_connection_idx].host; } }
                         HorizontalBox { 
-                            Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
+                            Text { text: "Key:"; width: 10%; min-width: 100px; vertical-alignment: center; } 
                             edit_key := LineEdit { text: root.connections[root.selected_connection_idx].token; }
+                            // --- Button ---
                             Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(edit_host.text); } }
+                            // --- Button ---
                             Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
                         }
                         
@@ -384,7 +601,9 @@ export component MainWindow inherits Window {
                         HorizontalBox {
                             alignment: end;
                             spacing: 10px;
+                            // --- Button ---
                             Button { text: "Cancel"; clicked => { root.is_editing_connection = false; } }
+                            // --- Button ---
                             RustButton { 
                                 text: "Commit"; 
                                 clicked => { 
@@ -396,135 +615,261 @@ export component MainWindow inherits Window {
 
                     if root.is_adding_connection: VerticalBox {
                         HorizontalBox {
-                            alignment: space-between;
-                            HorizontalBox {
-                                alignment: start;
-                                spacing: 0px;
+                            spacing: 0px;
+                            Rectangle {
+                                width: 15px; // File cabinet look
+                                Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; }
+                            }
+                            Rectangle { 
+                                width: 14%;
+                                height: 35px;
+                                min-width: 140px;
+                                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                                border-color: AppTheme.border;
+                                border-width: 1px;
+                                background: root.add_connection_tab == 0 ? AppTheme.accent : (ta_new.has-hover ? AppTheme.list_hover : transparent);
                                 Rectangle {
-                                    width: 80px; height: 30px;
-                                    background: root.add_connection_tab == 0 ? AppTheme.list_hover : transparent;
-                                    Text { text: "New"; horizontal-alignment: center; vertical-alignment: center; font-weight: root.add_connection_tab == 0 ? 700 : 500; }
-                                    TouchArea { clicked => { root.add_connection_tab = 0; } }
+                                    y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px;
+                                    background: root.add_connection_tab == 0 ? AppTheme.accent : (ta_new.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
                                 }
-                                Rectangle {
-                                    width: 80px; height: 30px;
-                                    background: root.add_connection_tab == 1 ? AppTheme.list_hover : transparent;
-                                    Text { text: "Remote"; horizontal-alignment: center; vertical-alignment: center; font-weight: root.add_connection_tab == 1 ? 700 : 500; }
-                                    TouchArea { clicked => { root.add_connection_tab = 1; } }
+                                Text {
+                                    text: "New";
+                                    font-weight: root.add_connection_tab == 0 ? 700 : 500;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: parent.width * 0.8;
+                                }
+                                ta_new := TouchArea {
+                                    clicked => { root.add_connection_tab = 0; }
                                 }
                             }
-                            Text { text: "Add Connection"; font-weight: 700; font-size: 18px; vertical-alignment: center; }
+                            Rectangle { 
+                                width: 14%;
+                                height: 35px;
+                                min-width: 140px;
+                                border-top-left-radius: 4px; border-top-right-radius: 4px;
+                                border-color: AppTheme.border;
+                                border-width: 1px;
+                                background: root.add_connection_tab == 1 ? AppTheme.accent : (ta_rem.has-hover ? AppTheme.list_hover : transparent);
+                                Rectangle {
+                                    y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px;
+                                    background: root.add_connection_tab == 1 ? AppTheme.accent : (ta_rem.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
+                                }
+                                Text {
+                                    text: "Remote";
+                                    font-weight: root.add_connection_tab == 1 ? 700 : 500;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: parent.width * 0.8;
+                                }
+                                ta_rem := TouchArea {
+                                    clicked => { root.add_connection_tab = 1; }
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; }
+                            }
                         }
-                        Rectangle { height: 20px; }
-
-                        if root.add_connection_tab == 0: VerticalBox {
-                            Text { text: "New Connection"; font-weight: 700; font-size: 16px; }
-                            Rectangle { height: 10px; }
-                            spacing: 8px;
-                            HorizontalBox { Text { text: "Name:"; width: 100px; vertical-alignment: center; } new_name := LineEdit { placeholder-text: "Connection Name"; } }
-                            HorizontalBox { Text { text: "Host:"; width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "e.g. user@IP or IP"; } }
-                            HorizontalBox { 
-                                Text { text: "Key:"; width: 100px; vertical-alignment: center; } 
-                                new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
-                                Button { text: "Generate"; clicked => { new_key.text = root.generate_key(new_host.text); } }
+                        StyledBox {
+                            border-top-left-radius: 0px;
+                            if root.add_connection_tab == 0: VerticalBox {
+                                    Text { text: "New Connection"; font-weight: 700; font-size: 16px; }
+                                    Rectangle { height: 10px; }
+                                    spacing: 8px;
+                                    HorizontalBox { Text { text: "Name:"; width: 10%; min-width: 100px; vertical-alignment: center; } new_name := LineEdit { placeholder-text: "Connection Name"; } }
+                                    HorizontalBox { Text { text: "Host:"; width: 10%; min-width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "e.g. user@IP or IP"; } }
+                                    HorizontalBox { 
+                                        Text { text: "Key:"; width: 10%; min-width: 100px; vertical-alignment: center; } 
+                                        new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
+                                        // --- Button ---
+                                        Button { text: "Generate"; clicked => { new_key.text = root.generate_key(new_host.text); } }
+                                    }
+                                    Rectangle { vertical-stretch: 1; }
+                                    HorizontalBox {
+                                        alignment: end;
+                                        spacing: 10px;
+                                        // --- Button ---
+                                        Button { text: "Cancel"; clicked => { root.is_adding_connection = false; root.cancel_key_generation(new_key.text); } }
+                                        // --- Button ---
+                                        RustButton { 
+                                            text: "Commit"; 
+                                            clicked => { 
+                                                root.is_adding_connection = false; 
+                                                root.commit_connection({ name: new_name.text, host: new_host.text, state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Single Transfer", token: new_key.text }); 
+                                            } 
+                                        }
+                                    }
                             }
-                            Rectangle { vertical-stretch: 1; }
-                            HorizontalBox {
-                                alignment: end;
-                                spacing: 10px;
-                                Button { text: "Cancel"; clicked => { root.is_adding_connection = false; root.cancel_key_generation(new_key.text); } }
-                                RustButton { 
-                                    text: "Commit"; 
-                                    clicked => { 
-                                        root.is_adding_connection = false; 
-                                        root.commit_connection({ name: new_name.text, host: new_host.text, state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Single Transfer", token: new_key.text }); 
-                                    } 
-                                }
-                            }
-                        }
-
-                        if root.add_connection_tab == 1: VerticalBox {
-                            Text { text: "Remote Connection"; font-weight: 700; font-size: 16px; }
-                            Rectangle { height: 10px; }
-                            spacing: 8px;
-                            HorizontalBox { 
-                                Text { text: "Token:"; width: 100px; vertical-alignment: center; } 
-                                remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
-                                Button { 
-                                    text: "Verify"; 
-                                    clicked => { 
-                                        root.remote_verification_status = "Verifying...";
-                                        root.verify_remote_token(remote_token.text); 
-                                    } 
-                                }
-                            }
-                            if root.remote_verification_status != "": Text {
-                                text: "Status: " + root.remote_verification_status;
-                                color: root.is_remote_verified ? AppTheme.accent : gray;
-                            }
-                            Rectangle { vertical-stretch: 1; }
-                            HorizontalBox {
-                                alignment: end;
-                                spacing: 10px;
-                                Button { text: "Cancel"; clicked => { 
-                                    root.is_adding_connection = false; 
-                                    root.is_remote_verified = false;
-                                    root.remote_verification_status = "";
-                                } }
-                                Rectangle {
-                                    width: max(100px, btn_txt.preferred-width + 24px);
-                                    height: 30px;
-                                    border-radius: 4px;
-                                    background: root.is_remote_verified ? AppTheme.accent : gray;
-                                    btn_txt := Text { text: "Commit"; color: white; horizontal-alignment: center; vertical-alignment: center; font-weight: 500; }
-                                    TouchArea {
-                                        clicked => {
-                                            if root.is_remote_verified {
-                                                root.is_adding_connection = false;
-                                                let host_str = root.remote_verified_host != "" ? root.remote_verified_host : "Remote";
-                                                root.commit_connection({ name: "Remote", host: host_str, state: "Idle", state_color: Colors.gray, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: remote_token.text });
+                            if root.add_connection_tab == 1: VerticalBox {
+                                    Text { text: "Remote Connection"; font-weight: 700; font-size: 16px; }
+                                    Rectangle { height: 10px; }
+                                    spacing: 8px;
+                                    HorizontalBox { 
+                                        Text { text: "Token:"; width: 10%; min-width: 100px; vertical-alignment: center; } 
+                                        remote_token := LineEdit { placeholder-text: "Paste Remote Token Here"; }
+                                        // --- Button ---
+                                        Button { 
+                                            text: "Verify"; 
+                                            clicked => { 
+                                                root.remote_verification_status = "Verifying...";
+                                                root.verify_remote_token(remote_token.text); 
+                                            } 
+                                        }
+                                    }
+                                    if root.remote_verification_status != "": Text {
+                                        text: "Status: " + root.remote_verification_status;
+                                        color: root.is_remote_verified ? AppTheme.accent : gray;
+                                    }
+                                    Rectangle { vertical-stretch: 1; }
+                                    HorizontalBox {
+                                        alignment: end;
+                                        spacing: 10px;
+                                        // --- Button ---
+                                        Button { text: "Cancel"; clicked => { 
+                                            root.is_adding_connection = false; 
+                                            root.is_remote_verified = false;
+                                            root.remote_verification_status = "";
+                                        } }
+                                        Rectangle {
+                                            width: max(100px, btn_txt.preferred-width + 24px);
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: root.is_remote_verified ? AppTheme.accent : gray;
+                                            btn_txt := Text { text: "Commit"; color: white; horizontal-alignment: center; vertical-alignment: center; font-weight: 500; }
+                                            TouchArea {
+                                                clicked => {
+                                                    if root.is_remote_verified {
+                                                        root.is_adding_connection = false;
+                                                        let host_str = root.remote_verified_host != "" ? root.remote_verified_host : "Remote";
+                                                        root.commit_connection({ name: "Remote", host: host_str, state: "Connected", state_color: Colors.green, transfer_rate: "-", duration: "-", eta: "-", transfer_type: "Remote Transfer", token: root.remote_verified_full_token });
+                                                    }
+                                                }
                                             }
                                         }
                                     }
-                                }
                             }
                         }
                     }
                 }
                 }
             }
-        }
 
-        Tab {
-            title: "Transfer";
-            VerticalBox {
-                TabWidget {
-                    Tab {
-                        title: "Transfer Setup";
-                        StyledBox {
+
+        // --- Transfer Tab View ---
+        if root.active_tab == 1: VerticalBox {
+            vertical-stretch: 1;
+                padding-left: 0px; 
+                padding-right: 0px;
+                padding-top: 15px; // Spacing above Transfer sub tabs
+                // --- HorizontalBox for Transfer Sub-tabs (Child of Transfer Layout) ---
+                HorizontalBox {
+                    spacing: 0px;
+                    Rectangle {
+                        width: 15px; // File cabinet look
+                        Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; }
+                    }
+                    Rectangle { 
+                        width: 14%;
+                        height: 35px;
+                        min-width: 140px;
+                        border-top-left-radius: 4px; border-top-right-radius: 4px;
+                        border-color: AppTheme.border;
+                        border-width: 1px;
+                        background: root.active_transfer_tab == 0 ? AppTheme.accent : (ta_ts.has-hover ? AppTheme.list_hover : transparent);
+                        Rectangle {
+                            y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px;
+                            background: root.active_transfer_tab == 0 ? AppTheme.accent : (ta_ts.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
+                        }
+                        Text {
+                            text: "Transfer Setup";
+                            font-weight: root.active_transfer_tab == 0 ? 700 : 500;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width * 0.8;
+                        }
+                        ta_ts := TouchArea {
+                            clicked => { root.active_transfer_tab = 0; }
+                        }
+                    }
+                    Rectangle { 
+                        width: 14%;
+                        height: 35px;
+                        min-width: 140px;
+                        border-top-left-radius: 4px; border-top-right-radius: 4px;
+                        border-color: AppTheme.border;
+                        border-width: 1px;
+                        background: root.active_transfer_tab == 1 ? AppTheme.accent : (ta_at.has-hover ? AppTheme.list_hover : transparent);
+                        Rectangle {
+                            y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px;
+                            background: root.active_transfer_tab == 1 ? AppTheme.accent : (ta_at.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
+                        }
+                        Text {
+                            text: "Active Transfers";
+                            font-weight: root.active_transfer_tab == 1 ? 700 : 500;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width * 0.8;
+                        }
+                        ta_at := TouchArea {
+                            clicked => { root.active_transfer_tab = 1; }
+                        }
+                    }
+                    Rectangle { 
+                        width: 14%;
+                        height: 35px;
+                        min-width: 140px;
+                        border-top-left-radius: 4px; border-top-right-radius: 4px;
+                        border-color: AppTheme.border;
+                        border-width: 1px;
+                        background: root.active_transfer_tab == 2 ? AppTheme.accent : (ta_sc.has-hover ? AppTheme.list_hover : transparent);
+                        Rectangle {
+                            y: parent.height - 1px; x: 1px; width: parent.width - 2px; height: 1px;
+                            background: root.active_transfer_tab == 2 ? AppTheme.accent : (ta_sc.has-hover ? AppTheme.list_hover : AppTheme.window_bg);
+                        }
+                        Text {
+                            text: "Schedules";
+                            font-weight: root.active_transfer_tab == 2 ? 700 : 500;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width * 0.8;
+                        }
+                        ta_sc := TouchArea {
+                            clicked => { root.active_transfer_tab = 2; }
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: AppTheme.border; }
+                    }
+                }
+                StyledBox {
+                    border-top-left-radius: 0px;
+                    if root.active_transfer_tab == 0: VerticalBox {
                             VerticalBox {
                                 padding: 15px;
                             spacing: 12px;
                             for mapping[idx] in root.current_mappings : HorizontalBox {
-                                Text { text: "Source Path:"; vertical-alignment: center; }
-                                LineEdit { text: mapping.source; placeholder-text: "/path/to/source"; edited(text) => { root.update_mapping_source(idx, text); } }
-                                Button { text: "Browse"; clicked => { root.browse_source(idx); } }
+                                LineEdit { horizontal-stretch: 1; text: mapping.source; placeholder-text: "/path/to/source"; edited(text) => { root.update_mapping_source(idx, text); } }
 
                                 Rectangle { width: 20px; }
 
-                                Text { text: "Destination Path:"; vertical-alignment: center; }
-                                LineEdit { text: mapping.destination; placeholder-text: "/path/to/destination"; edited(text) => { root.update_mapping_destination(idx, text); } }
-                                Button { text: "Browse"; clicked => { root.browse_destination(idx); } }
+                                LineEdit { horizontal-stretch: 1; text: mapping.destination; placeholder-text: "/path/to/destination"; edited(text) => { root.update_mapping_destination(idx, text); } }
+                                // --- Button ---
+                                Button { text: "Configure Transfer"; clicked => { root.browse_destination(idx); } }
                                 
+                                // --- Button ---
                                 if root.current_mappings.length > 1: Button { text: "-"; clicked => { root.remove_mapping(idx); } }
                             }
+                            // --- Button ---
                             Button { text: "+ Add Row"; clicked => { root.add_mapping(); } }
 
                             Rectangle { height: 1px; background: gray; }
 
                             HorizontalBox {
-                                Text { text: "Transfer Type:"; vertical-alignment: center; width: 120px; }
-                                ComboBox {
+                                Text { text: "Transfer Type:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                // --- Dropdown ---
+                                CustomComboBox {
                                     model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
                                     current-value: root.transfer_type_val;
                                     selected(val) => { root.transfer_type_val = val; }
@@ -532,8 +877,9 @@ export component MainWindow inherits Window {
                             }
                             
                             if root.transfer_type_val == "Continuous Sync": HorizontalBox {
-                                Text { text: "Sync Frequency:"; vertical-alignment: center; width: 120px; }
-                                ComboBox {
+                                Text { text: "Sync Frequency:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                // --- Dropdown ---
+                                CustomComboBox {
                                     model: ["1min", "5min", "15min", "30min", "1hr", "2hr", "4hr", "6hr", "8hr", "12hr", "24hr", "48hr", "72hr"];
                                     current-value: "1hr";
                                 }
@@ -542,15 +888,17 @@ export component MainWindow inherits Window {
                             if root.transfer_type_val == "Scheduled Transfer": VerticalBox {
                                 spacing: 8px;
                                 HorizontalBox {
-                                    Text { text: "Active Days:"; vertical-alignment: center; width: 120px; }
+                                    Text { text: "Active Days:"; vertical-alignment: center; width: 12%; min-width: 120px; }
                                     RustCheckBox { text: "M"; } RustCheckBox { text: "T"; } RustCheckBox { text: "W"; } RustCheckBox { text: "Th"; } RustCheckBox { text: "F"; } RustCheckBox { text: "Sa"; } RustCheckBox { text: "Su"; }
                                 }
                                 HorizontalBox {
-                                    Text { text: "Start Permitted:"; vertical-alignment: center; width: 120px; }
-                                    ComboBox { model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"]; }
+                                    Text { text: "Start Permitted:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                    // --- Dropdown ---
+                                    CustomComboBox { model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"]; }
                                     Rectangle { width: 20px; }
                                     Text { text: "Finish Permitted:"; vertical-alignment: center; }
-                                    ComboBox { model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"]; }
+                                    // --- Dropdown ---
+                                    CustomComboBox { model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"]; }
                                 }
                             }
 
@@ -558,17 +906,17 @@ export component MainWindow inherits Window {
 
                             HorizontalBox {
                                 alignment: end;
+                                // --- Button ---
                                 Button { text: "Commit"; }
+                                // --- Button ---
                                 RustButton { 
                                     text: "Commit & Start"; 
                                     clicked => { root.start_transfer(); }
                                 }
                             }
                         }
-                        }
                     }
-                    Tab {
-                        title: "Active Transfers";
+                    if root.active_transfer_tab == 1: VerticalBox {
                         HorizontalBox {
                             // Left list
                             StyledBox {
@@ -599,23 +947,23 @@ export component MainWindow inherits Window {
                                     padding: 15px;
                                 HorizontalBox {
                                     alignment: end;
-                                    Button { text: "↗"; clicked => { root.popout_session(); } }
+
                                 }
                                 Text { text: root.phase_text; font-weight: 700; }
                                 ListView {
                                     height: 150px;
-                                    for file in root.transfer_queue : HorizontalBox {
-                                        Text { text: file.name; }
-                                        Text { text: file.size; }
-                                        ProgressIndicator { progress: file.progress; }
+                                    for file in root.transfer_queue : TransferQueueRow {
+                                        file: file;
                                     }
                                 }
                                 HorizontalBox {
                                     padding: 0; spacing: 0;
-                                    Text { text: root.transfer_metrics_text; }
-                                    Rectangle { horizontal-stretch: 1; }
-                                    Text { text: root.current_phase; }
-                                    Text { text: root.ellipsis; width: 15px; horizontal-alignment: left; }
+                                    MetricsGrid {
+                                        upload_speed: root.metric_upload;
+                                        download_speed: root.metric_download;
+                                        eta: root.metric_eta;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
                                 
                                 Rectangle { height: 10px; }
@@ -625,32 +973,85 @@ export component MainWindow inherits Window {
                                 Text { text: "Integrity Validation"; font-weight: 700; }
                                 ListView {
                                     height: 150px;
-                                    for file in root.completed_queue : HorizontalBox {
-                                        Text { text: file.name; }
-                                        Text { text: file.status; color: file.status_color; }
+                                    for file in root.completed_queue : CompletedQueueRow {
+                                        file: file;
                                     }
                                 }
                                 Text { text: root.overall_status; }
 
                                 HorizontalBox {
-                                    Button { text: "Pause Transfer"; clicked => { root.pause_transfer(); } }
+                                    // --- Button ---
+                                    Button {
+                                        text: root.is_transfer_paused ? "Resume Transfer" : "Pause Transfer";
+                                        clicked => {
+                                            root.is_transfer_paused = !root.is_transfer_paused;
+                                            root.pause_transfer();
+                                        }
+                                    }
+                                    // --- Button ---
                                     Button { text: "Cancel Transfer"; clicked => { root.cancel_transfer(); } }
                                 }
                             }
                         }
                         }
                     }
+                    if root.active_transfer_tab == 2: VerticalBox {
+            
+            ListView {
+                // Remove height: 100% since ListView expands automatically in Slint
+                
+                for schedule in root.schedules: Rectangle {
+                    width: parent.width;
+                    height: 60px;
+                    border-width: 1px;
+                    border-color: #ccc;
+                    
+                    Text {
+                        text: schedule.source + " → " + schedule.dest + " (" + schedule.type + ")";
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    
+                    TouchArea {
+                        width: 80px;
+                        height: parent.height;
+                        x: parent.width - self.width;
+                        
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            background: #ff4444;
+                            
+                            Text {
+                                text: "Delete";
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                color: white;
+                            }
+                        }
+                        
+                        clicked => {
+                            root.delete_schedule(schedule.id);
+                        }
+                    }
+                }
                 }
             }
-        }
+                } // End of Transfer StyledBox
+        } // End of Transfer Tab View
 
-        Tab {
-            title: "Settings";
-            HorizontalBox {
-                // Left Column
-                StyledBox {
-                    width: 250px;
-                    VerticalBox {
+        // --- Settings Tab View ---
+        if root.active_tab == 2: Rectangle {
+            vertical-stretch: 1;
+            
+            // Left Column
+            StyledBox {
+                x: 15px;
+                y: 15px;
+                width: 250px;
+                height: parent.height - 30px;
+                VerticalBox {
+                    width: parent.width; height: parent.height;
                         padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
                         ListView {
                             for setting[idx] in ["Display", "Transfer Settings", "Notifications", "Import/Export", "Help", "Logs"] : Rectangle {
@@ -666,12 +1067,16 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // Right Column
-                StyledBox {
-                    horizontal-stretch: 1;
-                    VerticalBox {
-                        padding: 15px;
-                        padding-left: 20px;
+            // Right Column
+            StyledBox {
+                x: 280px;
+                y: 15px;
+                width: parent.width - 295px;
+                height: parent.height - 30px;
+                VerticalBox {
+                    width: parent.width; height: parent.height;
+                    padding: 15px;
+                    padding-left: 20px;
                     
                     if root.selected_setting_idx == 5: VerticalBox {
                         Text { text: "Application Logs"; font-size: 20px; font-weight: 700; }
@@ -679,21 +1084,25 @@ export component MainWindow inherits Window {
                         
                         Text { text: "Connection Logs:"; font-weight: 700; }
                         Text { text: "Validation and Authentication events"; font-size: 11px; color: gray; }
+                        // --- Button ---
                         Button { text: "Open Connection Logs"; clicked => { root.open_log_file("connection.log"); } }
                         Rectangle { height: 10px; }
                         
                         Text { text: "Transfers Logs:"; font-weight: 700; }
                         Text { text: "Transmission and Validation events"; font-size: 11px; color: gray; }
+                        // --- Button ---
                         Button { text: "Open Transfer Logs"; clicked => { root.open_log_file("transfers.log"); } }
                         Rectangle { height: 10px; }
                         
                         Text { text: "Sync Logs:"; font-weight: 700; }
                         Text { text: "Active Sync engine events"; font-size: 11px; color: gray; }
+                        // --- Button ---
                         Button { text: "Open Sync Logs"; clicked => { root.open_log_file("sync.log"); } }
                         Rectangle { height: 10px; }
                         
                         Text { text: "Schedule Logs:"; font-weight: 700; }
                         Text { text: "Validation of scheduled transfers running"; font-size: 11px; color: gray; }
+                        // --- Button ---
                         Button { text: "Open Schedule Logs"; clicked => { root.open_log_file("schedule.log"); } }
                         
                         Rectangle { vertical-stretch: 1; }
@@ -753,6 +1162,7 @@ export component MainWindow inherits Window {
                         
                         Text { text: "Credential Management:"; font-weight: 700; }
                         Rectangle { height: 5px; }
+                        // --- Button ---
                         RustButton {
                             text: "Purge Orphaned Keys";
                             clicked => { root.purge_orphaned_keys(); }
@@ -773,13 +1183,15 @@ export component MainWindow inherits Window {
                         
                         HorizontalBox {
                             Text { text: "Notification Type:"; vertical-alignment: center; }
-                            ComboBox { model: ["OS Pop-up", "Email", "None"]; }
+                            // --- Dropdown ---
+                            CustomComboBox { model: ["OS Pop-up", "Email", "None"]; }
                         }
                         
                         RustCheckBox { text: "Notify on transfer completion"; checked: true; }
                         RustCheckBox { text: "Notify on validation failure"; checked: true; }
                         
                         Rectangle { height: 10px; }
+                        // --- Button ---
                         Button { text: "Request OS Permissions"; }
                         Rectangle { height: 5px; }
                         Text { text: "Note: If permissions are denied by the OS, notifications will safely fall back to None."; font-size: 11px; color: gray; }
@@ -792,7 +1204,9 @@ export component MainWindow inherits Window {
                         Rectangle { height: 20px; }
                         
                         HorizontalBox {
+                            // --- Button ---
                             Button { text: "Import Profile (.json)"; }
+                            // --- Button ---
                             Button { text: "Export Profile (.json)"; }
                         }
                         
@@ -821,18 +1235,17 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-        }
     } // End of TabWidget
         
         // File Browser Modal Overlay
         if root.is_browser_open: Rectangle {
-            width: parent.width;
-            height: parent.height;
+            width: 100%;
+            height: 100%;
             background: rgba(0, 0, 0, 0.6);
             
             Rectangle {
-                width: 600px;
-                height: 400px;
+                width: 900px;
+                height: 550px;
                 background: AppTheme.window_bg;
                 border-radius: 8px;
                 border-color: AppTheme.border;
@@ -845,42 +1258,129 @@ export component MainWindow inherits Window {
                     spacing: 15px;
                     
                     Text { 
-                        text: root.browser_is_remote ? "Browse Remote Directory" : "Browse Local Directory"; 
+                        text: "Configure Transfer"; 
                         font-size: 18px; 
                         font-weight: 700; 
+                        horizontal-alignment: center;
                     }
                     
                     HorizontalBox {
-                        Text { text: "Path:"; vertical-alignment: center; }
-                        LineEdit { text: root.browser_current_path; edited(t) => { root.browser_current_path = t; } }
-                        Button { text: "Go"; clicked => { root.fetch_directory(root.browser_current_path, root.browser_is_remote); } }
-                        Button { text: "Up"; clicked => { root.fetch_directory(root.browser_current_path + "/..", root.browser_is_remote); } }
-                    }
-                    
-                    Rectangle {
-                        vertical-stretch: 1;
-                        background: AppTheme.window_bg; // Changed from AppTheme.item_bg
-                        border-width: 1px;
-                        border-color: AppTheme.border;
-                        ListView {
-                            for node[idx] in root.browser_nodes: Rectangle {
-                                height: 35px;
-                                background: root.browser_selection == node.path ? AppTheme.accent : (ta_browser.has-hover ? rgba(255, 255, 255, 0.1) : transparent);
-                                
-                                HorizontalBox {
-                                    padding: 5px;
-                                    spacing: 10px;
-                                    Text { text: node.is_dir ? "📁" : "📄"; vertical-alignment: center; }
-                                    Text { text: node.name; vertical-alignment: center; }
-                                }
-                                
-                                ta_browser := TouchArea {
-                                    clicked => {
-                                        root.browser_selection = node.path;
+                        spacing: 20px;
+                        
+                        // Left Column: Source
+                        VerticalBox {
+                            Text { text: root.browser_is_remote ? "Source (Remote)" : "Source (Local)"; font-weight: 600; }
+                            HorizontalBox {
+                                LineEdit { text: root.browser_current_path; edited(t) => { root.browser_current_path = t; } }
+                                // --- Button ---
+                                Button { text: "Go"; clicked => { root.fetch_directory(root.browser_current_path, root.browser_is_remote, false); } }
+                                // --- Button ---
+                                Button { text: "Up"; clicked => { root.fetch_directory(root.browser_current_path + "/..", root.browser_is_remote, false); } }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                background: AppTheme.window_bg;
+                                border-width: 1px;
+                                border-color: AppTheme.border;
+                                ListView {
+                                    for node[idx] in root.browser_nodes: Rectangle {
+                                        height: 35px;
+                                        background: node.is_selected ? AppTheme.accent : (ta_browser.has-hover ? rgba(255, 255, 255, 0.1) : transparent);
+                                        ta_browser := TouchArea { }
+                                        HorizontalBox {
+                                            padding: 5px; padding-left: 5px + (node.depth * 20px); spacing: 10px;
+                                            Rectangle {
+                                                width: 24px;
+                                                Text { text: node.is_selected ? "✅" : (node.is_dir ? (node.is_expanded ? "📂" : "📁") : "📄"); vertical-alignment: center; horizontal-alignment: center; }
+                                                ta_icon := TouchArea { clicked => { root.toggle_browser_selection(node.path, false); } }
+                                            }
+                                            Rectangle {
+                                                HorizontalBox {
+                                                    padding: 0; spacing: 5px;
+                                                    Text { text: node.name; vertical-alignment: center; }
+                                                    if node.snapshot_type != "": Rectangle {
+                                                        width: 40px; height: 18px;
+                                                        border-radius: 4px;
+                                                        background: node.snapshot_type == "VSS" ? #4CAF50 : 
+                                                                    node.snapshot_type == "APFS" ? #2196F3 : 
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                        Text {
+                                                            text: node.snapshot_type;
+                                                            color: white; font-size: 10px; font-weight: 700;
+                                                            horizontal-alignment: center; vertical-alignment: center;
+                                                            width: parent.width; height: parent.height;
+                                                        }
+                                                    }
+                                                }
+                                                ta_filename := TouchArea {
+                                                    clicked => {
+                                                        if node.is_dir {
+                                                            if node.is_expanded { root.collapse_browser_node(node, false); } 
+                                                            else { root.expand_browser_node(node, root.browser_is_remote, false); }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                    double-clicked => {
-                                        if node.is_dir {
-                                            root.fetch_directory(node.path, root.browser_is_remote);
+                                }
+                            }
+                        }
+                        
+                        // Right Column: Destination
+                        VerticalBox {
+                            Text { text: root.dest_browser_is_remote ? "Destination (Remote)" : "Destination (Local)"; font-weight: 600; }
+                            HorizontalBox {
+                                LineEdit { text: root.dest_browser_current_path; edited(t) => { root.dest_browser_current_path = t; } }
+                                // --- Button ---
+                                Button { text: "Go"; clicked => { root.fetch_directory(root.dest_browser_current_path, root.dest_browser_is_remote, true); } }
+                                // --- Button ---
+                                Button { text: "Up"; clicked => { root.fetch_directory(root.dest_browser_current_path + "/..", root.dest_browser_is_remote, true); } }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                background: AppTheme.window_bg;
+                                border-width: 1px;
+                                border-color: AppTheme.border;
+                                ListView {
+                                    for node[idx] in root.dest_browser_nodes: Rectangle {
+                                        height: 35px;
+                                        background: node.is_selected ? AppTheme.accent : (ta_dest_browser.has-hover ? rgba(255, 255, 255, 0.1) : transparent);
+                                        ta_dest_browser := TouchArea { }
+                                        HorizontalBox {
+                                            padding: 5px; padding-left: 5px + (node.depth * 20px); spacing: 10px;
+                                            Rectangle {
+                                                width: 24px;
+                                                Text { text: node.is_selected ? "✅" : (node.is_dir ? (node.is_expanded ? "📂" : "📁") : "📄"); vertical-alignment: center; horizontal-alignment: center; }
+                                                ta_dest_icon := TouchArea { clicked => { root.toggle_browser_selection(node.path, true); } }
+                                            }
+                                            Rectangle {
+                                                HorizontalBox {
+                                                    padding: 0; spacing: 5px;
+                                                    Text { text: node.name; vertical-alignment: center; }
+                                                    if node.snapshot_type != "": Rectangle {
+                                                        width: 40px; height: 18px;
+                                                        border-radius: 4px;
+                                                        background: node.snapshot_type == "VSS" ? #4CAF50 : 
+                                                                    node.snapshot_type == "APFS" ? #2196F3 : 
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                        Text {
+                                                            text: node.snapshot_type;
+                                                            color: white; font-size: 10px; font-weight: 700;
+                                                            horizontal-alignment: center; vertical-alignment: center;
+                                                            width: parent.width; height: parent.height;
+                                                        }
+                                                    }
+                                                }
+                                                ta_dest_filename := TouchArea {
+                                                    clicked => {
+                                                        if node.is_dir {
+                                                            if node.is_expanded { root.collapse_browser_node(node, true); } 
+                                                            else { root.expand_browser_node(node, root.dest_browser_is_remote, true); }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -891,10 +1391,12 @@ export component MainWindow inherits Window {
                     HorizontalBox {
                         alignment: end;
                         spacing: 10px;
+                        // --- Button ---
                         Button { text: "Cancel"; clicked => { root.is_browser_open = false; } }
-                        RustButton { text: "Select"; clicked => { root.commit_browser_selection(root.browser_selection); } }
+                        // --- Button ---
+                        RustButton { text: "Commit Setup"; clicked => { root.commit_browser_selection(root.browser_selection, root.dest_browser_selection); } }
                     }
                 }
             }
-        }
     }
+}

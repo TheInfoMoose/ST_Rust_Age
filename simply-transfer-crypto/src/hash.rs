@@ -4,7 +4,7 @@ use std::io::{self, Read};
 /// Compute the SHA-256 hash of a readable stream in chunks.
 pub fn compute_sha256_stream<R: Read>(mut reader: R) -> io::Result<String> {
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 1024 * 1024]; // 1MB buffer
 
     loop {
         let count = reader.read(&mut buffer)?;

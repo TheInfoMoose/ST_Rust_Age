@@ -27,6 +27,9 @@ pub struct Snapshot {
 
 /// A common trait abstracting native OS shadow-copy/snapshotting mechanisms.
 pub trait SnapshotDriver: Send + Sync {
+    /// Returns the type/name of the snapshot technology used (e.g. "VSS", "APFS", "Live")
+    fn snapshot_type(&self) -> &'static str;
+
     /// Create a point-in-time snapshot of the volume containing the given path.
     fn create_snapshot(&self, volume_path: &Path) -> Result<Snapshot, SnapshotError>;
 
@@ -47,6 +50,10 @@ pub trait SnapshotDriver: Send + Sync {
 pub struct FallbackSnapshotDriver;
 
 impl SnapshotDriver for FallbackSnapshotDriver {
+    fn snapshot_type(&self) -> &'static str {
+        "Live"
+    }
+
     fn create_snapshot(&self, _volume_path: &Path) -> Result<Snapshot, SnapshotError> {
         Ok(Snapshot {
             id: "fallback".to_string(),
