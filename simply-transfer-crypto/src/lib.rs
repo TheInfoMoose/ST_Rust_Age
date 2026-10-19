@@ -162,6 +162,42 @@ impl SecureStorage {
         }
         Ok(())
     }
+
+    /// Encrypts a sensitive value at rest using AES-256-GCM and returns a base64-encoded nonce+ciphertext.
+    pub fn encrypt_value(&self, plaintext: &str) -> Result<String, CryptoError> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let key = self.derive_vault_key();
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("32 bytes key");
+        let nonce_bytes: [u8; 12] = rand::random();
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_bytes())
+            .map_err(|e| CryptoError::Other(format!("AES-GCM encryption error: {}", e)))?;
+
+        let mut payload = Vec::with_capacity(12 + ciphertext.len());
+        payload.extend_from_slice(&nonce_bytes);
+        payload.extend_from_slice(&ciphertext);
+        Ok(STANDARD.encode(&payload))
+    }
+
+    /// Decrypts a base64-encoded AES-256-GCM nonce+ciphertext produced by `encrypt_value`.
+    pub fn decrypt_value(&self, encoded: &str) -> Result<String, CryptoError> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let data = STANDARD
+            .decode(encoded)
+            .map_err(|e| CryptoError::Other(format!("Base64 decode error: {}", e)))?;
+        if data.len() < 12 {
+            return Err(CryptoError::Other("Ciphertext too short".to_string()));
+        }
+        let key = self.derive_vault_key();
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("32 bytes key");
+        let nonce = Nonce::from_slice(&data[0..12]);
+        let ciphertext = &data[12..];
+        let decrypted = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| CryptoError::Other(format!("AES-GCM decryption error: {}", e)))?;
+        String::from_utf8(decrypted).map_err(|e| CryptoError::Other(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -188,3 +224,4 @@ mod tests {
     }
 }
 pub mod keys;
+pub use keys::{VpnConfig, WireGuardConf};

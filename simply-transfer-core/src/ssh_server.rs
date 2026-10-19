@@ -22,8 +22,12 @@ impl SshServer {
 
         #[cfg(target_os = "windows")]
         {
+            if std::path::Path::new("C:\\Windows\\System32\\OpenSSH\\sshd.exe").exists() {
+                return true;
+            }
             if let Ok(output) = Command::new("powershell")
                 .args([
+                    "-NoProfile",
                     "-Command",
                     "Get-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0",
                 ])

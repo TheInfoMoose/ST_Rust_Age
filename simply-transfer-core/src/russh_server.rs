@@ -48,7 +48,7 @@ impl TransferServer {
             }
         };
 
-        let loaded_keys = if keys_file_path.exists() {
+        let mut loaded_keys = if keys_file_path.exists() {
             if let Ok(file) = File::open(&keys_file_path) {
                 let reader = BufReader::new(file);
                 if let Ok(keys_map) = serde_json::from_reader::<_, HashMap<String, String>>(reader)
@@ -76,6 +76,37 @@ impl TransferServer {
         } else {
             HashMap::new()
         };
+
+        // Also ingest any keys already present in standard OS authorized_keys files
+        let mut os_key_files = vec![
+            PathBuf::from(&home_dir)
+                .join(".ssh")
+                .join("authorized_keys"),
+        ];
+        if cfg!(windows) {
+            os_key_files.push(PathBuf::from(
+                "C:\\ProgramData\\ssh\\administrators_authorized_keys",
+            ));
+        }
+        for key_file in os_key_files {
+            if let Ok(contents) = fs::read_to_string(&key_file) {
+                for line in contents.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    if let Ok(public_key) = parse_public_key(trimmed) {
+                        let canonical_fp = public_key.fingerprint(HashAlg::Sha256).to_string();
+                        let raw_fp = canonical_fp
+                            .strip_prefix("SHA256:")
+                            .unwrap_or(&canonical_fp)
+                            .to_string();
+                        loaded_keys.insert(canonical_fp, public_key.clone());
+                        loaded_keys.insert(raw_fp, public_key);
+                    }
+                }
+            }
+        }
 
         TransferServer {
             authorized_keys_file_path: keys_file_path,
@@ -326,6 +357,8 @@ impl Handler for TransferServer {
 
                                     let mut buf = vec![0u8; 1024 * 1024];
                                     let mut total_bytes_written = offset;
+                                    let mut throttler =
+                                        crate::engine::ProgressThrottler::new(offset);
 
                                     if let Some(sender) = &event_sender_clone {
                                         let _ = sender.send(
@@ -344,11 +377,18 @@ impl Handler for TransferServer {
                                             break;
                                         }
                                         total_bytes_written += n as u64;
-                                        if let Some(sender) = &event_sender_clone {
+                                        if let Some(sender) = &event_sender_clone
+                                            && throttler
+                                                .should_emit(total_bytes_written, 0)
+                                                .is_some()
+                                        {
                                             let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                    remote_path.clone(),
-                                                    crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
-                                                ));
+                                                remote_path.clone(),
+                                                crate::engine::FileTransferStatus::Transferring {
+                                                    progress_bytes: total_bytes_written,
+                                                    total_bytes: 0,
+                                                },
+                                            ));
                                         }
                                     }
                                     let _ = file.flush().await;
@@ -389,6 +429,36 @@ impl Handler for TransferServer {
     ) -> Result<(), Self::Error> {
         let cmd_str = String::from_utf8_lossy(program).to_string();
         tracing::info!("Executing command via exec_request: {}", cmd_str);
+
+        if cmd_str.trim() == "simply-transfer-volumes" {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload = tokio::task::spawn_blocking(|| {
+                    let mut lines = Vec::new();
+                    if let Ok(vols) = simply_transfer_snapshots::list_local_volumes() {
+                        for v in vols {
+                            lines.push(format!(
+                                "{}|{}|{}|{}|{}",
+                                v.mount_point.to_string_lossy(),
+                                v.label,
+                                v.fs_type,
+                                v.total_bytes,
+                                v.available_bytes
+                            ));
+                        }
+                    }
+                    format!("{}\n", lines.join("\n"))
+                })
+                .await
+                .unwrap_or_default();
+
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
 
         if cmd_str.starts_with("simply-transfer-mkdir|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-mkdir|");

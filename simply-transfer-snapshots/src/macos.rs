@@ -80,3 +80,42 @@ impl SnapshotDriver for ApfsSnapshotDriver {
         Ok(())
     }
 }
+
+pub fn list_local_volumes() -> Result<Vec<crate::VolumeInfo>, SnapshotError> {
+    let mut volumes = Vec::new();
+    if let Ok(output) = Command::new("df").args(["-k", "-P"]).output()
+        && output.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().skip(1) {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if let Some(cap_idx) = tokens.iter().position(|t| t.ends_with('%'))
+                && cap_idx >= 3
+                && cap_idx + 1 < tokens.len()
+            {
+                let total_kb = tokens[cap_idx - 3].parse::<u64>().unwrap_or(0);
+                let avail_kb = tokens[cap_idx - 1].parse::<u64>().unwrap_or(0);
+                let mount_str = tokens[cap_idx + 1..].join(" ");
+                if mount_str == "/" || mount_str.starts_with("/Volumes/") {
+                    volumes.push(crate::VolumeInfo {
+                        mount_point: PathBuf::from(&mount_str),
+                        label: mount_str.clone(),
+                        fs_type: "APFS".to_string(),
+                        total_bytes: total_kb.saturating_mul(1024),
+                        available_bytes: avail_kb.saturating_mul(1024),
+                    });
+                }
+            }
+        }
+    }
+    if volumes.is_empty() {
+        volumes.push(crate::VolumeInfo {
+            mount_point: PathBuf::from("/"),
+            label: "Macintosh HD (/)".to_string(),
+            fs_type: "APFS".to_string(),
+            total_bytes: 0,
+            available_bytes: 0,
+        });
+    }
+    Ok(volumes)
+}

@@ -57,6 +57,23 @@ fn save_connections(conns: &[ConnectionItem]) {
     }
 }
 
+fn load_job_registry() -> simply_transfer_core::Registry {
+    let filename = format!("transfer_jobs_{}.json", std::env::consts::OS);
+    if let Ok(data) = std::fs::read_to_string(&filename)
+        && let Ok(reg) = serde_json::from_str::<simply_transfer_core::Registry>(&data)
+    {
+        return reg;
+    }
+    simply_transfer_core::Registry::new()
+}
+
+fn save_job_registry(registry: &simply_transfer_core::Registry) {
+    if let Ok(json) = serde_json::to_string_pretty(registry) {
+        let filename = format!("transfer_jobs_{}.json", std::env::consts::OS);
+        let _ = std::fs::write(&filename, json);
+    }
+}
+
 fn log_event(log_type: &str, message: &str) {
     use std::io::Write;
     let dir_name = format!("logs_{}", std::env::consts::OS);
@@ -190,7 +207,205 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    fn sync_transfer_queue_in_place(ui: &MainWindow, items: &[TransferQueueItem]) {
+        let model = ui.get_transfer_queue();
+        if let Some(vec_model) = model
+            .as_any()
+            .downcast_ref::<slint::VecModel<TransferQueueItem>>()
+        {
+            for (i, item) in items.iter().enumerate() {
+                if i < vec_model.row_count() {
+                    vec_model.set_row_data(i, item.clone());
+                } else {
+                    vec_model.push(item.clone());
+                }
+            }
+            while vec_model.row_count() > items.len() {
+                vec_model.remove(vec_model.row_count() - 1);
+            }
+        } else {
+            let persistent: std::rc::Rc<slint::VecModel<TransferQueueItem>> =
+                std::rc::Rc::new(slint::VecModel::from(items.to_vec()));
+            ui.set_transfer_queue(persistent.into());
+        }
+    }
+
+    fn sync_completed_queue_in_place(ui: &MainWindow, items: &[CompletedItem]) {
+        let model = ui.get_completed_queue();
+        if let Some(vec_model) = model
+            .as_any()
+            .downcast_ref::<slint::VecModel<CompletedItem>>()
+        {
+            for (i, item) in items.iter().enumerate() {
+                if i < vec_model.row_count() {
+                    vec_model.set_row_data(i, item.clone());
+                } else {
+                    vec_model.push(item.clone());
+                }
+            }
+            while vec_model.row_count() > items.len() {
+                vec_model.remove(vec_model.row_count() - 1);
+            }
+        } else {
+            let persistent: std::rc::Rc<slint::VecModel<CompletedItem>> =
+                std::rc::Rc::new(slint::VecModel::from(items.to_vec()));
+            ui.set_completed_queue(persistent.into());
+        }
+    }
+
+    fn connection_uuid_for_item(item: &ConnectionItem) -> uuid::Uuid {
+        let seed = format!("{}|{}", item.name.as_str(), item.host.as_str());
+        let digest = simply_transfer_crypto::hash::compute_sha256_bytes(seed.as_bytes());
+        let mut bytes = [0u8; 16];
+        for (i, chunk) in digest.as_bytes().chunks(2).take(16).enumerate() {
+            let hex_str = std::str::from_utf8(chunk).unwrap_or("00");
+            bytes[i] = u8::from_str_radix(hex_str, 16).unwrap_or(0);
+        }
+        uuid::Uuid::from_bytes(bytes)
+    }
+
+    fn active_connection_uuid(ui: &MainWindow) -> uuid::Uuid {
+        let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+        let idx = ui.get_selected_connection_idx() as usize;
+        if idx < conns.len() {
+            connection_uuid_for_item(&conns[idx])
+        } else {
+            uuid::Uuid::nil()
+        }
+    }
+
+    fn reset_draft_job_for_connection(ui: &MainWindow, conn_id: uuid::Uuid) {
+        let clean_draft = TransferJobUi {
+            job_id: uuid::Uuid::new_v4().to_string().into(),
+            connection_id: conn_id.to_string().into(),
+            name: "Default Transfer Task".into(),
+            job_type: "Single Transfer".into(),
+            source: "".into(),
+            destination: "".into(),
+            schedule_mode: "Manual".into(),
+            sync_frequency: "1hr".into(),
+            start_permitted: "00:00".into(),
+            finish_permitted: "23:59".into(),
+            use_snapshots: true,
+        };
+        ui.set_draft_job(clean_draft);
+        ui.set_transfer_type_val("Single Transfer".into());
+        ui.set_selected_job_idx(-1);
+        ui.set_current_mappings(
+            std::rc::Rc::new(slint::VecModel::from(vec![DirectoryMapping {
+                source: "".into(),
+                destination: "".into(),
+            }]))
+            .into(),
+        );
+    }
+
+    fn load_job_into_draft_ui(
+        ui: &MainWindow,
+        registry: &simply_transfer_core::Registry,
+        selected: &TransferJobUi,
+    ) {
+        ui.set_transfer_type_val(selected.job_type.clone());
+        let mut ui_mappings: Vec<DirectoryMapping> = Vec::new();
+        if let Ok(job_uuid) = uuid::Uuid::parse_str(selected.job_id.as_str())
+            && let Some(job) = registry.jobs.get(&job_uuid)
+        {
+            if !job.mappings.is_empty() {
+                for (src, dst) in &job.mappings {
+                    ui_mappings.push(DirectoryMapping {
+                        source: src.to_string_lossy().to_string().into(),
+                        destination: dst.to_string_lossy().to_string().into(),
+                    });
+                }
+            } else if !job.source_paths.is_empty() {
+                let dst = job.destination_path.to_string_lossy().to_string();
+                for src in &job.source_paths {
+                    ui_mappings.push(DirectoryMapping {
+                        source: src.to_string_lossy().to_string().into(),
+                        destination: dst.clone().into(),
+                    });
+                }
+            }
+        }
+        if ui_mappings.is_empty() {
+            ui_mappings.push(DirectoryMapping {
+                source: selected.source.clone(),
+                destination: selected.destination.clone(),
+            });
+        }
+        ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(ui_mappings)).into());
+        ui.set_draft_job(selected.clone());
+    }
+
+    fn sync_connection_jobs_ui(
+        ui: &MainWindow,
+        registry: &simply_transfer_core::Registry,
+        conn_id: uuid::Uuid,
+    ) {
+        let jobs = registry.get_jobs_for_connection(conn_id);
+        let ui_jobs: Vec<TransferJobUi> = jobs
+            .into_iter()
+            .map(|job| {
+                let (first_src, dest) = if let Some((s, d)) = job.mappings.first() {
+                    (
+                        s.to_string_lossy().to_string(),
+                        d.to_string_lossy().to_string(),
+                    )
+                } else {
+                    (
+                        job.source_paths
+                            .first()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        job.destination_path.to_string_lossy().to_string(),
+                    )
+                };
+                let schedule_mode = job
+                    .schedule
+                    .as_ref()
+                    .map(|s| s.mode.clone())
+                    .unwrap_or_else(|| "Single Transfer".to_string());
+                let sync_freq = job
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.sync_frequency.clone())
+                    .unwrap_or_else(|| "1hr".to_string());
+                let start_perm = job
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.window_start.clone())
+                    .unwrap_or_else(|| "00:00".to_string());
+                let finish_perm = job
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.window_end.clone())
+                    .unwrap_or_else(|| "23:59".to_string());
+                TransferJobUi {
+                    job_id: job.job_id.to_string().into(),
+                    connection_id: job.connection_id.to_string().into(),
+                    name: job.name.into(),
+                    job_type: schedule_mode.clone().into(),
+                    source: first_src.into(),
+                    destination: dest.into(),
+                    schedule_mode: schedule_mode.into(),
+                    sync_frequency: sync_freq.into(),
+                    start_permitted: start_perm.into(),
+                    finish_permitted: finish_perm.into(),
+                    use_snapshots: job.use_snapshots,
+                }
+            })
+            .collect();
+        ui.set_connection_jobs(std::rc::Rc::new(slint::VecModel::from(ui_jobs)).into());
+    }
+
     let ui = MainWindow::new()?;
+    let job_registry = std::sync::Arc::new(std::sync::Mutex::new(load_job_registry()));
+    let persistent_transfer_model: std::rc::Rc<slint::VecModel<TransferQueueItem>> =
+        std::rc::Rc::new(slint::VecModel::from(Vec::new()));
+    let persistent_completed_model: std::rc::Rc<slint::VecModel<CompletedItem>> =
+        std::rc::Rc::new(slint::VecModel::from(Vec::new()));
+    ui.set_transfer_queue(persistent_transfer_model.into());
+    ui.set_completed_queue(persistent_completed_model.into());
     let ui_global_weak = ui.as_weak();
 
     tokio::spawn(async move {
@@ -215,9 +430,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_clone.upgrade() {
                             ui.set_active_tab(1); // Assuming 1 is Dashboard or Active Transfer
-                            ui.set_transfer_queue(
-                                std::rc::Rc::new(slint::VecModel::from(Vec::new())).into(),
-                            );
+                            sync_transfer_queue_in_place(&ui, &[]);
                             ui.set_phase_text("Live Transfer Queue".into());
                             ui.set_overall_status("Receiving...".into());
                             ui.set_current_phase("Receiving".into());
@@ -244,7 +457,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             snapshot_type: current_snapshot_type.clone().into(),
                         };
 
-                        if local_t_q.is_empty() {
+                        if let Some(existing_idx) = local_t_q
+                            .iter()
+                            .position(|r| r.name.as_str() == file.as_str())
+                        {
+                            local_t_q[existing_idx] = item;
+                        } else if local_t_q.is_empty() {
                             local_t_q.push(item);
                         } else {
                             local_t_q[0] = item;
@@ -252,13 +470,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         current_completed_bytes = progress_bytes;
 
-                        let elapsed_secs = transfer_start_time.elapsed().as_secs();
+                        let elapsed_secs = transfer_start_time.elapsed().as_secs_f64();
                         let clone_eta = if current_completed_bytes > 0
                             && overall_total_bytes > current_completed_bytes
-                            && elapsed_secs > 0
+                            && elapsed_secs > 0.0
                         {
-                            let bytes_per_sec =
-                                current_completed_bytes as f64 / elapsed_secs as f64;
+                            let bytes_per_sec = current_completed_bytes as f64 / elapsed_secs;
                             let remaining_bytes =
                                 overall_total_bytes.saturating_sub(current_completed_bytes);
                             let remaining_secs = (remaining_bytes as f64 / bytes_per_sec) as u64;
@@ -272,11 +489,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "Calculating...".to_string()
                         };
 
-                        let clone_mu = if elapsed_secs > 0 {
+                        let clone_mu = if elapsed_secs > 0.0 {
                             format!(
                                 "{:.2} MB/s",
-                                (current_completed_bytes as f64 / 1_048_576.0)
-                                    / elapsed_secs as f64
+                                (current_completed_bytes as f64 / 1_048_576.0) / elapsed_secs
                             )
                         } else {
                             "0.0 MB/s".to_string()
@@ -285,13 +501,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let local_t_q_clone = local_t_q.clone();
                         let ui_clone = ui_global_weak.clone();
 
-                        if last_ui_update.elapsed() >= std::time::Duration::from_millis(500) {
+                        if last_ui_update.elapsed() >= std::time::Duration::from_millis(85) {
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(ui) = ui_clone.upgrade() {
-                                    ui.set_transfer_queue(
-                                        std::rc::Rc::new(slint::VecModel::from(local_t_q_clone))
-                                            .into(),
-                                    );
+                                    sync_transfer_queue_in_place(&ui, &local_t_q_clone);
                                     ui.set_metric_download(clone_mu.into());
                                     ui.set_metric_eta(clone_eta.into());
                                 }
@@ -301,13 +514,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if let simply_transfer_core::engine::FileTransferStatus::Completed =
                         status
                     {
-                        local_t_q.clear();
+                        local_t_q.retain(|r| r.name.as_str() != file.as_str());
+                        let local_t_q_clone = local_t_q.clone();
                         let ui_clone = ui_global_weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_clone.upgrade() {
-                                ui.set_transfer_queue(
-                                    std::rc::Rc::new(slint::VecModel::from(Vec::new())).into(),
-                                );
+                                sync_transfer_queue_in_place(&ui, &local_t_q_clone);
                                 ui.set_overall_status("Completed".into());
                                 ui.set_current_phase("Idle".into());
                             }
@@ -320,6 +532,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let loaded = load_connections();
+    if let Some(srv) = P2P_SERVER.get() {
+        for c in &loaded {
+            let parts: Vec<&str> = c.token.split(';').collect();
+            if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(parts[0]) {
+                let srv_clone = srv.clone();
+                let pk = parsed.pub_key.trim().to_string();
+                tokio::spawn(async move {
+                    let _ = srv_clone.add_authorized_key_from_str(&pk).await;
+                });
+            }
+            if parts.len() > 1 {
+                let srv_clone = srv.clone();
+                let peer_pk = parts[1].trim().to_string();
+                tokio::spawn(async move {
+                    let _ = srv_clone.add_authorized_key_from_str(&peer_pk).await;
+                });
+            }
+        }
+    }
     let slint_conns: Vec<ConnectionItem> = loaded
         .into_iter()
         .map(|c| ConnectionItem {
@@ -335,6 +566,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
+
+    {
+        let initial_conn_id = active_connection_uuid(&ui);
+        reset_draft_job_for_connection(&ui, initial_conn_id);
+        if let Ok(reg) = job_registry.lock() {
+            sync_connection_jobs_ui(&ui, &reg, initial_conn_id);
+            let jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+            if let Some(first_job) = jobs.first() {
+                ui.set_selected_job_idx(0);
+                load_job_into_draft_ui(&ui, &reg, first_job);
+            }
+        }
+    }
 
     let ui_weak_hb = ui.as_weak();
     tokio::spawn(async move {
@@ -428,7 +672,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "com.simplytransfer.app",
                             );
                             let key_to_use = my_pub_key.unwrap_or(&parsed.pub_key);
-                            if let Ok(priv_pem) = mgr.get_private_key_pem(key_to_use) {
+                            if let Some(priv_pem) =
+                                resolve_private_key_pem(&mgr, key_to_use, &parsed.pub_key)
+                            {
                                 let mut ssh =
                                     simply_transfer_core::russh_client::RusshClient::new();
                                 use simply_transfer_core::ssh::SshClient;
@@ -461,21 +707,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let ui_weak_clone = ui_weak_hb.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak_clone.upgrade() {
-                            let mut conns: Vec<ConnectionItem> =
-                                ui.get_connections().iter().collect();
-                            for (i, new_state, is_connected) in updates {
-                                if i < conns.len() {
-                                    conns[i].state = new_state.into();
-                                    conns[i].state_color = if is_connected {
-                                        slint::Color::from_rgb_u8(50, 200, 50)
-                                    } else {
-                                        slint::Color::from_rgb_u8(200, 50, 50)
-                                    };
+                            let model = ui.get_connections();
+                            if let Some(vec_model) = model
+                                .as_any()
+                                .downcast_ref::<slint::VecModel<ConnectionItem>>()
+                            {
+                                for (i, new_state, is_connected) in updates {
+                                    if let Some(mut item) = vec_model.row_data(i) {
+                                        item.state = new_state.into();
+                                        item.state_color = if is_connected {
+                                            slint::Color::from_rgb_u8(50, 200, 50)
+                                        } else {
+                                            slint::Color::from_rgb_u8(200, 50, 50)
+                                        };
+                                        vec_model.set_row_data(i, item);
+                                    }
                                 }
                             }
-                            ui.set_connections(
-                                std::rc::Rc::new(slint::VecModel::from(conns)).into(),
-                            );
                         }
                     });
                 }
@@ -579,9 +827,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Clear previous transfer state
-            ui.set_transfer_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
-            ui.set_completed_queue(std::rc::Rc::new(slint::VecModel::from(Vec::new())).into());
+            // Clear previous transfer state in-place
+            sync_transfer_queue_in_place(&ui, &[]);
+            sync_completed_queue_in_place(&ui, &[]);
             ui.set_phase_text("Live Transfer Queue".into());
             ui.set_overall_status("Preparing...".into());
             ui.set_current_phase("Idle".into());
@@ -658,7 +906,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(85));
                 let mut buffer = Vec::with_capacity(5000);
 
                 let mut local_t_q: Vec<TransferQueueItem> = Vec::new();
@@ -714,12 +962,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 current_file_size = total_bytes;
                                                 current_completed_bytes = previously_completed_bytes + progress_bytes;
                                                 let progress = if total_bytes > 0 { progress_bytes as f32 / total_bytes as f32 } else { 0.0 };
-                                                local_t_q = vec![TransferQueueItem {
-                                                    name: file.into(),
+                                                let item = TransferQueueItem {
+                                                    name: file.clone().into(),
                                                     size: format!("{:.2} MB", total_bytes as f64 / 1_048_576.0).into(),
                                                     progress,
                                                     snapshot_type: current_snapshot_type.clone().into(),
-                                                }];
+                                                };
+                                                if let Some(pos) = local_t_q.iter().position(|r| r.name.as_str() == file.as_str()) {
+                                                    local_t_q[pos] = item;
+                                                } else if local_t_q.is_empty() {
+                                                    local_t_q.push(item);
+                                                } else {
+                                                    local_t_q[0] = item;
+                                                }
 
                                                 if progress_bytes > last_progress_bytes {
                                                     bytes_transferred_in_interval += progress_bytes - last_progress_bytes;
@@ -729,7 +984,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 last_progress_bytes = progress_bytes;
                                             }
                                             FileTransferStatus::Completed => {
-                                                local_t_q.clear();
+                                                local_t_q.retain(|r| r.name.as_str() != file.as_str());
                                                 current_completed_files += 1;
                                                 previously_completed_bytes += current_file_size;
                                                 current_file_size = 0;
@@ -818,7 +1073,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let now = tokio::time::Instant::now();
                             let elapsed = now.duration_since(last_tick).as_secs_f32();
-                            if elapsed >= 0.1 {
+                            if elapsed >= 0.085 {
                                 if bytes_transferred_in_interval > 0 {
                                     let speed_mbps = (bytes_transferred_in_interval as f32 / elapsed) / 1_048_576.0;
                                     if speed_ema == 0.0 {
@@ -854,7 +1109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let target_conn_name_for_closure = target_conn_name.clone();
                             let elapsed_secs = transfer_start_time.elapsed().as_secs();
                             let clone_duration = format!("{:02}:{:02}:{:02}", elapsed_secs / 3600, (elapsed_secs % 3600) / 60, elapsed_secs % 60);
-                            let clone_eta = if current_completed_bytes > 0 && overall_total_bytes > current_completed_bytes {
+                            let clone_eta = if current_completed_bytes > 0 && overall_total_bytes > current_completed_bytes && elapsed_secs > 0 {
                                 let bytes_per_sec = current_completed_bytes as f64 / elapsed_secs as f64;
                                 let remaining_bytes = overall_total_bytes.saturating_sub(current_completed_bytes);
                                 let remaining_secs = (remaining_bytes as f64 / bytes_per_sec) as u64;
@@ -872,11 +1127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let is_active = selected_idx < active_sessions.len() && active_sessions[selected_idx] == session_name_clone.as_str();
 
                                     if is_active {
-                                        let t_model = std::rc::Rc::new(slint::VecModel::from(clone_t_q));
-                                        ui.set_transfer_queue(t_model.into());
-
-                                        let c_model = std::rc::Rc::new(slint::VecModel::from(clone_c_q));
-                                        ui.set_completed_queue(c_model.into());
+                                        sync_transfer_queue_in_place(&ui, &clone_t_q);
+                                        sync_completed_queue_in_place(&ui, &clone_c_q);
 
                                         ui.set_phase_text(clone_phase.into());
                                         ui.set_overall_status(clone_status.into());
@@ -1012,6 +1264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
+    let reg_for_commit_conn = job_registry.clone();
     ui.on_commit_connection(move |new_conn| {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
@@ -1038,7 +1291,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
 
             if conn_to_save.transfer_type != "Remote Transfer" {
-                let pub_key = conn_to_save.token.to_string();
+                let mut pub_key = conn_to_save.token.trim().to_string();
+                if pub_key.starts_with("st:")
+                    && let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&pub_key)
+                {
+                    pub_key = parsed.pub_key;
+                }
+                if pub_key.is_empty() {
+                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    if let Ok(gen_key) = key_mgr.generate_and_store() {
+                        pub_key = gen_key;
+                    }
+                }
 
                 // We must embed OUR local IP in the token so the remote device knows where to reach us.
                 // The 'host' field here is the destination IP, so we should NOT use it for the token.
@@ -1167,10 +1431,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            let was_empty = conns.is_empty();
             conns.push(conn_to_save);
             save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
+            if was_empty {
+                let conn_id = active_connection_uuid(&ui);
+                reset_draft_job_for_connection(&ui, conn_id);
+                if let Ok(reg) = reg_for_commit_conn.lock() {
+                    sync_connection_jobs_ui(&ui, &reg, conn_id);
+                }
+            }
         }
     });
 
@@ -1183,6 +1455,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_browser_is_remote(false);
             ui.set_dest_browser_is_remote(true);
             ui.set_browser_target_idx(idx);
+
+            if let Ok(vols) = simply_transfer_core::TransferEngine::list_local_volumes() {
+                let ui_vols: Vec<VolumeUi> = vols
+                    .into_iter()
+                    .map(|v| {
+                        let free_gb = v.available_bytes as f64 / 1_073_741_824.0;
+                        VolumeUi {
+                            mount_point: v.mount_point.to_string_lossy().to_string().into(),
+                            label: v.label.into(),
+                            fs_type: v.fs_type.into(),
+                            free_space_label: format!("{:.1} GB free", free_gb).into(),
+                        }
+                    })
+                    .collect();
+                ui.set_local_volumes(std::rc::Rc::new(slint::VecModel::from(ui_vols)).into());
+            }
 
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             let idx = idx as usize;
@@ -1256,6 +1544,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         tokio::spawn(async move {
             let mut nodes = Vec::new();
+            let mut discovered_remote_volumes: Option<Vec<VolumeUi>> = None;
             let mut success = false;
             let mut final_path = path_str.clone();
 
@@ -1302,6 +1591,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &priv_pem_str, None).await {
                         tracing::error!("on_fetch_directory: SSH auth for {}@{} failed: {}", dest_user, dest_ip, e);
                     } else {
+                        if let Ok(rvols) = ssh_client.list_remote_volumes().await {
+                            discovered_remote_volumes = Some(
+                                rvols
+                                    .into_iter()
+                                    .map(|v| {
+                                        let free_gb = v.available_bytes as f64 / 1_073_741_824.0;
+                                        VolumeUi {
+                                            mount_point: v.mount_point.to_string_lossy().to_string().into(),
+                                            label: v.label.into(),
+                                            fs_type: v.fs_type.into(),
+                                            free_space_label: format!("{:.1} GB free", free_gb).into(),
+                                        }
+                                    })
+                                    .collect(),
+                            );
+                        }
+
                         let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
                             .await
                             .map(|out| out.trim() == "Windows")
@@ -1400,6 +1706,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
+                    if let Some(rvols) = discovered_remote_volumes {
+                        ui.set_remote_volumes(std::rc::Rc::new(slint::VecModel::from(rvols)).into());
+                    }
                     let model = std::rc::Rc::new(slint::VecModel::from(nodes));
                     if is_dest {
                         ui.set_dest_browser_nodes(model.into());
@@ -1766,11 +2075,265 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
+    let reg_for_conn_select = job_registry.clone();
+    ui.on_connection_selected(move |idx| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            let idx = idx as usize;
+            let conn_id = if idx < conns.len() {
+                connection_uuid_for_item(&conns[idx])
+            } else {
+                uuid::Uuid::nil()
+            };
+            // Explicitly reset draft_job to a clean default bound to the active connection_id
+            // so previous connection transfer settings never bleed into new connections or tasks.
+            reset_draft_job_for_connection(&ui, conn_id);
+            if let Ok(reg) = reg_for_conn_select.lock() {
+                sync_connection_jobs_ui(&ui, &reg, conn_id);
+                let jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                if let Some(first_job) = jobs.first() {
+                    ui.set_selected_job_idx(0);
+                    load_job_into_draft_ui(&ui, &reg, first_job);
+                }
+                if let Some(vpn_cfg) = reg
+                    .get_connection(conn_id)
+                    .and_then(|c| c.vpn_config.as_ref())
+                {
+                    ui.set_vpn_enabled(true);
+                    ui.set_vpn_endpoint(vpn_cfg.endpoint.clone().into());
+                    ui.set_vpn_interface_ip(vpn_cfg.address.clone().into());
+                    ui.set_vpn_masked_pubkey(vpn_cfg.masked_public_key().into());
+                    ui.set_vpn_tunnel_status("Configured (Ready)".into());
+                } else {
+                    ui.set_vpn_enabled(false);
+                    ui.set_vpn_conf_path("".into());
+                    ui.set_vpn_endpoint("".into());
+                    ui.set_vpn_interface_ip("".into());
+                    ui.set_vpn_masked_pubkey("".into());
+                    ui.set_vpn_tunnel_status("Disabled".into());
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_vpn_import = job_registry.clone();
+    ui.on_import_wireguard_conf(move |path_arg| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let chosen_path = if !path_arg.trim().is_empty() {
+                Some(std::path::PathBuf::from(path_arg.trim()))
+            } else {
+                rfd::FileDialog::new()
+                    .add_filter("WireGuard Config", &["conf"])
+                    .pick_file()
+            };
+
+            let Some(conf_path) = chosen_path else {
+                return;
+            };
+
+            match std::fs::read_to_string(&conf_path) {
+                Ok(raw_conf) => match simply_transfer_crypto::WireGuardConf::parse(&raw_conf) {
+                    Ok(parsed) => {
+                        let storage =
+                            simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                        match simply_transfer_crypto::VpnConfig::from_wireguard_conf(
+                            &parsed, &storage,
+                        ) {
+                            Ok(vpn_cfg) => {
+                                ui.set_vpn_enabled(true);
+                                ui.set_vpn_conf_path(
+                                    conf_path.to_string_lossy().to_string().into(),
+                                );
+                                ui.set_vpn_endpoint(vpn_cfg.endpoint.clone().into());
+                                ui.set_vpn_interface_ip(vpn_cfg.address.clone().into());
+                                ui.set_vpn_masked_pubkey(vpn_cfg.masked_public_key().into());
+                                ui.set_vpn_tunnel_status("Configured (Ready)".into());
+
+                                let conns: Vec<ConnectionItem> =
+                                    ui.get_connections().iter().collect();
+                                let idx = ui.get_selected_connection_idx() as usize;
+                                let conn_id = active_connection_uuid(&ui);
+                                let (name, host) = if idx < conns.len() {
+                                    (conns[idx].name.to_string(), conns[idx].host.to_string())
+                                } else {
+                                    ("Default Connection".to_string(), vpn_cfg.endpoint.clone())
+                                };
+
+                                if let Ok(mut reg) = reg_for_vpn_import.lock() {
+                                    let mut profile = reg
+                                        .get_connection(conn_id)
+                                        .cloned()
+                                        .unwrap_or(simply_transfer_core::ConnectionProfile {
+                                            id: conn_id,
+                                            name,
+                                            host,
+                                            port: 2222,
+                                            username: "simply-transfer".to_string(),
+                                            auth_config: simply_transfer_core::AuthConfig::default(
+                                            ),
+                                            vpn_config: None,
+                                        });
+                                    profile.vpn_config = Some(vpn_cfg);
+                                    reg.upsert_connection(profile);
+                                    save_job_registry(&reg);
+                                }
+                            }
+                            Err(e) => {
+                                ui.set_vpn_tunnel_status(format!("Vault Error: {}", e).into());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ui.set_vpn_tunnel_status(format!("Parse Error: {}", e).into());
+                    }
+                },
+                Err(e) => {
+                    ui.set_vpn_tunnel_status(format!("File Error: {}", e).into());
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_new_transfer_clicked(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            reset_draft_job_for_connection(&ui, conn_id);
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_select_job = job_registry.clone();
+    ui.on_select_transfer_job(move |job_idx| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+            let idx = job_idx as usize;
+            if idx < jobs.len() {
+                let selected = jobs[idx].clone();
+                if let Ok(reg) = reg_for_select_job.lock() {
+                    load_job_into_draft_ui(&ui, &reg, &selected);
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_delete_job = job_registry.clone();
+    ui.on_delete_transfer_job(move |job_idx| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            let jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+            let idx = job_idx as usize;
+            if idx < jobs.len() {
+                let target_id_str = jobs[idx].job_id.to_string();
+                if let Ok(job_uuid) = uuid::Uuid::parse_str(&target_id_str)
+                    && let Ok(mut reg) = reg_for_delete_job.lock()
+                {
+                    reg.remove_job(job_uuid);
+                    save_job_registry(&reg);
+                    sync_connection_jobs_ui(&ui, &reg, conn_id);
+                    let remaining: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                    if let Some(first_job) = remaining.first() {
+                        ui.set_selected_job_idx(0);
+                        load_job_into_draft_ui(&ui, &reg, first_job);
+                    } else {
+                        reset_draft_job_for_connection(&ui, conn_id);
+                    }
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_save_job = job_registry.clone();
+    ui.on_save_draft_job(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            let mut draft = ui.get_draft_job();
+            let mappings: Vec<DirectoryMapping> = ui.get_current_mappings().iter().collect();
+            let source_paths: Vec<PathBuf> = mappings
+                .iter()
+                .filter(|m| !m.source.trim().is_empty())
+                .map(|m| PathBuf::from(m.source.as_str()))
+                .collect();
+            let dest_path = mappings
+                .first()
+                .map(|m| PathBuf::from(m.destination.as_str()))
+                .unwrap_or_else(|| PathBuf::from(draft.destination.as_str()));
+            let mappings_vec: Vec<(PathBuf, PathBuf)> = mappings
+                .iter()
+                .filter(|m| !m.source.trim().is_empty() || !m.destination.trim().is_empty())
+                .map(|m| {
+                    (
+                        PathBuf::from(m.source.as_str()),
+                        PathBuf::from(m.destination.as_str()),
+                    )
+                })
+                .collect();
+
+            let job_id = uuid::Uuid::parse_str(draft.job_id.as_str())
+                .unwrap_or_else(|_| uuid::Uuid::new_v4());
+            draft.job_id = job_id.to_string().into();
+            draft.connection_id = conn_id.to_string().into();
+            if let Some(first_map) = mappings.first() {
+                draft.source = first_map.source.clone();
+                draft.destination = first_map.destination.clone();
+            }
+            ui.set_draft_job(draft.clone());
+
+            let job_type = if draft.job_type.as_str() == "Continuous Sync" {
+                simply_transfer_core::TransferJobType::Sync
+            } else {
+                simply_transfer_core::TransferJobType::Backup
+            };
+
+            let job = simply_transfer_core::TransferJob {
+                job_id,
+                connection_id: conn_id,
+                name: if draft.name.trim().is_empty() {
+                    "Transfer Task".to_string()
+                } else {
+                    draft.name.to_string()
+                },
+                job_type,
+                source_paths,
+                destination_path: dest_path,
+                mappings: mappings_vec,
+                schedule: Some(simply_transfer_core::ScheduleConfig {
+                    mode: draft.job_type.to_string(),
+                    interval_secs: None,
+                    window_start: Some(draft.start_permitted.to_string()),
+                    window_end: Some(draft.finish_permitted.to_string()),
+                    sync_frequency: Some(draft.sync_frequency.to_string()),
+                }),
+                use_snapshots: draft.use_snapshots,
+            };
+
+            if let Ok(mut reg) = reg_for_save_job.lock() {
+                reg.upsert_job(job);
+                save_job_registry(&reg);
+                sync_connection_jobs_ui(&ui, &reg, conn_id);
+                let updated_jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                let job_id_str = job_id.to_string();
+                if let Some(pos) = updated_jobs
+                    .iter()
+                    .position(|j| j.job_id.as_str() == job_id_str.as_str())
+                {
+                    ui.set_selected_job_idx(pos as i32);
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_delete_conn = job_registry.clone();
     ui.on_delete_connection(move |idx| {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let idx = idx as usize;
             if idx < conns.len() {
+                let deleted_conn_id = connection_uuid_for_item(&conns[idx]);
                 let deleted_conn_name = conns[idx].name.to_string(); // Extracted connection name
                 let token = conns[idx].token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
@@ -1791,6 +2354,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let model = std::rc::Rc::new(slint::VecModel::from(conns));
                 ui.set_connections(model.into());
 
+                if let Ok(mut reg) = reg_for_delete_conn.lock() {
+                    reg.remove_connection(deleted_conn_id);
+                    save_job_registry(&reg);
+                    let new_conn_id = active_connection_uuid(&ui);
+                    reset_draft_job_for_connection(&ui, new_conn_id);
+                    sync_connection_jobs_ui(&ui, &reg, new_conn_id);
+                    let jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                    if let Some(first_job) = jobs.first() {
+                        ui.set_selected_job_idx(0);
+                        load_job_into_draft_ui(&ui, &reg, first_job);
+                    }
+                }
+
                 // Load existing schedules and filter out those tied to this connection
                 let mut updated_schedules = Vec::new();
                 if let Ok(file) = std::fs::File::open("schedules.json")
@@ -1799,9 +2375,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     for schedule in loaded_schedules {
                         // Only keep schedules not associated with the deleted connection
-                        if !schedule
+                        if schedule
                             .get("connection_name")
-                            .is_some_and(|v| v.as_str() == Some(&deleted_conn_name))
+                            .is_none_or(|v| v.as_str() != Some(&deleted_conn_name))
                         {
                             updated_schedules.push(schedule);
                         }
@@ -1846,44 +2422,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_weak = ui.as_weak();
     ui.on_verify_remote_token(move |token| {
         let ui_weak = ui_weak.clone();
-        let token = token.to_string();
+        let token = token.trim().to_string();
         tokio::spawn(async move {
-            if !simply_transfer_core::ssh_server::SshServer::is_installed() {
-                log_event("connection", "SSH server is not installed. Prompting for privileges to install it...");
-                if let Err(e) = simply_transfer_core::ssh_server::SshServer::install_server() {
-                    log_event("connection", &format!("Failed to install SSH server: {}", e));
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_is_remote_verified(false);
-                            ui.set_remote_verification_status(format!("Failed to install SSH: {}", e).into());
-                        }
-                    });
-                    return;
-                }
-                log_event("connection", "SSH server installed successfully.");
-            }
-
-            if !simply_transfer_core::ssh_server::SshServer::is_running() {
-                log_event("connection", "SSH server is not running. Prompting for privileges to start it...");
-                if let Err(e) = simply_transfer_core::ssh_server::SshServer::start_server() {
-                    log_event("connection", &format!("Failed to start SSH server: {}", e));
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_weak.upgrade() {
-                            ui.set_is_remote_verified(false);
-                            ui.set_remote_verification_status(format!("Failed to start SSH: {}", e).into());
-                        }
-                    });
-                    return;
-                }
-                log_event("connection", "SSH server started successfully.");
-            }
-
             log_event("connection", &format!("Validating remote token: {}", token));
 
             let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                 Ok(parsed) => {
-                    // Ingest the public key to authorized_keys
-                    let pub_key_line = format!("ssh-ed25519 {} simply-transfer", parsed.pub_key);
+                    // 1. Immediately ingest the peer's public key into the built-in P2P SSH server (port 2222)
+                    // before any network handshake or external OS commands so Windows/Linux key ingestion is never delayed.
+                    if let Some(srv) = P2P_SERVER.get() {
+                        if srv.add_authorized_key_from_str(parsed.pub_key.trim()).await {
+                            tracing::info!("Immediately ingested remote public key into P2P Daemon!");
+                            log_event("connection", "Added public key to built-in P2P SSH server.");
+                        }
+                    }
+
+                    // 2. Ingest the public key to ~/.ssh/authorized_keys
+                    let pub_key_line = format!("ssh-ed25519 {} simply-transfer", parsed.pub_key.trim());
 
                     let home = get_user_home_dir();
                     let ssh_dir = home.join(".ssh");
@@ -1892,7 +2447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let mut key_exists = false;
                     if let Ok(content) = std::fs::read_to_string(&auth_keys)
-                        && content.contains(&parsed.pub_key)
+                        && content.contains(parsed.pub_key.trim())
                     {
                         key_exists = true;
                     }
@@ -1912,7 +2467,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let admin_keys = "C:\\ProgramData\\ssh\\administrators_authorized_keys";
                         let mut admin_key_exists = false;
                         if let Ok(content) = std::fs::read_to_string(admin_keys) {
-                            if content.contains(&parsed.pub_key) {
+                            if content.contains(parsed.pub_key.trim()) {
                                 admin_key_exists = true;
                             }
                         }
@@ -1922,16 +2477,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = writeln!(file, "{}", pub_key_line);
                                 log_event("connection", "Appended public key to administrators_authorized_keys.");
                             } else {
-                                let script = format!(
-                                    "Add-Content -Path \\\"{}\\\" -Value \\\"{}\\\"",
-                                    admin_keys, pub_key_line
+                                let ps_inner = format!(
+                                    "$dir = 'C:\\ProgramData\\ssh'; \
+                                     if (!(Test-Path $dir)) {{ New-Item -ItemType Directory -Path $dir -Force | Out-Null }}; \
+                                     $file = 'C:\\ProgramData\\ssh\\administrators_authorized_keys'; \
+                                     $key = '{}'; \
+                                     if (!(Test-Path $file) -or !((Get-Content $file -Raw -ErrorAction SilentlyContinue) -match [regex]::Escape($key))) {{ \
+                                         Add-Content -Path $file -Value $key -Encoding UTF8 \
+                                     }}; \
+                                     icacls.exe $file /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null",
+                                    pub_key_line.replace('\'', "''")
                                 );
-                                let _ = std::process::Command::new("powershell")
-                                    .arg("-NoProfile")
-                                    .arg("-Command")
-                                    .arg(format!("Start-Process powershell -ArgumentList '-NoProfile -Command {}' -Verb RunAs -WindowStyle Hidden -Wait", script))
-                                    .status();
-                                log_event("connection", "Appended public key to administrators_authorized_keys via elevated PowerShell.");
+                                let encoded_inner = simply_transfer_crypto::token::encode_utf16le_base64(&ps_inner);
+                                let outer_cmd = format!(
+                                    "Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand {}'",
+                                    encoded_inner
+                                );
+                                match std::process::Command::new("powershell")
+                                    .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &outer_cmd])
+                                    .status()
+                                {
+                                    Ok(st) if st.success() => {
+                                        log_event("connection", "Appended public key to administrators_authorized_keys via elevated PowerShell.");
+                                    }
+                                    Ok(st) => {
+                                        log_event("connection", &format!("Elevated PowerShell exited with status: {}", st));
+                                    }
+                                    Err(e) => {
+                                        log_event("connection", &format!("Failed to launch elevated PowerShell: {}", e));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1943,6 +2518,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = std::fs::set_permissions(&auth_keys, std::fs::Permissions::from_mode(0o600));
                         let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
                     }
+
+                    // Ensure OS SSH server is installed/running asynchronously in the background (non-blocking)
+                    tokio::task::spawn_blocking(|| {
+                        if !simply_transfer_core::ssh_server::SshServer::is_installed() {
+                            log_event("connection", "OS SSH server not detected; attempting background installation...");
+                            let _ = simply_transfer_core::ssh_server::SshServer::install_server();
+                        }
+                        if !simply_transfer_core::ssh_server::SshServer::is_running() {
+                            let _ = simply_transfer_core::ssh_server::SshServer::start_server();
+                        }
+                    });
 
                     // Trigger remote handshake (TCP connect to source device)
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
@@ -1993,56 +2579,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if line.contains("\"ok\"") {
                                     log_event("connection", "Remote token validated and handshake succeeded.");
 
-                                // INJECT RECEIVER'S PUBLIC KEY INTO SENDER'S DAEMON
-                                tracing::info!("Ingesting receiver's pub_key into P2P Daemon!");
-                                if let Some(srv) = P2P_SERVER.get() {
-                                    let srv_clone = srv.clone();
-                                    let pub_key_clone = parsed.pub_key.trim().to_string();
-                                    tokio::spawn(async move {
-                                        if srv_clone.add_authorized_key_from_str(&pub_key_clone).await {
-                                            tracing::info!("Receiver's authorized key added to global P2P Daemon!");
-                                        }
-                                    });
-                                }
-
-                                if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
-                                    let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
-                                    let new_host = format!("{}@{}", remote_user, parsed.ip);
-                                    let clone_ui = ui_weak.clone();
-                                    let token_clone = token.clone();
-                                    tracing::info!("Successfully verified remote token. Updating connection host to: {}", new_host);
-                                    let appended_token = if !my_pub_key_id.is_empty() { format!("{};{}", token_clone, my_pub_key_id) } else { token_clone.clone() };
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(ui) = clone_ui.upgrade() {
-                                            ui.set_remote_verified_host(new_host.clone().into());
-                                            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-                                            for conn in &mut conns {
-                                                let conn_actual_token = conn.token.to_string();
-                                                let conn_actual_token = conn_actual_token.split(';').next().unwrap_or(&conn_actual_token).trim();
-                                                let incoming_actual_token = token_clone.split(';').next().unwrap_or(&token_clone).trim();
-                                                if conn_actual_token == incoming_actual_token {
-                                                    tracing::info!("Updating UI connection to Connected state.");
-                                                    conn.host = new_host.clone().into();
-                                                    conn.token = appended_token.clone().into();
-                                                    conn.state = "Connected".into();
-                                                    conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                    if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
+                                        let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
+                                        let new_host = format!("{}@{}", remote_user, parsed.ip);
+                                        let clone_ui = ui_weak.clone();
+                                        let token_clone = token.clone();
+                                        tracing::info!("Successfully verified remote token. Updating connection host to: {}", new_host);
+                                        let appended_token = if !my_pub_key_id.is_empty() { format!("{};{}", token_clone, my_pub_key_id) } else { token_clone.clone() };
+                                        let _ = slint::invoke_from_event_loop(move || {
+                                            if let Some(ui) = clone_ui.upgrade() {
+                                                ui.set_remote_verified_host(new_host.clone().into());
+                                                let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                                                for conn in &mut conns {
+                                                    let conn_actual_token = conn.token.to_string();
+                                                    let conn_actual_token = conn_actual_token.split(';').next().unwrap_or(&conn_actual_token).trim();
+                                                    let incoming_actual_token = token_clone.split(';').next().unwrap_or(&token_clone).trim();
+                                                    if conn_actual_token == incoming_actual_token {
+                                                        tracing::info!("Updating UI connection to Connected state.");
+                                                        conn.host = new_host.clone().into();
+                                                        conn.token = appended_token.clone().into();
+                                                        conn.state = "Connected".into();
+                                                        conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                                    }
                                                 }
+                                                save_connections(&conns);
+                                                ui.set_remote_verification_status("Verified".into());
+                                                ui.set_remote_verified_full_token(appended_token.clone().into());
+                                                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
                                             }
-                                            ui.set_remote_verification_status("Verified".into());
-                                            ui.set_remote_verified_full_token(appended_token.clone().into());
-                                            ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
-                                        }
-                                    });
+                                        });
+                                    } else {
+                                        log_event("connection", "Remote handshake failed or was rejected.");
+                                    }
+                                    (true, "Connection Verified Successfully".to_string())
                                 } else {
-                                    log_event("connection", "Remote handshake failed or was rejected.");
+                                    log_event("connection", "Handshake failed to return OK.");
+                                    (false, "Handshake Failed".to_string())
                                 }
                             } else {
                                 log_event("connection", "Remote handshake read timed out.");
-                            }
-                                (true, "Connection Verified Successfully".to_string())
-                            } else {
-                                log_event("connection", "Handshake failed to return OK.");
-                                (false, "Handshake Failed".to_string())
+                                (true, "Key Ingested, but Handshake Read Timed Out".to_string())
                             }
                         }
                         Ok(Err(e)) => {

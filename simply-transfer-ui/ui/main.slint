@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, TabWidget, ListView, LineEdit, GroupBox, ProgressIndicator, CheckBox, ComboBox, Palette } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ListView, LineEdit, Palette } from "std-widgets.slint";
 
 export struct ScheduleData {
     id: string,
@@ -45,6 +45,27 @@ export struct ConnectionItem {
     eta: string,
     transfer_type: string,
     token: string,
+}
+
+export struct TransferJobUi {
+    job_id: string,
+    connection_id: string,
+    name: string,
+    job_type: string,
+    source: string,
+    destination: string,
+    schedule_mode: string,
+    sync_frequency: string,
+    start_permitted: string,
+    finish_permitted: string,
+    use_snapshots: bool,
+}
+
+export struct VolumeUi {
+    mount_point: string,
+    label: string,
+    fs_type: string,
+    free_space_label: string,
 }
 
 export global AppTheme {
@@ -265,11 +286,54 @@ component TransferQueueRow inherits Rectangle {
     height: 25px;
     HorizontalBox {
         padding: 0; spacing: 10px;
-        Rectangle { width: 45%; Text { width: 100%; text: root.file.name; overflow: elide; } }
-        Rectangle { width: 20%; Text { width: 100%; text: root.file.size; horizontal-alignment: right; overflow: elide; } }
-        Rectangle { width: 25%; ProgressIndicator { progress: root.file.progress; width: 100%; } }
+        Rectangle { width: 39%; Text { width: 100%; text: root.file.name; overflow: elide; vertical-alignment: center; } }
+        Rectangle {
+            width: 18%;
+            min-width: 90px;
+            Text {
+                width: parent.width;
+                height: parent.height;
+                font-family: "monospace";
+                text: root.file.size;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        Rectangle {
+            width: 23%;
+            min-width: 110px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 6px;
+            border-width: 1px;
+            border-color: AppTheme.border;
+            background: rgba(128, 128, 128, 0.2);
+            clip: true;
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                height: parent.height;
+                width: parent.width * clamp(root.file.progress, 0.0, 1.0);
+                border-radius: 6px;
+                background: AppTheme.accent;
+            }
+        }
         Rectangle {
             width: 10%;
+            min-width: 48px;
+            Text {
+                width: parent.width;
+                height: parent.height;
+                font-family: "monospace";
+                text: Math.round(clamp(root.file.progress, 0.0, 1.0) * 100) + "%";
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            width: 10%;
+            min-width: 44px;
             height: 18px;
             border-radius: 4px;
             background: root.file.snapshot_type == "VSS" ? #4CAF50 : 
@@ -306,9 +370,9 @@ component MetricsGrid inherits Rectangle {
 
     HorizontalBox {
         padding: 0; spacing: 20px; alignment: start;
-        HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; } Text { text: root.upload_speed; width: 8%; min-width: 80px; horizontal-alignment: left; } }
-        HorizontalBox { padding: 0; alignment: start; Text { text: "Download:"; } Text { text: root.download_speed; width: 8%; min-width: 80px; horizontal-alignment: left; } }
-        HorizontalBox { padding: 0; alignment: start; Text { text: "ETA:"; } Text { text: root.eta; width: 8%; min-width: 80px; horizontal-alignment: left; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Upload:"; vertical-alignment: center; } Text { text: root.upload_speed; width: 8%; min-width: 95px; font-family: "monospace"; horizontal-alignment: left; vertical-alignment: center; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "Download:"; vertical-alignment: center; } Text { text: root.download_speed; width: 8%; min-width: 95px; font-family: "monospace"; horizontal-alignment: left; vertical-alignment: center; } }
+        HorizontalBox { padding: 0; alignment: start; Text { text: "ETA:"; vertical-alignment: center; } Text { text: root.eta; width: 8%; min-width: 95px; font-family: "monospace"; horizontal-alignment: left; vertical-alignment: center; } }
     }
 }
 
@@ -377,6 +441,8 @@ export component MainWindow inherits Window {
     in-out property <bool> dest_browser_is_remote: false;
     in-out property <[FileNode]> dest_browser_nodes: [];
     in-out property <[string]> dest_browser_selection: [];
+    in-out property <[VolumeUi]> local_volumes: [];
+    in-out property <[VolumeUi]> remote_volumes: [];
     
     // Dashboard States
     in-out property <[ConnectionItem]> connections: [];
@@ -389,6 +455,13 @@ export component MainWindow inherits Window {
     in-out property <string> remote_verified_full_token: "";
     in-out property <string> remote_verification_status: "";
     in-out property <string> remote_verified_host: "";
+    in-out property <bool> vpn_enabled: false;
+    in-out property <string> vpn_conf_path: "";
+    in-out property <string> vpn_endpoint: "";
+    in-out property <string> vpn_interface_ip: "";
+    in-out property <string> vpn_masked_pubkey: "";
+    in-out property <string> vpn_tunnel_status: "Disabled";
+    callback import_wireguard_conf(string);
 
     in property <string> network_link_type: "Dynamic";
     in property <string> network_max_throughput: "Variable";
@@ -397,6 +470,26 @@ export component MainWindow inherits Window {
     // Transfer Setup States
     in-out property <string> transfer_type_val: "Single Transfer";
     in-out property <[DirectoryMapping]> current_mappings: [{source: "", destination: ""}];
+    in-out property <[TransferJobUi]> connection_jobs: [];
+    in-out property <TransferJobUi> draft_job: {
+        job_id: "",
+        connection_id: "",
+        name: "Default Transfer Task",
+        job_type: "Single Transfer",
+        source: "",
+        destination: "",
+        schedule_mode: "Manual",
+        sync_frequency: "1hr",
+        start_permitted: "00:00",
+        finish_permitted: "23:59",
+        use_snapshots: true,
+    };
+    in-out property <int> selected_job_idx: -1;
+    callback connection_selected(int);
+    callback new_transfer_clicked();
+    callback select_transfer_job(int);
+    callback delete_transfer_job(int);
+    callback save_draft_job();
 
     // Active Transfers States
     in property <[string]> active_sessions: [];
@@ -493,12 +586,12 @@ export component MainWindow inherits Window {
                             for item[idx] in root.connections : Rectangle {
                                 height: 40px;
                                 background: root.selected_connection_idx == idx ? AppTheme.accent : (touch.has-hover ? AppTheme.list_hover : transparent);
-                                touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; root.is_adding_connection = false; } }
+                                touch := TouchArea { clicked => { root.selected_connection_idx = idx; root.is_editing_connection = false; root.is_adding_connection = false; root.connection_selected(idx); } }
                                 HorizontalBox {
                                     padding-left: 16px; padding-right: 16px;
                                     Text { text: item.name; vertical-alignment: center; horizontal-alignment: left; width: 11%; min-width: 110px; font-weight: 700; overflow: elide; }
                                     Text { text: item.state; color: item.state_color; vertical-alignment: center; horizontal-alignment: center; horizontal-stretch: 1; font-weight: 700; }
-                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 6%; min-width: 60px; font-weight: 700; }
+                                    Text { text: item.transfer_rate; vertical-alignment: center; horizontal-alignment: right; width: 8%; min-width: 75px; font-family: "monospace"; font-weight: 700; }
                                 }
                             }
                         }
@@ -552,8 +645,31 @@ export component MainWindow inherits Window {
                         Text { text: "Duration: " + root.connections[root.selected_connection_idx].duration; }
                         Text { text: "Estimated Completion: " + root.connections[root.selected_connection_idx].eta; }
                         Text { text: "Type of Transfer: " + root.connections[root.selected_connection_idx].transfer_type; }
-                        
-
+                        HorizontalBox {
+                            padding: 0; spacing: 8px;
+                            Text { text: "WAN VPN Tunnel:"; vertical-alignment: center; }
+                            Rectangle {
+                                height: 20px;
+                                min-width: 90px;
+                                border-radius: 4px;
+                                background: root.vpn_enabled ? #2E7D32 : #616161;
+                                Text {
+                                    text: root.vpn_tunnel_status;
+                                    color: white;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: parent.width;
+                                    height: parent.height;
+                                }
+                            }
+                        }
+                        if root.vpn_enabled && root.vpn_endpoint != "": Text {
+                            text: "VPN Endpoint: " + root.vpn_endpoint + " | Interface IP: " + root.vpn_interface_ip + " | Peer Key: " + root.vpn_masked_pubkey;
+                            font-size: 11px;
+                            color: gray;
+                        }
 
                         Rectangle { vertical-stretch: 1; }
 
@@ -594,6 +710,34 @@ export component MainWindow inherits Window {
                             Button { text: "Generate"; clicked => { edit_key.text = root.generate_key(edit_host.text); } }
                             // --- Button ---
                             Button { text: "Remove"; clicked => { edit_key.text = ""; root.remove_key(); } }
+                        }
+                        RustCheckBox {
+                            text: "Enable WAN VPN (WireGuard)";
+                            checked: root.vpn_enabled;
+                            toggled => {
+                                root.vpn_enabled = self.checked;
+                                root.vpn_tunnel_status = self.checked ? (root.vpn_endpoint != "" ? "Configured (Ready)" : "Enabled (No .conf)") : "Disabled";
+                            }
+                        }
+                        if root.vpn_enabled: VerticalBox {
+                            spacing: 6px;
+                            HorizontalBox {
+                                Text { text: "WG Config:"; width: 10%; min-width: 100px; vertical-alignment: center; }
+                                LineEdit {
+                                    text: root.vpn_conf_path;
+                                    placeholder-text: "/path/to/wg0.conf";
+                                    edited(t) => { root.vpn_conf_path = t; }
+                                }
+                                Button {
+                                    text: "Import .conf";
+                                    clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
+                                }
+                            }
+                            if root.vpn_endpoint != "": Text {
+                                text: "Endpoint: " + root.vpn_endpoint + " | Interface IP: " + root.vpn_interface_ip + " | PublicKey: " + root.vpn_masked_pubkey;
+                                font-size: 11px;
+                                color: gray;
+                            }
                         }
                         
                         Rectangle { vertical-stretch: 1; }
@@ -681,9 +825,37 @@ export component MainWindow inherits Window {
                                     HorizontalBox { Text { text: "Host:"; width: 10%; min-width: 100px; vertical-alignment: center; } new_host := LineEdit { placeholder-text: "e.g. user@IP or IP"; } }
                                     HorizontalBox { 
                                         Text { text: "Key:"; width: 10%; min-width: 100px; vertical-alignment: center; } 
-                                        new_key := LineEdit { placeholder-text: "Click Generate to create token"; }
+                                        new_key := LineEdit { placeholder-text: "Click Generate, or paste st:... token"; }
                                         // --- Button ---
                                         Button { text: "Generate"; clicked => { new_key.text = root.generate_key(new_host.text); } }
+                                    }
+                                    RustCheckBox {
+                                        text: "Enable WAN VPN (WireGuard)";
+                                        checked: root.vpn_enabled;
+                                        toggled => {
+                                            root.vpn_enabled = self.checked;
+                                            root.vpn_tunnel_status = self.checked ? (root.vpn_endpoint != "" ? "Configured (Ready)" : "Enabled (No .conf)") : "Disabled";
+                                        }
+                                    }
+                                    if root.vpn_enabled: VerticalBox {
+                                        spacing: 6px;
+                                        HorizontalBox {
+                                            Text { text: "WG Config:"; width: 10%; min-width: 100px; vertical-alignment: center; }
+                                            LineEdit {
+                                                text: root.vpn_conf_path;
+                                                placeholder-text: "/path/to/wg0.conf";
+                                                edited(t) => { root.vpn_conf_path = t; }
+                                            }
+                                            Button {
+                                                text: "Import .conf";
+                                                clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
+                                            }
+                                        }
+                                        if root.vpn_endpoint != "": Text {
+                                            text: "Endpoint: " + root.vpn_endpoint + " | Interface IP: " + root.vpn_interface_ip + " | PublicKey: " + root.vpn_masked_pubkey;
+                                            font-size: 11px;
+                                            color: gray;
+                                        }
                                     }
                                     Rectangle { vertical-stretch: 1; }
                                     HorizontalBox {
@@ -846,72 +1018,184 @@ export component MainWindow inherits Window {
                 StyledBox {
                     border-top-left-radius: 0px;
                     if root.active_transfer_tab == 0: VerticalBox {
-                            VerticalBox {
-                                padding: 15px;
-                            spacing: 12px;
-                            for mapping[idx] in root.current_mappings : HorizontalBox {
-                                LineEdit { horizontal-stretch: 1; text: mapping.source; placeholder-text: "/path/to/source"; edited(text) => { root.update_mapping_source(idx, text); } }
-
-                                Rectangle { width: 20px; }
-
-                                LineEdit { horizontal-stretch: 1; text: mapping.destination; placeholder-text: "/path/to/destination"; edited(text) => { root.update_mapping_destination(idx, text); } }
-                                // --- Button ---
-                                Button { text: "Configure Transfer"; clicked => { root.browse_destination(idx); } }
-                                
-                                // --- Button ---
-                                if root.current_mappings.length > 1: Button { text: "-"; clicked => { root.remove_mapping(idx); } }
-                            }
-                            // --- Button ---
-                            Button { text: "+ Add Row"; clicked => { root.add_mapping(); } }
-
-                            Rectangle { height: 1px; background: gray; }
-
-                            HorizontalBox {
-                                Text { text: "Transfer Type:"; vertical-alignment: center; width: 12%; min-width: 120px; }
-                                // --- Dropdown ---
-                                CustomComboBox {
-                                    model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
-                                    current-value: root.transfer_type_val;
-                                    selected(val) => { root.transfer_type_val = val; }
+                        HorizontalBox {
+                            // Left Column: Connection Tasks list + New Transfer Task button at bottom
+                            StyledBox {
+                                width: 260px;
+                                VerticalBox {
+                                    padding-top: 15px; padding-bottom: 15px; padding-left: 0px; padding-right: 0px;
+                                    HorizontalBox {
+                                        padding-left: 16px; padding-bottom: 8px;
+                                        Text { text: "Connection Tasks"; font-weight: 800; font-size: 16px; }
+                                    }
+                                    ListView {
+                                        for job[j_idx] in root.connection_jobs : Rectangle {
+                                            height: 40px;
+                                            background: root.selected_job_idx == j_idx ? AppTheme.accent : (job_ta.has-hover ? AppTheme.list_hover : transparent);
+                                            job_ta := TouchArea {
+                                                clicked => {
+                                                    root.selected_job_idx = j_idx;
+                                                    root.select_transfer_job(j_idx);
+                                                }
+                                            }
+                                            HorizontalBox {
+                                                padding-left: 16px; padding-right: 16px;
+                                                Text {
+                                                    text: job.name;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: left;
+                                                    horizontal-stretch: 1;
+                                                    font-weight: 700;
+                                                    overflow: elide;
+                                                    color: root.selected_job_idx == j_idx ? white : Palette.foreground;
+                                                }
+                                                Text {
+                                                    text: job.job_type;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: right;
+                                                    font-size: 11px;
+                                                    font-weight: 600;
+                                                    color: root.selected_job_idx == j_idx ? white : Palette.foreground;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Rectangle { height: 10px; }
+                                    HorizontalBox {
+                                        padding-left: 16px; padding-right: 16px;
+                                        RustButton {
+                                            text: "+ New Transfer Task";
+                                            horizontal-stretch: 1;
+                                            clicked => { root.new_transfer_clicked(); }
+                                        }
+                                    }
                                 }
                             }
-                            
-                            if root.transfer_type_val == "Continuous Sync": HorizontalBox {
-                                Text { text: "Sync Frequency:"; vertical-alignment: center; width: 12%; min-width: 120px; }
-                                // --- Dropdown ---
-                                CustomComboBox {
-                                    model: ["1min", "5min", "15min", "30min", "1hr", "2hr", "4hr", "6hr", "8hr", "12hr", "24hr", "48hr", "72hr"];
-                                    current-value: "1hr";
-                                }
-                            }
 
-                            if root.transfer_type_val == "Scheduled Transfer": VerticalBox {
-                                spacing: 8px;
-                                HorizontalBox {
-                                    Text { text: "Active Days:"; vertical-alignment: center; width: 12%; min-width: 120px; }
-                                    RustCheckBox { text: "M"; } RustCheckBox { text: "T"; } RustCheckBox { text: "W"; } RustCheckBox { text: "Th"; } RustCheckBox { text: "F"; } RustCheckBox { text: "Sa"; } RustCheckBox { text: "Su"; }
-                                }
-                                HorizontalBox {
-                                    Text { text: "Start Permitted:"; vertical-alignment: center; width: 12%; min-width: 120px; }
-                                    // --- Dropdown ---
-                                    CustomComboBox { model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"]; }
-                                    Rectangle { width: 20px; }
-                                    Text { text: "Finish Permitted:"; vertical-alignment: center; }
-                                    // --- Dropdown ---
-                                    CustomComboBox { model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"]; }
-                                }
-                            }
+                            // Right Column: Task Name at top, Configure Transfer rows below, + Add Row below that
+                            StyledBox {
+                                horizontal-stretch: 1;
+                                VerticalBox {
+                                    padding: 15px;
+                                    spacing: 12px;
 
-                            Rectangle { vertical-stretch: 1; }
+                                    HorizontalBox {
+                                        Text { text: "Task Name:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: root.draft_job.name;
+                                            placeholder-text: "e.g. Hourly Workspace Sync";
+                                            edited(val) => { root.draft_job.name = val; }
+                                        }
+                                        if root.selected_job_idx >= 0 && root.connection_jobs.length > 0: Button {
+                                            text: "-";
+                                            clicked => { root.delete_transfer_job(root.selected_job_idx); }
+                                        }
+                                    }
 
-                            HorizontalBox {
-                                alignment: end;
-                                // --- Button ---
-                                Button { text: "Commit"; }
-                                // --- Button ---
-                                RustButton { 
-                                    text: "Commit & Start"; 
-                                    clicked => { root.start_transfer(); }
+                                    for mapping[idx] in root.current_mappings : HorizontalBox {
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: mapping.source;
+                                            placeholder-text: "/path/to/source";
+                                            edited(text) => {
+                                                if idx == 0 { root.draft_job.source = text; }
+                                                root.update_mapping_source(idx, text);
+                                            }
+                                        }
+
+                                        Rectangle { width: 20px; }
+
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: mapping.destination;
+                                            placeholder-text: "/path/to/destination";
+                                            edited(text) => {
+                                                if idx == 0 { root.draft_job.destination = text; }
+                                                root.update_mapping_destination(idx, text);
+                                            }
+                                        }
+                                        // --- Button ---
+                                        Button { text: "Configure Transfer"; clicked => { root.browse_destination(idx); } }
+
+                                        // --- Button ---
+                                        if root.current_mappings.length > 1: Button { text: "-"; clicked => { root.remove_mapping(idx); } }
+                                    }
+
+                                    HorizontalBox {
+                                        alignment: start;
+                                        // --- Button ---
+                                        Button { text: "+ Add Row"; clicked => { root.add_mapping(); } }
+                                    }
+
+                                    Rectangle { height: 1px; background: gray; }
+
+                                    HorizontalBox {
+                                        Text { text: "Transfer Type:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                        // --- Dropdown ---
+                                        CustomComboBox {
+                                            model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
+                                            current-value: root.draft_job.job_type;
+                                            selected(val) => {
+                                                root.draft_job.job_type = val;
+                                                root.transfer_type_val = val;
+                                            }
+                                        }
+                                    }
+
+                                    if root.transfer_type_val == "Continuous Sync": HorizontalBox {
+                                        Text { text: "Sync Frequency:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                        // --- Dropdown ---
+                                        CustomComboBox {
+                                            model: ["1min", "5min", "15min", "30min", "1hr", "2hr", "4hr", "6hr", "8hr", "12hr", "24hr", "48hr", "72hr"];
+                                            current-value: root.draft_job.sync_frequency;
+                                            selected(val) => { root.draft_job.sync_frequency = val; }
+                                        }
+                                    }
+
+                                    if root.transfer_type_val == "Scheduled Transfer": VerticalBox {
+                                        spacing: 8px;
+                                        HorizontalBox {
+                                            Text { text: "Active Days:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                            RustCheckBox { text: "M"; } RustCheckBox { text: "T"; } RustCheckBox { text: "W"; } RustCheckBox { text: "Th"; } RustCheckBox { text: "F"; } RustCheckBox { text: "Sa"; } RustCheckBox { text: "Su"; }
+                                        }
+                                        HorizontalBox {
+                                            Text { text: "Start Permitted:"; vertical-alignment: center; width: 12%; min-width: 120px; }
+                                            // --- Dropdown ---
+                                            CustomComboBox {
+                                                model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"];
+                                                current-value: root.draft_job.start_permitted;
+                                                selected(val) => { root.draft_job.start_permitted = val; }
+                                            }
+                                            Rectangle { width: 20px; }
+                                            Text { text: "Finish Permitted:"; vertical-alignment: center; }
+                                            // --- Dropdown ---
+                                            CustomComboBox {
+                                                model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"];
+                                                current-value: root.draft_job.finish_permitted;
+                                                selected(val) => { root.draft_job.finish_permitted = val; }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle { vertical-stretch: 1; }
+
+                                    HorizontalBox {
+                                        alignment: end;
+                                        // --- Button ---
+                                        Button {
+                                            text: "Commit";
+                                            clicked => { root.save_draft_job(); }
+                                        }
+                                        // --- Button ---
+                                        RustButton {
+                                            text: "Commit & Start";
+                                            clicked => {
+                                                root.save_draft_job();
+                                                root.start_transfer();
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1270,6 +1554,44 @@ export component MainWindow inherits Window {
                         // Left Column: Source
                         VerticalBox {
                             Text { text: root.browser_is_remote ? "Source (Remote)" : "Source (Local)"; font-weight: 600; }
+                            if root.local_volumes.length > 0: HorizontalBox {
+                                spacing: 6px;
+                                Text { text: "Volume:"; vertical-alignment: center; font-size: 11px; color: gray; }
+                                Flickable {
+                                    height: 28px;
+                                    horizontal-stretch: 1;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        for vol in root.local_volumes: Rectangle {
+                                            height: 24px;
+                                            min-width: 70px;
+                                            border-radius: 4px;
+                                            border-width: 1px;
+                                            border-color: AppTheme.border;
+                                            background: root.browser_current_path == vol.mount_point ? AppTheme.accent : (ta_lvol.has-hover ? AppTheme.list_hover : transparent);
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                Text {
+                                                    text: vol.mount_point + " (" + vol.free_space_label + ")";
+                                                    font-size: 10px;
+                                                    font-weight: 600;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    color: root.browser_current_path == vol.mount_point ? white : Palette.foreground;
+                                                }
+                                            }
+                                            ta_lvol := TouchArea {
+                                                clicked => {
+                                                    root.browser_current_path = vol.mount_point;
+                                                    root.fetch_directory(vol.mount_point, root.browser_is_remote, false);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             HorizontalBox {
                                 LineEdit { text: root.browser_current_path; edited(t) => { root.browser_current_path = t; } }
                                 // --- Button ---
@@ -1330,6 +1652,44 @@ export component MainWindow inherits Window {
                         // Right Column: Destination
                         VerticalBox {
                             Text { text: root.dest_browser_is_remote ? "Destination (Remote)" : "Destination (Local)"; font-weight: 600; }
+                            if root.remote_volumes.length > 0: HorizontalBox {
+                                spacing: 6px;
+                                Text { text: "Volume:"; vertical-alignment: center; font-size: 11px; color: gray; }
+                                Flickable {
+                                    height: 28px;
+                                    horizontal-stretch: 1;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        for rvol in root.remote_volumes: Rectangle {
+                                            height: 24px;
+                                            min-width: 70px;
+                                            border-radius: 4px;
+                                            border-width: 1px;
+                                            border-color: AppTheme.border;
+                                            background: root.dest_browser_current_path == rvol.mount_point ? AppTheme.accent : (ta_rvol.has-hover ? AppTheme.list_hover : transparent);
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                Text {
+                                                    text: rvol.mount_point + " (" + rvol.free_space_label + ")";
+                                                    font-size: 10px;
+                                                    font-weight: 600;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    color: root.dest_browser_current_path == rvol.mount_point ? white : Palette.foreground;
+                                                }
+                                            }
+                                            ta_rvol := TouchArea {
+                                                clicked => {
+                                                    root.dest_browser_current_path = rvol.mount_point;
+                                                    root.fetch_directory(rvol.mount_point, root.dest_browser_is_remote, true);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             HorizontalBox {
                                 LineEdit { text: root.dest_browser_current_path; edited(t) => { root.dest_browser_current_path = t; } }
                                 // --- Button ---
