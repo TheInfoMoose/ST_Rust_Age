@@ -47,6 +47,9 @@ pub struct ScheduleConfig {
     /// Optional sync frequency string (e.g., "Every 15 Minutes", "Every Hour", "Daily", "Weekly").
     #[serde(default)]
     pub sync_frequency: Option<String>,
+    /// Optional active days string (e.g., "MTWThF") for scheduled transfers.
+    #[serde(default)]
+    pub active_days: Option<String>,
 }
 
 /// Represents a discrete transfer job bound to a specific `ConnectionProfile` (`1:N`).
@@ -271,6 +274,7 @@ mod tests {
                 window_start: Some("08:00".to_string()),
                 window_end: Some("20:00".to_string()),
                 sync_frequency: Some("Every Hour".to_string()),
+                active_days: None,
             }),
             use_snapshots: false,
         };
@@ -301,6 +305,7 @@ mod tests {
                 window_start: Some("01:00".to_string()),
                 window_end: Some("05:00".to_string()),
                 sync_frequency: Some("Daily".to_string()),
+                active_days: Some("MTWThF".to_string()),
             }),
             use_snapshots: true,
         };

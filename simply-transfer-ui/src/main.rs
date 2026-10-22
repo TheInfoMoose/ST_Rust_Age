@@ -274,6 +274,106 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    const DAY_TOKENS: [&str; 7] = ["M", "T", "W", "Th", "F", "Sa", "Su"];
+
+    fn parse_active_days_flags(active_days: &str) -> Vec<bool> {
+        let stripped = active_days
+            .replace("Th", "")
+            .replace("Sa", "")
+            .replace("Su", "");
+        vec![
+            active_days.contains("M"),
+            stripped.contains('T'),
+            active_days.contains("W"),
+            active_days.contains("Th"),
+            active_days.contains("F"),
+            active_days.contains("Sa"),
+            active_days.contains("Su"),
+        ]
+    }
+
+    fn format_active_days_flags(flags: &[bool]) -> String {
+        let mut out = String::new();
+        for (i, &enabled) in flags.iter().enumerate().take(DAY_TOKENS.len()) {
+            if enabled {
+                out.push_str(DAY_TOKENS[i]);
+            }
+        }
+        out
+    }
+
+    fn populate_inline_browsers(ui: &MainWindow) {
+        ui.set_browser_is_remote(false);
+        ui.set_dest_browser_is_remote(true);
+
+        let default_local_root = if cfg!(windows) {
+            "C:\\".to_string()
+        } else {
+            "/".to_string()
+        };
+
+        let mut first_local_mount = default_local_root.clone();
+        if let Ok(vols) = simply_transfer_core::TransferEngine::list_local_volumes() {
+            let mut labels: Vec<slint::SharedString> = Vec::new();
+            let ui_vols: Vec<VolumeUi> = vols
+                .into_iter()
+                .map(|v| {
+                    let mp = v.mount_point.to_string_lossy().to_string();
+                    labels.push(mp.clone().into());
+                    let free_gb = v.available_bytes as f64 / 1_073_741_824.0;
+                    VolumeUi {
+                        mount_point: mp.into(),
+                        label: v.label.into(),
+                        fs_type: v.fs_type.into(),
+                        free_space_label: format!("{:.1} GB free", free_gb).into(),
+                    }
+                })
+                .collect();
+            if let Some(first) = labels.first() {
+                first_local_mount = first.to_string();
+            } else {
+                labels.push(default_local_root.clone().into());
+            }
+            ui.set_local_volume_labels(std::rc::Rc::new(slint::VecModel::from(labels)).into());
+            ui.set_local_volumes(std::rc::Rc::new(slint::VecModel::from(ui_vols)).into());
+        } else {
+            ui.set_local_volume_labels(
+                std::rc::Rc::new(slint::VecModel::from(vec![slint::SharedString::from(
+                    default_local_root.clone(),
+                )]))
+                .into(),
+            );
+        }
+        ui.set_current_local_volume(first_local_mount.clone().into());
+
+        if ui.get_remote_volume_labels().row_count() == 0 {
+            ui.set_remote_volume_labels(
+                std::rc::Rc::new(slint::VecModel::from(vec![slint::SharedString::from("/")]))
+                    .into(),
+            );
+            ui.set_current_remote_volume("/".into());
+        }
+
+        let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+        let start_source = mappings
+            .first()
+            .map(|m| m.source.to_string())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(first_local_mount);
+
+        let start_dest = mappings
+            .first()
+            .map(|m| m.destination.to_string())
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| "/".to_string());
+
+        ui.set_browser_current_path(start_source.clone().into());
+        ui.invoke_fetch_directory(start_source.into(), false, false);
+
+        ui.set_dest_browser_current_path(start_dest.clone().into());
+        ui.invoke_fetch_directory(start_dest.into(), true, true);
+    }
+
     fn reset_draft_job_for_connection(ui: &MainWindow, conn_id: uuid::Uuid) {
         let clean_draft = TransferJobUi {
             job_id: uuid::Uuid::new_v4().to_string().into(),
@@ -286,17 +386,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sync_frequency: "1hr".into(),
             start_permitted: "00:00".into(),
             finish_permitted: "23:59".into(),
+            active_days: "MTWThF".into(),
             use_snapshots: true,
         };
         ui.set_draft_job(clean_draft);
-        ui.set_transfer_type_val("Single Transfer".into());
+        ui.set_active_days_flags(
+            std::rc::Rc::new(slint::VecModel::from(parse_active_days_flags("MTWThF"))).into(),
+        );
         ui.set_selected_job_idx(-1);
+        ui.set_open_menu_job_idx(-1);
+        ui.set_editing_job_idx(-1);
         ui.set_current_mappings(
-            std::rc::Rc::new(slint::VecModel::from(vec![DirectoryMapping {
-                source: "".into(),
-                destination: "".into(),
-            }]))
-            .into(),
+            std::rc::Rc::new(slint::VecModel::from(Vec::<DirectoryMapping>::new())).into(),
         );
     }
 
@@ -305,35 +406,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         registry: &simply_transfer_core::Registry,
         selected: &TransferJobUi,
     ) {
-        ui.set_transfer_type_val(selected.job_type.clone());
         let mut ui_mappings: Vec<DirectoryMapping> = Vec::new();
         if let Ok(job_uuid) = uuid::Uuid::parse_str(selected.job_id.as_str())
             && let Some(job) = registry.jobs.get(&job_uuid)
         {
             if !job.mappings.is_empty() {
                 for (src, dst) in &job.mappings {
-                    ui_mappings.push(DirectoryMapping {
-                        source: src.to_string_lossy().to_string().into(),
-                        destination: dst.to_string_lossy().to_string().into(),
-                    });
+                    let s = src.to_string_lossy().to_string();
+                    let d = dst.to_string_lossy().to_string();
+                    if !s.trim().is_empty() || !d.trim().is_empty() {
+                        ui_mappings.push(DirectoryMapping {
+                            source: s.into(),
+                            destination: d.into(),
+                        });
+                    }
                 }
             } else if !job.source_paths.is_empty() {
                 let dst = job.destination_path.to_string_lossy().to_string();
                 for src in &job.source_paths {
-                    ui_mappings.push(DirectoryMapping {
-                        source: src.to_string_lossy().to_string().into(),
-                        destination: dst.clone().into(),
-                    });
+                    let s = src.to_string_lossy().to_string();
+                    if !s.trim().is_empty() || !dst.trim().is_empty() {
+                        ui_mappings.push(DirectoryMapping {
+                            source: s.into(),
+                            destination: dst.clone().into(),
+                        });
+                    }
                 }
             }
         }
-        if ui_mappings.is_empty() {
+        if ui_mappings.is_empty()
+            && (!selected.source.trim().is_empty() || !selected.destination.trim().is_empty())
+        {
             ui_mappings.push(DirectoryMapping {
                 source: selected.source.clone(),
                 destination: selected.destination.clone(),
             });
         }
         ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(ui_mappings)).into());
+        ui.set_active_days_flags(
+            std::rc::Rc::new(slint::VecModel::from(parse_active_days_flags(
+                selected.active_days.as_str(),
+            )))
+            .into(),
+        );
         ui.set_draft_job(selected.clone());
     }
 
@@ -380,6 +495,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .as_ref()
                     .and_then(|s| s.window_end.clone())
                     .unwrap_or_else(|| "23:59".to_string());
+                let active_days = job
+                    .schedule
+                    .as_ref()
+                    .and_then(|s| s.active_days.clone())
+                    .unwrap_or_else(|| "MTWThF".to_string());
                 TransferJobUi {
                     job_id: job.job_id.to_string().into(),
                     connection_id: job.connection_id.to_string().into(),
@@ -391,6 +511,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     sync_frequency: sync_freq.into(),
                     start_permitted: start_perm.into(),
                     finish_permitted: finish_perm.into(),
+                    active_days: active_days.into(),
                     use_snapshots: job.use_snapshots,
                 }
             })
@@ -839,7 +960,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
             if mappings.is_empty() { return; }
-            let t_type = ui.get_transfer_type_val().to_string();
+            let t_type = ui.get_draft_job().job_type.to_string();
             let all_mappings: Vec<(String, String)> = mappings.iter().map(|m| (m.source.to_string(), m.destination.to_string())).collect();
             (all_mappings, t_type, session_name)
         } else {
@@ -1442,6 +1563,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(reg) = reg_for_commit_conn.lock() {
                     sync_connection_jobs_ui(&ui, &reg, conn_id);
                 }
+                populate_inline_browsers(&ui);
             }
         }
     });
@@ -1451,47 +1573,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_weak = ui.as_weak();
     ui.on_browse_destination(move |idx| {
         if let Some(ui) = ui_weak.upgrade() {
-            ui.set_is_browser_open(true);
-            ui.set_browser_is_remote(false);
-            ui.set_dest_browser_is_remote(true);
             ui.set_browser_target_idx(idx);
-
-            if let Ok(vols) = simply_transfer_core::TransferEngine::list_local_volumes() {
-                let ui_vols: Vec<VolumeUi> = vols
-                    .into_iter()
-                    .map(|v| {
-                        let free_gb = v.available_bytes as f64 / 1_073_741_824.0;
-                        VolumeUi {
-                            mount_point: v.mount_point.to_string_lossy().to_string().into(),
-                            label: v.label.into(),
-                            fs_type: v.fs_type.into(),
-                            free_space_label: format!("{:.1} GB free", free_gb).into(),
-                        }
-                    })
-                    .collect();
-                ui.set_local_volumes(std::rc::Rc::new(slint::VecModel::from(ui_vols)).into());
-            }
-
-            let mappings: Vec<_> = ui.get_current_mappings().iter().collect();
-            let idx = idx as usize;
-
-            let mut start_source = if cfg!(windows) {
-                "C:\\".to_string()
-            } else {
-                "/".to_string()
-            };
-            if idx < mappings.len() && !mappings[idx].source.is_empty() {
-                start_source = mappings[idx].source.to_string();
-            }
-            ui.set_browser_current_path(start_source.clone().into());
-            ui.invoke_fetch_directory(start_source.into(), false, false);
-
-            let mut start_dest = "/".to_string();
-            if idx < mappings.len() && !mappings[idx].destination.is_empty() {
-                start_dest = mappings[idx].destination.to_string();
-            }
-            ui.set_dest_browser_current_path(start_dest.clone().into());
-            ui.invoke_fetch_directory(start_dest.into(), true, true);
+            populate_inline_browsers(&ui);
         }
     });
 
@@ -1535,13 +1618,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-        if is_remote && dest_user.is_empty() {
-            let _ = notify_rust::Notification::new()
-                .summary("Verification Pending")
-                .body("Pending Remote Verification: Please verify the token on the destination device, or explicitly provide a username (user@IP).")
-                .show();
-            return;
-        }
         tokio::spawn(async move {
             let mut nodes = Vec::new();
             let mut discovered_remote_volumes: Option<Vec<VolumeUi>> = None;
@@ -1549,8 +1625,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut final_path = path_str.clone();
 
             if is_remote {
-
-                if !dest_ip.is_empty() {
+                if !dest_ip.is_empty() && !dest_user.is_empty() {
                     use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
 
@@ -1564,21 +1639,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(key_id) => key_id.to_string(),
                             None => {
                                 if t_type == "Remote Transfer" {
-                                    let _ = notify_rust::Notification::new()
-                                        .summary("Connection Not Verified")
-                                        .body("Please verify the connection to exchange keys before fetching the directory.")
-                                        .show();
-                                    return;
+                                    String::new()
                                 } else {
                                     parsed.pub_key.clone()
                                 }
                             }
                         };
 
-                        if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
-                            priv_pem_str = pem;
-                        } else {
-                            tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", private_key_id);
+                        if !private_key_id.is_empty() {
+                            if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
+                                priv_pem_str = pem;
+                            } else {
+                                tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", private_key_id);
+                            }
                         }
                     } else {
                         tracing::error!("on_fetch_directory: Failed to parse token {}", token_str);
@@ -1707,6 +1780,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     if let Some(rvols) = discovered_remote_volumes {
+                        let mut rlabels: Vec<slint::SharedString> = rvols
+                            .iter()
+                            .map(|v| v.mount_point.clone())
+                            .collect();
+                        if rlabels.is_empty() {
+                            rlabels.push("/".into());
+                        }
+                        if let Some(first_r) = rlabels.first() {
+                            ui.set_current_remote_volume(first_r.clone());
+                        }
+                        ui.set_remote_volume_labels(
+                            std::rc::Rc::new(slint::VecModel::from(rlabels)).into(),
+                        );
                         ui.set_remote_volumes(std::rc::Rc::new(slint::VecModel::from(rvols)).into());
                     }
                     let model = std::rc::Rc::new(slint::VecModel::from(nodes));
@@ -1951,37 +2037,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_weak = ui.as_weak();
     ui.on_commit_browser_selection(move |source_paths, dest_paths| {
         if let Some(ui) = ui_weak.upgrade() {
-            ui.set_is_browser_open(false);
-            let idx = ui.get_browser_target_idx() as usize;
-            let mut mappings: Vec<_> = ui.get_current_mappings().iter().collect();
+            let mut mappings: Vec<DirectoryMapping> = ui
+                .get_current_mappings()
+                .iter()
+                .filter(|m| !m.source.trim().is_empty() || !m.destination.trim().is_empty())
+                .collect();
 
-            if idx < mappings.len() {
-                let dest = if dest_paths.row_count() > 0 {
-                    dest_paths.row_data(0).unwrap().to_string()
-                } else {
-                    ui.get_dest_browser_current_path().to_string()
-                };
+            let dest = if dest_paths.row_count() > 0 {
+                dest_paths.row_data(0).unwrap().to_string()
+            } else {
+                ui.get_dest_browser_current_path().to_string()
+            };
 
-                if source_paths.row_count() > 0 {
-                    mappings[idx].source = source_paths.row_data(0).unwrap();
-                    mappings[idx].destination = dest.clone().into();
-
-                    for i in 1..source_paths.row_count() {
-                        mappings.insert(
-                            idx + i,
-                            DirectoryMapping {
-                                source: source_paths.row_data(i).unwrap(),
-                                destination: dest.clone().into(),
-                            },
-                        );
+            if source_paths.row_count() > 0 {
+                for i in 0..source_paths.row_count() {
+                    if let Some(src) = source_paths.row_data(i) {
+                        mappings.push(DirectoryMapping {
+                            source: src,
+                            destination: dest.clone().into(),
+                        });
                     }
-                } else {
-                    mappings[idx].source = ui.get_browser_current_path();
-                    mappings[idx].destination = dest.clone().into();
                 }
-
-                ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+            } else {
+                let current_src = ui.get_browser_current_path();
+                if !current_src.trim().is_empty() {
+                    mappings.push(DirectoryMapping {
+                        source: current_src,
+                        destination: dest.into(),
+                    });
+                }
             }
+
+            if let Some(first) = mappings.first() {
+                let mut draft = ui.get_draft_job();
+                draft.source = first.source.clone();
+                draft.destination = first.destination.clone();
+                ui.set_draft_job(draft);
+            }
+
+            ui.set_current_mappings(std::rc::Rc::new(slint::VecModel::from(mappings)).into());
+
+            // Clear active tree selection in both panes
+            let cleared_src_nodes: Vec<FileNode> = ui
+                .get_browser_nodes()
+                .iter()
+                .map(|mut n| {
+                    n.is_selected = false;
+                    n
+                })
+                .collect();
+            let cleared_dest_nodes: Vec<FileNode> = ui
+                .get_dest_browser_nodes()
+                .iter()
+                .map(|mut n| {
+                    n.is_selected = false;
+                    n
+                })
+                .collect();
+            ui.set_browser_nodes(
+                std::rc::Rc::new(slint::VecModel::from(cleared_src_nodes)).into(),
+            );
+            ui.set_dest_browser_nodes(
+                std::rc::Rc::new(slint::VecModel::from(cleared_dest_nodes)).into(),
+            );
+            ui.set_browser_selection(
+                std::rc::Rc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())).into(),
+            );
+            ui.set_dest_browser_selection(
+                std::rc::Rc::new(slint::VecModel::from(Vec::<slint::SharedString>::new())).into(),
+            );
         }
     });
 
@@ -2113,6 +2237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_vpn_tunnel_status("Disabled".into());
                 }
             }
+            populate_inline_browsers(&ui);
         }
     });
 
@@ -2200,6 +2325,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_weak.upgrade() {
             let conn_id = active_connection_uuid(&ui);
             reset_draft_job_for_connection(&ui, conn_id);
+            populate_inline_browsers(&ui);
         }
     });
 
@@ -2214,6 +2340,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(reg) = reg_for_select_job.lock() {
                     load_job_into_draft_ui(&ui, &reg, &selected);
                 }
+                populate_inline_browsers(&ui);
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_rename_job = job_registry.clone();
+    ui.on_rename_transfer_job(move |job_idx, new_name| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let trimmed = new_name.trim().to_string();
+            if trimmed.is_empty() {
+                return;
+            }
+            let conn_id = active_connection_uuid(&ui);
+            let mut jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+            let idx = job_idx as usize;
+            if idx < jobs.len() {
+                let target_id_str = jobs[idx].job_id.to_string();
+                jobs[idx].name = trimmed.clone().into();
+                ui.set_connection_jobs(std::rc::Rc::new(slint::VecModel::from(jobs.clone())).into());
+
+                if ui.get_selected_job_idx() == job_idx {
+                    let mut draft = ui.get_draft_job();
+                    draft.name = trimmed.clone().into();
+                    ui.set_draft_job(draft);
+                }
+
+                if let Ok(job_uuid) = uuid::Uuid::parse_str(&target_id_str)
+                    && let Ok(mut reg) = reg_for_rename_job.lock()
+                    && let Some(job) = reg.jobs.get_mut(&job_uuid)
+                {
+                    job.name = trimmed;
+                    save_job_registry(&reg);
+                    sync_connection_jobs_ui(&ui, &reg, conn_id);
+                    let updated_jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                    if let Some(pos) = updated_jobs
+                        .iter()
+                        .position(|j| j.job_id.as_str() == target_id_str.as_str())
+                    {
+                        ui.set_selected_job_idx(pos as i32);
+                    }
+                }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_toggle_active_day(move |day_idx, checked| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut flags: Vec<bool> = ui.get_active_days_flags().iter().collect();
+            let idx = day_idx as usize;
+            if idx < flags.len() {
+                flags[idx] = checked;
+                let days_str = format_active_days_flags(&flags);
+                ui.set_active_days_flags(std::rc::Rc::new(slint::VecModel::from(flags)).into());
+                let mut draft = ui.get_draft_job();
+                draft.active_days = days_str.into();
+                ui.set_draft_job(draft);
             }
         }
     });
@@ -2240,6 +2424,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         reset_draft_job_for_connection(&ui, conn_id);
                     }
+                    populate_inline_browsers(&ui);
                 }
             }
         }
@@ -2306,6 +2491,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     window_start: Some(draft.start_permitted.to_string()),
                     window_end: Some(draft.finish_permitted.to_string()),
                     sync_frequency: Some(draft.sync_frequency.to_string()),
+                    active_days: Some(draft.active_days.to_string()),
                 }),
                 use_snapshots: draft.use_snapshots,
             };
@@ -2365,6 +2551,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_selected_job_idx(0);
                         load_job_into_draft_ui(&ui, &reg, first_job);
                     }
+                    populate_inline_browsers(&ui);
                 }
 
                 // Load existing schedules and filter out those tied to this connection
@@ -2961,6 +3148,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    // Auto-initialize inline dual-pane browser volumes and directory trees on startup
+    populate_inline_browsers(&ui);
 
     ui.run()?;
 
