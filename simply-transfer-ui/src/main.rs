@@ -2094,9 +2094,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     n
                 })
                 .collect();
-            ui.set_browser_nodes(
-                std::rc::Rc::new(slint::VecModel::from(cleared_src_nodes)).into(),
-            );
+            ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(cleared_src_nodes)).into());
             ui.set_dest_browser_nodes(
                 std::rc::Rc::new(slint::VecModel::from(cleared_dest_nodes)).into(),
             );
@@ -2359,7 +2357,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idx < jobs.len() {
                 let target_id_str = jobs[idx].job_id.to_string();
                 jobs[idx].name = trimmed.clone().into();
-                ui.set_connection_jobs(std::rc::Rc::new(slint::VecModel::from(jobs.clone())).into());
+                ui.set_connection_jobs(
+                    std::rc::Rc::new(slint::VecModel::from(jobs.clone())).into(),
+                );
 
                 if ui.get_selected_job_idx() == job_idx {
                     let mut draft = ui.get_draft_job();
@@ -2374,7 +2374,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     job.name = trimmed;
                     save_job_registry(&reg);
                     sync_connection_jobs_ui(&ui, &reg, conn_id);
-                    let updated_jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                    let updated_jobs: Vec<TransferJobUi> =
+                        ui.get_connection_jobs().iter().collect();
                     if let Some(pos) = updated_jobs
                         .iter()
                         .position(|j| j.job_id.as_str() == target_id_str.as_str())

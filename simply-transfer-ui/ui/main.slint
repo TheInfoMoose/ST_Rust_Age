@@ -127,13 +127,15 @@ component SecondaryTabButton inherits Rectangle {
     in property <bool> selected: false;
     callback clicked <=> touch.clicked;
 
-    width: 78px;
+    width: max(108px, lbl.preferred-width + 48px);
     height: 48px;
     background: transparent;
 
     VerticalLayout {
         padding-top: 6px;
         padding-bottom: 6px;
+        padding-left: 24px;
+        padding-right: 24px;
         spacing: 3px;
         alignment: center;
 
@@ -147,7 +149,7 @@ component SecondaryTabButton inherits Rectangle {
             }
         }
 
-        Text {
+        lbl := Text {
             text: root.label;
             font-size: 12px;
             font-weight: root.selected ? 700 : 500;
@@ -355,7 +357,7 @@ component RustButton inherits Rectangle {
 
 component RustIconButton inherits Rectangle {
     in property <image> icon;
-    in property <string> variant: "secondary";
+    in property <string> variant: "outline-accent";
     callback clicked <=> touch.clicked;
 
     width: 32px;
@@ -1016,14 +1018,14 @@ export component MainWindow inherits Window {
                             }
 
                             RustButton {
-                                variant: "secondary";
+                                variant: "outline-accent";
                                 text: "Copy";
                                 clicked => { root.copy_token(); }
                             }
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Edit Connection";
                             clicked => { root.is_editing_connection = true; }
                         }
@@ -1091,13 +1093,13 @@ export component MainWindow inherits Window {
                             }
 
                             RustButton {
-                                variant: "secondary";
+                                variant: "outline-accent";
                                 text: "Generate";
                                 clicked => { edit_key.text = root.generate_key(edit_host.text); }
                             }
 
                             RustButton {
-                                variant: "secondary";
+                                variant: "outline-accent";
                                 text: "Remove";
                                 clicked => { edit_key.text = ""; root.remove_key(); }
                             }
@@ -1129,7 +1131,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 RustButton {
-                                    variant: "secondary";
+                                    variant: "outline-accent";
                                     text: "Import .conf";
                                     clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
                                 }
@@ -1169,9 +1171,17 @@ export component MainWindow inherits Window {
                         // Secondary Bar for Add Connection (Offset horizontally with stacked primitive icons + underline)
                         Rectangle {
                             height: 50px;
+                            Rectangle {
+                                y: parent.height - 1px;
+                                width: 100%;
+                                height: 1px;
+                                background: AppTheme.border;
+                            }
+
                             HorizontalLayout {
+                                padding-top: 2px;
                                 padding-left: 24px;
-                                spacing: 16px;
+                                spacing: 0px;
                                 alignment: start;
 
                                 SecondaryTabButton {
@@ -1187,13 +1197,6 @@ export component MainWindow inherits Window {
                                     selected: root.add_connection_tab == 1;
                                     clicked => { root.add_connection_tab = 1; }
                                 }
-                            }
-
-                            Rectangle {
-                                y: parent.height - 1px;
-                                width: 100%;
-                                height: 1px;
-                                background: AppTheme.border;
                             }
                         }
 
@@ -1250,7 +1253,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     RustButton {
-                                        variant: "secondary";
+                                        variant: "outline-accent";
                                         text: "Generate";
                                         clicked => { new_key.text = root.generate_key(new_host.text); }
                                     }
@@ -1282,7 +1285,7 @@ export component MainWindow inherits Window {
                                         }
 
                                         RustButton {
-                                            variant: "secondary";
+                                            variant: "outline-accent";
                                             text: "Import .conf";
                                             clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
                                         }
@@ -1352,7 +1355,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     RustButton {
-                                        variant: "secondary";
+                                        variant: "outline-accent";
                                         text: "Verify";
                                         clicked => {
                                             root.remote_verification_status = "Verifying...";
@@ -1383,7 +1386,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     RustButton {
-                                        variant: root.is_remote_verified ? "primary" : "secondary";
+                                        variant: "primary";
                                         text: "Commit";
                                         clicked => {
                                             if root.is_remote_verified {
@@ -1422,11 +1425,19 @@ export component MainWindow inherits Window {
                 height: 50px;
                 background: AppTheme.window_bg;
 
+                Rectangle {
+                    y: parent.height - 1px;
+                    width: 100%;
+                    height: 1px;
+                    background: AppTheme.border;
+                }
+
                 HorizontalLayout {
                     // Deliberate horizontal offset (132px) so Setup & Active sit staggered to the right of the Top Bar's Dashboard (16..58px) & Transfer (70..112px) icons
+                    padding-top: 2px;
                     padding-left: 132px;
                     padding-right: 16px;
-                    spacing: 20px;
+                    spacing: 0px;
                     alignment: start;
 
                     SecondaryTabButton {
@@ -1442,13 +1453,6 @@ export component MainWindow inherits Window {
                         selected: root.active_transfer_tab == 1;
                         clicked => { root.active_transfer_tab = 1; }
                     }
-                }
-
-                Rectangle {
-                    y: parent.height - 1px;
-                    width: 100%;
-                    height: 1px;
-                    background: AppTheme.border;
                 }
             }
 
@@ -1468,13 +1472,16 @@ export component MainWindow inherits Window {
                             padding-right: 0px;
                             HorizontalBox {
                                 padding-left: 16px;
+                                padding-right: 16px;
                                 padding-bottom: 8px;
                                 alignment: center;
                                 Text {
-                                    text: "Connection Tasks";
+                                    width: 100%;
+                                    text: (root.connections.length > 0 && root.selected_connection_idx >= 0 && root.selected_connection_idx < root.connections.length) ? (root.connections[root.selected_connection_idx].name + " Tasks") : "Connection Tasks";
                                     font-weight: 800;
                                     font-size: 16px;
                                     horizontal-alignment: center;
+                                    wrap: word-wrap;
                                 }
                             }
 
@@ -1526,7 +1533,7 @@ export component MainWindow inherits Window {
                                                 }
 
                                                 RustButton {
-                                                    variant: "secondary";
+                                                    variant: "outline-accent";
                                                     text: "OK";
                                                     min-width: 36px;
                                                     clicked => {
@@ -1829,7 +1836,6 @@ export component MainWindow inherits Window {
 
                                     CustomComboBox {
                                         width: 95px;
-                                        solid-accent: true;
                                         model: root.local_volume_labels;
                                         current-value: root.current_local_volume;
                                         selected(vol) => {
@@ -1869,7 +1875,6 @@ export component MainWindow inherits Window {
 
                                     CustomComboBox {
                                         width: 95px;
-                                        solid-accent: true;
                                         model: root.remote_volume_labels;
                                         current-value: root.current_remote_volume;
                                         selected(rvol) => {
@@ -2390,7 +2395,7 @@ export component MainWindow inherits Window {
                                 HorizontalBox {
                                     spacing: 10px;
                                     RustButton {
-                                        variant: "secondary";
+                                        variant: "outline-accent";
                                         text: root.is_transfer_paused ? "Resume Transfer" : "Pause Transfer";
                                         clicked => {
                                             root.is_transfer_paused = !root.is_transfer_paused;
@@ -2399,7 +2404,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     RustButton {
-                                        variant: "secondary";
+                                        variant: "outline-accent";
                                         text: "Cancel Transfer";
                                         clicked => { root.cancel_transfer(); }
                                     }
@@ -2494,7 +2499,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Open Connection Logs";
                             clicked => { root.open_log_file("connection.log"); }
                         }
@@ -2515,7 +2520,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Open Transfer Logs";
                             clicked => { root.open_log_file("transfers.log"); }
                         }
@@ -2536,7 +2541,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Open Sync Logs";
                             clicked => { root.open_log_file("sync.log"); }
                         }
@@ -2557,7 +2562,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Open Schedule Logs";
                             clicked => { root.open_log_file("schedule.log"); }
                         }
@@ -2695,7 +2700,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "primary";
+                            variant: "outline-accent";
                             text: "Purge Orphaned Keys";
                             clicked => { root.purge_orphaned_keys(); }
                         }
@@ -2766,7 +2771,7 @@ export component MainWindow inherits Window {
                         }
 
                         RustButton {
-                            variant: "secondary";
+                            variant: "outline-accent";
                             text: "Request OS Permissions";
                         }
 
@@ -2799,12 +2804,12 @@ export component MainWindow inherits Window {
                         HorizontalBox {
                             spacing: 10px;
                             RustButton {
-                                variant: "secondary";
+                                variant: "outline-accent";
                                 text: "Import Profile (.json)";
                             }
 
                             RustButton {
-                                variant: "secondary";
+                                variant: "outline-accent";
                                 text: "Export Profile (.json)";
                             }
                         }
