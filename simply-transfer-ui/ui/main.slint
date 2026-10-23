@@ -4,6 +4,7 @@ import {
     ListView,
     LineEdit,
     Palette,
+    ScrollView,
 } from "std-widgets.slint";
 
 export struct ScheduleData {
@@ -88,15 +89,108 @@ export global AppTheme {
     out property <color> text_muted: force_light ? #666666 : #9E9E9E;
 }
 
+export global TooltipState {
+    in-out property <string> text: "";
+    in-out property <bool> visible: false;
+    in-out property <length> anchor_x: 0px;
+    in-out property <length> anchor_y: 0px;
+    in-out property <length> anchor_w: 0px;
+    in-out property <length> anchor_h: 0px;
+}
+
 component StyledBox inherits Rectangle {
     border-width: 1px;
     border-color: AppTheme.border;
     border-radius: 6px;
 }
 
+component CollapsibleSection inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle: "";
+    in-out property <bool> expanded: false;
+
+    border-width: 1px;
+    border-color: root.expanded ? AppTheme.accent : AppTheme.border;
+    border-radius: 6px;
+    background: AppTheme.surface;
+
+    VerticalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        // Clickable Header Row
+        Rectangle {
+            height: 40px;
+            border-radius: 6px;
+            background: header_ta.has-hover ? AppTheme.list_hover : AppTheme.surface_elevated;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+
+                Image {
+                    width: 14px;
+                    height: 14px;
+                    y: (parent.height - self.height) / 2;
+                    source: root.expanded ? @image-url("../../assets/icons/chevron_down.svg") : @image-url("../../assets/icons/chevron_right.svg");
+                    colorize: AppTheme.accent;
+                }
+
+                Text {
+                    text: root.title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+
+                if root.subtitle != "": Text {
+                    text: "— " + root.subtitle;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    color: AppTheme.text_muted;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                if root.subtitle == "": Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+
+            header_ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.expanded = !root.expanded;
+                }
+            }
+        }
+
+        if root.expanded: Rectangle {
+            height: 1px;
+            background: AppTheme.border;
+        }
+
+        Rectangle {
+            visible: root.expanded;
+            height: root.expanded ? body_layout.preferred-height : 0px;
+            clip: true;
+
+            body_layout := VerticalLayout {
+                width: 100%;
+                padding: 14px;
+                spacing: 8px;
+                @children
+            }
+        }
+    }
+}
+
 component TopNavIconButton inherits Rectangle {
     in property <image> icon;
     in property <bool> selected: false;
+    in property <string> tooltip: "";
     callback clicked <=> touch.clicked;
 
     width: 42px;
@@ -116,8 +210,34 @@ component TopNavIconButton inherits Rectangle {
         colorize: root.selected ? AppTheme.accent : (touch.has-hover ? Palette.foreground : AppTheme.text_muted);
     }
 
+    // Fast 220ms tooltip delay for icon-only buttons
+    Timer {
+        interval: 220ms;
+        running: touch.has-hover && root.tooltip != "";
+        triggered => {
+            if (touch.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor_x = root.absolute-position.x;
+                TooltipState.anchor_y = root.absolute-position.y;
+                TooltipState.anchor_w = root.width;
+                TooltipState.anchor_h = root.height;
+                TooltipState.visible = true;
+            }
+        }
+    }
+
     touch := TouchArea {
         mouse-cursor: pointer;
+        changed has-hover => {
+            if (!self.has-hover && TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
+        clicked => {
+            if (TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
     }
 }
 
@@ -125,6 +245,7 @@ component SecondaryTabButton inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> selected: false;
+    in property <string> tooltip: "";
     callback clicked <=> touch.clicked;
 
     width: max(108px, lbl.preferred-width + 48px);
@@ -169,8 +290,34 @@ component SecondaryTabButton inherits Rectangle {
         animate background { duration: 150ms; }
     }
 
+    // Slightly longer 650ms tooltip delay for text-labeled buttons
+    Timer {
+        interval: 650ms;
+        running: touch.has-hover && root.tooltip != "";
+        triggered => {
+            if (touch.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor_x = root.absolute-position.x;
+                TooltipState.anchor_y = root.absolute-position.y;
+                TooltipState.anchor_w = root.width;
+                TooltipState.anchor_h = root.height;
+                TooltipState.visible = true;
+            }
+        }
+    }
+
     touch := TouchArea {
         mouse-cursor: pointer;
+        changed has-hover => {
+            if (!self.has-hover && TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
+        clicked => {
+            if (TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
     }
 }
 
@@ -329,6 +476,7 @@ component RustRadioButton inherits Rectangle {
 component RustButton inherits Rectangle {
     in property <string> text;
     in property <string> variant: "primary";
+    in property <string> tooltip: "";
     callback clicked <=> touch.clicked;
 
     background: root.variant == "secondary" ? (touch.has-hover ? AppTheme.list_hover : AppTheme.surface_elevated) :
@@ -350,14 +498,41 @@ component RustButton inherits Rectangle {
         font-weight: 500;
     }
 
+    // Slightly longer 650ms tooltip delay for buttons with text
+    Timer {
+        interval: 650ms;
+        running: touch.has-hover && root.tooltip != "";
+        triggered => {
+            if (touch.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor_x = root.absolute-position.x;
+                TooltipState.anchor_y = root.absolute-position.y;
+                TooltipState.anchor_w = root.width;
+                TooltipState.anchor_h = root.height;
+                TooltipState.visible = true;
+            }
+        }
+    }
+
     touch := TouchArea {
         mouse-cursor: pointer;
+        changed has-hover => {
+            if (!self.has-hover && TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
+        clicked => {
+            if (TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
     }
 }
 
 component RustIconButton inherits Rectangle {
     in property <image> icon;
     in property <string> variant: "outline-accent";
+    in property <string> tooltip: "";
     callback clicked <=> touch.clicked;
 
     width: 32px;
@@ -377,8 +552,34 @@ component RustIconButton inherits Rectangle {
         colorize: touch.has-hover ? AppTheme.accent : Palette.foreground;
     }
 
+    // Fast 220ms tooltip delay for icon-only buttons
+    Timer {
+        interval: 220ms;
+        running: touch.has-hover && root.tooltip != "";
+        triggered => {
+            if (touch.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor_x = root.absolute-position.x;
+                TooltipState.anchor_y = root.absolute-position.y;
+                TooltipState.anchor_w = root.width;
+                TooltipState.anchor_h = root.height;
+                TooltipState.visible = true;
+            }
+        }
+    }
+
     touch := TouchArea {
         mouse-cursor: pointer;
+        changed has-hover => {
+            if (!self.has-hover && TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
+        clicked => {
+            if (TooltipState.text == root.tooltip) {
+                TooltipState.visible = false;
+            }
+        }
     }
 }
 
@@ -605,7 +806,7 @@ component MetricsGrid inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "Simply Transfer v2";
+    title: "Simply Transfer";
     min-width: 1000px;
     min-height: 750px;
     background: AppTheme.window_bg;
@@ -617,11 +818,15 @@ export component MainWindow inherits Window {
     callback delete_connection(int);
     callback verify_remote_token(string);
     callback copy_token();
+    callback copy_text(string);
+    callback open_url(string);
     callback open_log_file(string);
     callback generate_key(string) -> string;
     callback remove_key();
     callback pause_transfer();
     callback cancel_transfer();
+    callback refresh_browsers();
+    callback request_os_permissions();
 
     callback cancel_key_generation(string);
     callback purge_orphaned_keys() -> int;
@@ -718,8 +923,14 @@ export component MainWindow inherits Window {
     in-out property <int> selected_job_idx: -1;
     in-out property <int> open_menu_job_idx: -1;
     in-out property <int> editing_job_idx: -1;
+    in-out property <bool> is_naming_new_job: false;
+    in-out property <string> new_job_name_draft: "";
+    in-out property <bool> is_job_setup_unlocked: false;
+    in-out property <string> purge_keys_status: "";
+    in-out property <string> os_permissions_status: "";
     callback connection_selected(int);
     callback new_transfer_clicked();
+    callback create_named_transfer_job(string);
     callback select_transfer_job(int);
     callback delete_transfer_job(int);
     callback rename_transfer_job(int, string);
@@ -785,13 +996,18 @@ export component MainWindow inherits Window {
                 TopNavIconButton {
                     icon: @image-url("../../assets/icons/monitor.svg");
                     selected: root.active_tab == 0;
+                    tooltip: "Connections Dashboard";
                     clicked => { root.active_tab = 0; }
                 }
 
                 TopNavIconButton {
                     icon: @image-url("../../assets/icons/transfer_arrows.svg");
                     selected: root.active_tab == 1;
-                    clicked => { root.active_tab = 1; }
+                    tooltip: "File Transfer Setup & Active Queue";
+                    clicked => {
+                        root.active_tab = 1;
+                        root.refresh_browsers();
+                    }
                 }
 
                 Rectangle {
@@ -802,6 +1018,7 @@ export component MainWindow inherits Window {
                 TopNavIconButton {
                     icon: @image-url("../../assets/icons/settings_gear.svg");
                     selected: root.active_tab == 2;
+                    tooltip: "Application Settings & Help";
                     clicked => { root.active_tab = 2; }
                 }
             }
@@ -893,6 +1110,7 @@ export component MainWindow inherits Window {
                         padding-right: 16px;
                         RustButton {
                             text: "+ New Connection";
+                            tooltip: "Create a new P2P host connection or verify a remote peer token.";
                             horizontal-stretch: 1;
                             clicked => {
                                 root.is_adding_connection = true;
@@ -915,6 +1133,7 @@ export component MainWindow inherits Window {
                         alignment: end;
                         RustIconButton {
                             icon: @image-url("../../assets/icons/minus.svg");
+                            tooltip: "Delete selected connection";
                             clicked => {
                                 root.delete_connection(root.selected_connection_idx);
                             }
@@ -1020,6 +1239,7 @@ export component MainWindow inherits Window {
                             RustButton {
                                 variant: "outline-accent";
                                 text: "Copy";
+                                tooltip: "Copy the destination security token to the clipboard to share with the remote peer.";
                                 clicked => { root.copy_token(); }
                             }
                         }
@@ -1027,6 +1247,7 @@ export component MainWindow inherits Window {
                         RustButton {
                             variant: "outline-accent";
                             text: "Edit Connection";
+                            tooltip: "Modify the name, host address, security key, or WireGuard VPN settings for this connection.";
                             clicked => { root.is_editing_connection = true; }
                         }
                     }
@@ -1036,6 +1257,7 @@ export component MainWindow inherits Window {
                             alignment: end;
                             RustIconButton {
                                 icon: @image-url("../../assets/icons/minus.svg");
+                                tooltip: "Delete selected connection";
                                 clicked => {
                                     root.delete_connection(root.selected_connection_idx);
                                     root.is_editing_connection = false;
@@ -1095,12 +1317,14 @@ export component MainWindow inherits Window {
                             RustButton {
                                 variant: "outline-accent";
                                 text: "Generate";
+                                tooltip: "Generate a new Ed25519 keypair and one-time verification token for this connection.";
                                 clicked => { edit_key.text = root.generate_key(edit_host.text); }
                             }
 
                             RustButton {
                                 variant: "outline-accent";
                                 text: "Remove";
+                                tooltip: "Clear the current security key and remove its credentials from this connection.";
                                 clicked => { edit_key.text = ""; root.remove_key(); }
                             }
                         }
@@ -1133,6 +1357,7 @@ export component MainWindow inherits Window {
                                 RustButton {
                                     variant: "outline-accent";
                                     text: "Import .conf";
+                                    tooltip: "Parse and securely store the specified WireGuard configuration file in the vault.";
                                     clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
                                 }
                             }
@@ -1154,12 +1379,14 @@ export component MainWindow inherits Window {
                             RustButton {
                                 variant: "secondary";
                                 text: "Cancel";
+                                tooltip: "Discard changes and return to the connection details view.";
                                 clicked => { root.is_editing_connection = false; }
                             }
 
                             RustButton {
                                 variant: "primary";
                                 text: "Commit";
+                                tooltip: "Save the updated connection configuration.";
                                 clicked => {
                                     root.is_editing_connection = false;
                                 }
@@ -1187,6 +1414,7 @@ export component MainWindow inherits Window {
                                 SecondaryTabButton {
                                     icon: @image-url("../../assets/icons/new_conn.svg");
                                     label: "New";
+                                    tooltip: "Create a new P2P connection and generate a security token for a remote peer.";
                                     selected: root.add_connection_tab == 0;
                                     clicked => { root.add_connection_tab = 0; }
                                 }
@@ -1194,6 +1422,7 @@ export component MainWindow inherits Window {
                                 SecondaryTabButton {
                                     icon: @image-url("../../assets/icons/remote_conn.svg");
                                     label: "Remote";
+                                    tooltip: "Connect to a peer by pasting and verifying the security token they generated.";
                                     selected: root.add_connection_tab == 1;
                                     clicked => { root.add_connection_tab = 1; }
                                 }
@@ -1255,6 +1484,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "outline-accent";
                                         text: "Generate";
+                                        tooltip: "Generate an Ed25519 keypair and listen for the remote peer to verify your token.";
                                         clicked => { new_key.text = root.generate_key(new_host.text); }
                                     }
                                 }
@@ -1287,6 +1517,7 @@ export component MainWindow inherits Window {
                                         RustButton {
                                             variant: "outline-accent";
                                             text: "Import .conf";
+                                            tooltip: "Parse and securely store the specified WireGuard configuration file in the vault.";
                                             clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
                                         }
                                     }
@@ -1307,12 +1538,14 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "secondary";
                                         text: "Cancel";
+                                        tooltip: "Abort creating this connection and discard any unverified key.";
                                         clicked => { root.is_adding_connection = false; root.cancel_key_generation(new_key.text); }
                                     }
 
                                     RustButton {
                                         variant: "primary";
                                         text: "Commit";
+                                        tooltip: "Save this connection profile to Active Connections.";
                                         clicked => {
                                             root.is_adding_connection = false;
                                             root.commit_connection({
@@ -1357,6 +1590,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "outline-accent";
                                         text: "Verify";
+                                        tooltip: "Authenticate and authorize the pasted remote peer token over P2P handshake.";
                                         clicked => {
                                             root.remote_verification_status = "Verifying...";
                                             root.verify_remote_token(remote_token.text);
@@ -1378,6 +1612,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "secondary";
                                         text: "Cancel";
+                                        tooltip: "Cancel remote token verification and return to Connection Details.";
                                         clicked => {
                                             root.is_adding_connection = false;
                                             root.is_remote_verified = false;
@@ -1388,6 +1623,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "primary";
                                         text: "Commit";
+                                        tooltip: "Save the verified remote connection to Active Connections.";
                                         clicked => {
                                             if root.is_remote_verified {
                                                 root.is_adding_connection = false;
@@ -1443,6 +1679,7 @@ export component MainWindow inherits Window {
                     SecondaryTabButton {
                         icon: @image-url("../../assets/icons/setup_sliders.svg");
                         label: "Setup";
+                        tooltip: "Create transfer tasks, browse local and remote directories, and stage path mappings.";
                         selected: root.active_transfer_tab == 0;
                         clicked => { root.active_transfer_tab = 0; }
                     }
@@ -1450,6 +1687,7 @@ export component MainWindow inherits Window {
                     SecondaryTabButton {
                         icon: @image-url("../../assets/icons/active_pulse.svg");
                         label: "Active";
+                        tooltip: "Monitor live transfer queues, throughput metrics, and SHA-256 integrity validation.";
                         selected: root.active_transfer_tab == 1;
                         clicked => { root.active_transfer_tab = 1; }
                     }
@@ -1485,6 +1723,46 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            if root.is_naming_new_job: Rectangle {
+                                height: 42px;
+                                background: AppTheme.surface_elevated;
+                                border-width: 1px;
+                                border-color: AppTheme.accent;
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 10px;
+                                    padding-top: 4px;
+                                    padding-bottom: 4px;
+                                    spacing: 6px;
+                                    new_job_input := LineEdit {
+                                        horizontal-stretch: 1;
+                                        text <=> root.new_job_name_draft;
+                                        placeholder-text: "Default Transfer Task";
+                                        init => {
+                                            self.focus();
+                                        }
+                                        accepted(val) => {
+                                            root.is_naming_new_job = false;
+                                            root.is_job_setup_unlocked = true;
+                                            root.create_named_transfer_job(val);
+                                        }
+                                    }
+
+                                    RustButton {
+                                        variant: "primary";
+                                        text: "OK";
+                                        tooltip: "Confirm the transfer task name (leave blank to use default naming) and unlock setup.";
+                                        min-width: 42px;
+                                        clicked => {
+                                            let submitted = root.new_job_name_draft;
+                                            root.is_naming_new_job = false;
+                                            root.is_job_setup_unlocked = true;
+                                            root.create_named_transfer_job(submitted);
+                                        }
+                                    }
+                                }
+                            }
+
                             ListView {
                                 for job[j_idx] in root.connection_jobs: Rectangle {
                                     height: 36px;
@@ -1503,6 +1781,8 @@ export component MainWindow inherits Window {
                                                 mouse-cursor: pointer;
                                                 clicked => {
                                                     root.open_menu_job_idx = -1;
+                                                    root.is_naming_new_job = false;
+                                                    root.is_job_setup_unlocked = true;
                                                     root.selected_job_idx = j_idx;
                                                     root.select_transfer_job(j_idx);
                                                 }
@@ -1535,6 +1815,7 @@ export component MainWindow inherits Window {
                                                 RustButton {
                                                     variant: "outline-accent";
                                                     text: "OK";
+                                                    tooltip: "Save the updated task name.";
                                                     min-width: 36px;
                                                     clicked => {
                                                         root.editing_job_idx = -1;
@@ -1545,7 +1826,7 @@ export component MainWindow inherits Window {
                                         }
 
                                         // 24x24 Contextual Menu Icon Button (Primitive Vertical Dots SVG)
-                                        Rectangle {
+                                        menu_btn := Rectangle {
                                             width: 24px;
                                             height: 24px;
                                             y: (parent.height - self.height) / 2;
@@ -1561,9 +1842,30 @@ export component MainWindow inherits Window {
                                                 colorize: AppTheme.accent;
                                             }
 
+                                            Timer {
+                                                interval: 220ms;
+                                                running: menu_ta.has-hover;
+                                                triggered => {
+                                                    if (menu_ta.has-hover) {
+                                                        TooltipState.text = "Task Options (Rename / Delete)";
+                                                        TooltipState.anchor_x = menu_btn.absolute-position.x;
+                                                        TooltipState.anchor_y = menu_btn.absolute-position.y;
+                                                        TooltipState.anchor_w = menu_btn.width;
+                                                        TooltipState.anchor_h = menu_btn.height;
+                                                        TooltipState.visible = true;
+                                                    }
+                                                }
+                                            }
+
                                             menu_ta := TouchArea {
                                                 mouse-cursor: pointer;
+                                                changed has-hover => {
+                                                    if (!self.has-hover && TooltipState.text == "Task Options (Rename / Delete)") {
+                                                        TooltipState.visible = false;
+                                                    }
+                                                }
                                                 clicked => {
+                                                    TooltipState.visible = false;
                                                     root.open_menu_job_idx = (root.open_menu_job_idx == j_idx) ? -1 : j_idx;
                                                 }
                                             }
@@ -1582,10 +1884,15 @@ export component MainWindow inherits Window {
                                 RustButton {
                                     variant: "primary";
                                     text: "+ New Transfer Task";
+                                    tooltip: "Create and name a new transfer task to unlock the directory setup controls.";
                                     horizontal-stretch: 1;
                                     clicked => {
                                         root.open_menu_job_idx = -1;
                                         root.editing_job_idx = -1;
+                                        root.selected_job_idx = -1;
+                                        root.new_job_name_draft = "";
+                                        root.is_naming_new_job = true;
+                                        root.is_job_setup_unlocked = false;
                                         root.new_transfer_clicked();
                                     }
                                 }
@@ -1619,6 +1926,8 @@ export component MainWindow inherits Window {
                                         clicked => {
                                             let target_idx = root.open_menu_job_idx;
                                             root.open_menu_job_idx = -1;
+                                            root.is_naming_new_job = false;
+                                            root.is_job_setup_unlocked = true;
                                             root.selected_job_idx = target_idx;
                                             root.select_transfer_job(target_idx);
                                             root.editing_job_idx = target_idx;
@@ -1658,485 +1967,511 @@ export component MainWindow inherits Window {
                     }
 
                     // Right Column: 4 Vertical Zones (Zone A, Zone B, Zone C, Zone D)
-                    VerticalBox {
+                    Rectangle {
                         horizontal-stretch: 1;
-                        padding: 4px;
-                        spacing: 10px;
+                        vertical-stretch: 1;
 
-                        // --- Zone A: Header & Transfer Type Configuration ---
                         VerticalBox {
-                            padding: 0px;
-                            spacing: 8px;
+                            width: 100%;
+                            height: 100%;
+                            padding: 4px;
+                            spacing: 10px;
+                            opacity: root.is_job_setup_unlocked ? 1.0 : 0.38;
+                            animate opacity { duration: 180ms; }
 
-                            HorizontalBox {
+                            // --- Zone A: Header & Transfer Type Configuration ---
+                            VerticalBox {
                                 padding: 0px;
-                                spacing: 12px;
-                                alignment: start;
+                                spacing: 8px;
 
-                                Text {
-                                    text: "Transfer Type:";
-                                    vertical-alignment: center;
-                                }
-
-                                CustomComboBox {
-                                    width: 200px;
-                                    model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
-                                    current-value: root.draft_job.job_type;
-                                    selected(val) => {
-                                        root.draft_job.job_type = val;
-                                    }
-                                }
-
-                                if root.draft_job.job_type == "Continuous Sync": HorizontalBox {
-                                    padding: 0px;
-                                    spacing: 8px;
-                                    Text {
-                                        text: "Sync Frequency:";
-                                        vertical-alignment: center;
-                                    }
-
-                                    CustomComboBox {
-                                        width: 110px;
-                                        model: [
-                                            "1min",
-                                            "5min",
-                                            "15min",
-                                            "30min",
-                                            "1hr",
-                                            "2hr",
-                                            "4hr",
-                                            "6hr",
-                                            "8hr",
-                                            "12hr",
-                                            "24hr",
-                                            "48hr",
-                                            "72hr"
-                                        ];
-                                        current-value: root.draft_job.sync_frequency;
-                                        selected(val) => { root.draft_job.sync_frequency = val; }
-                                    }
-                                }
-
-                                Rectangle {
-                                    horizontal-stretch: 1;
-                                }
-
-                                RustCheckBox {
-                                    text: "Use Snapshots";
-                                    checked <=> root.draft_job.use_snapshots;
-                                }
-                            }
-
-                            if root.draft_job.job_type == "Scheduled Transfer": VerticalBox {
-                                padding: 0px;
-                                spacing: 6px;
                                 HorizontalBox {
                                     padding: 0px;
                                     spacing: 12px;
                                     alignment: start;
+
                                     Text {
-                                        text: "Active Days:";
-                                        vertical-alignment: center;
-                                    }
-
-                                    RustCheckBox {
-                                        text: "M";
-                                        checked: root.active_days_flags[0];
-                                        toggled(v) => { root.toggle_active_day(0, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "T";
-                                        checked: root.active_days_flags[1];
-                                        toggled(v) => { root.toggle_active_day(1, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "W";
-                                        checked: root.active_days_flags[2];
-                                        toggled(v) => { root.toggle_active_day(2, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "Th";
-                                        checked: root.active_days_flags[3];
-                                        toggled(v) => { root.toggle_active_day(3, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "F";
-                                        checked: root.active_days_flags[4];
-                                        toggled(v) => { root.toggle_active_day(4, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "Sa";
-                                        checked: root.active_days_flags[5];
-                                        toggled(v) => { root.toggle_active_day(5, v); }
-                                    }
-
-                                    RustCheckBox {
-                                        text: "Su";
-                                        checked: root.active_days_flags[6];
-                                        toggled(v) => { root.toggle_active_day(6, v); }
-                                    }
-                                }
-
-                                HorizontalBox {
-                                    padding: 0px;
-                                    spacing: 10px;
-                                    alignment: start;
-                                    Text {
-                                        text: "Start Permitted:";
+                                        text: "Transfer Type:";
                                         vertical-alignment: center;
                                     }
 
                                     CustomComboBox {
-                                        width: 110px;
-                                        model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"];
-                                        current-value: root.draft_job.start_permitted;
-                                        selected(val) => { root.draft_job.start_permitted = val; }
+                                        width: 200px;
+                                        model: ["Single Transfer", "Continuous Sync", "Scheduled Transfer"];
+                                        current-value: root.draft_job.job_type;
+                                        selected(val) => {
+                                            root.draft_job.job_type = val;
+                                        }
+                                    }
+
+                                    if root.draft_job.job_type == "Continuous Sync": HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 8px;
+                                        Text {
+                                            text: "Sync Frequency:";
+                                            vertical-alignment: center;
+                                        }
+
+                                        CustomComboBox {
+                                            width: 110px;
+                                            model: [
+                                                "1min",
+                                                "5min",
+                                                "15min",
+                                                "30min",
+                                                "1hr",
+                                                "2hr",
+                                                "4hr",
+                                                "6hr",
+                                                "8hr",
+                                                "12hr",
+                                                "24hr",
+                                                "48hr",
+                                                "72hr"
+                                            ];
+                                            current-value: root.draft_job.sync_frequency;
+                                            selected(val) => { root.draft_job.sync_frequency = val; }
+                                        }
                                     }
 
                                     Rectangle {
-                                        width: 12px;
-                                    }
-
-                                    Text {
-                                        text: "Finish Permitted:";
-                                        vertical-alignment: center;
-                                    }
-
-                                    CustomComboBox {
-                                        width: 110px;
-                                        model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"];
-                                        current-value: root.draft_job.finish_permitted;
-                                        selected(val) => { root.draft_job.finish_permitted = val; }
-                                    }
-                                }
-                            }
-                        }
-
-                        // --- Zone B: Inline Dual-Pane Directory Browser ---
-                        VerticalBox {
-                            padding: 0px;
-                            spacing: 8px;
-                            vertical-stretch: 1;
-
-                            // Volume Selector Bar
-                            HorizontalBox {
-                                padding: 0px;
-                                spacing: 0px;
-
-                                // Source Volume Bar
-                                HorizontalBox {
-                                    padding: 0px;
-                                    spacing: 8px;
-                                    horizontal-stretch: 1;
-
-                                    CustomComboBox {
-                                        width: 95px;
-                                        model: root.local_volume_labels;
-                                        current-value: root.current_local_volume;
-                                        selected(vol) => {
-                                            root.current_local_volume = vol;
-                                            root.browser_current_path = vol;
-                                            root.fetch_directory(vol, root.browser_is_remote, false);
-                                        }
-                                    }
-
-                                    Text {
-                                        text: root.browser_current_path;
-                                        color: AppTheme.text_muted;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
                                         horizontal-stretch: 1;
-                                        overflow: elide;
                                     }
 
-                                    RustIconButton {
-                                        icon: @image-url("../../assets/icons/arrow_up.svg");
-                                        clicked => {
-                                            root.fetch_directory(root.browser_current_path + "/..", root.browser_is_remote, false);
-                                        }
+                                    RustCheckBox {
+                                        text: "Use Snapshots";
+                                        checked <=> root.draft_job.use_snapshots;
                                     }
                                 }
 
-                                // Center spacer matching arrow width
-                                Rectangle {
-                                    width: 40px;
-                                }
-
-                                // Destination Volume Bar
-                                HorizontalBox {
+                                if root.draft_job.job_type == "Scheduled Transfer": VerticalBox {
                                     padding: 0px;
-                                    spacing: 8px;
-                                    horizontal-stretch: 1;
+                                    spacing: 6px;
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 12px;
+                                        alignment: start;
+                                        Text {
+                                            text: "Active Days:";
+                                            vertical-alignment: center;
+                                        }
 
-                                    CustomComboBox {
-                                        width: 95px;
-                                        model: root.remote_volume_labels;
-                                        current-value: root.current_remote_volume;
-                                        selected(rvol) => {
-                                            root.current_remote_volume = rvol;
-                                            root.dest_browser_current_path = rvol;
-                                            root.fetch_directory(rvol, root.dest_browser_is_remote, true);
+                                        RustCheckBox {
+                                            text: "M";
+                                            checked: root.active_days_flags[0];
+                                            toggled(v) => { root.toggle_active_day(0, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "T";
+                                            checked: root.active_days_flags[1];
+                                            toggled(v) => { root.toggle_active_day(1, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "W";
+                                            checked: root.active_days_flags[2];
+                                            toggled(v) => { root.toggle_active_day(2, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "Th";
+                                            checked: root.active_days_flags[3];
+                                            toggled(v) => { root.toggle_active_day(3, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "F";
+                                            checked: root.active_days_flags[4];
+                                            toggled(v) => { root.toggle_active_day(4, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "Sa";
+                                            checked: root.active_days_flags[5];
+                                            toggled(v) => { root.toggle_active_day(5, v); }
+                                        }
+
+                                        RustCheckBox {
+                                            text: "Su";
+                                            checked: root.active_days_flags[6];
+                                            toggled(v) => { root.toggle_active_day(6, v); }
                                         }
                                     }
 
-                                    Text {
-                                        text: root.dest_browser_current_path;
-                                        color: AppTheme.text_muted;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                        overflow: elide;
-                                    }
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 10px;
+                                        alignment: start;
+                                        Text {
+                                            text: "Start Permitted:";
+                                            vertical-alignment: center;
+                                        }
 
-                                    RustIconButton {
-                                        icon: @image-url("../../assets/icons/arrow_up.svg");
-                                        clicked => {
-                                            root.fetch_directory(root.dest_browser_current_path + "/..", root.dest_browser_is_remote, true);
+                                        CustomComboBox {
+                                            width: 110px;
+                                            model: ["00:00", "01:00", "02:00", "08:00", "12:00", "18:00", "22:00"];
+                                            current-value: root.draft_job.start_permitted;
+                                            selected(val) => { root.draft_job.start_permitted = val; }
+                                        }
+
+                                        Rectangle {
+                                            width: 12px;
+                                        }
+
+                                        Text {
+                                            text: "Finish Permitted:";
+                                            vertical-alignment: center;
+                                        }
+
+                                        CustomComboBox {
+                                            width: 110px;
+                                            model: ["00:00", "06:00", "08:00", "12:00", "18:00", "23:59"];
+                                            current-value: root.draft_job.finish_permitted;
+                                            selected(val) => { root.draft_job.finish_permitted = val; }
                                         }
                                     }
                                 }
                             }
 
-                            // Dual Tree-View Boxes
-                            HorizontalBox {
+                            // --- Zone B: Inline Dual-Pane Directory Browser ---
+                            VerticalBox {
                                 padding: 0px;
-                                spacing: 0px;
+                                spacing: 8px;
                                 vertical-stretch: 1;
 
-                                // Left Box (Source)
-                                StyledBox {
-                                    horizontal-stretch: 1;
-                                    min-height: 220px;
-                                    vertical-stretch: 1;
-                                    background: AppTheme.surface;
-
-                                    ListView {
-                                        for node[idx] in root.browser_nodes: Rectangle {
-                                            height: 32px;
-                                            background: node.is_selected ? AppTheme.accent : (ta_browser.has-hover ? AppTheme.list_hover : transparent);
-                                            ta_browser := TouchArea { }
-
-                                            HorizontalBox {
-                                                padding: 4px;
-                                                padding-left: 8px + (node.depth * 18px);
-                                                spacing: 8px;
-
-                                                // Selection Checkbox
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    border-radius: 3px;
-                                                    border-width: 1.5px;
-                                                    border-color: node.is_selected ? white : AppTheme.text_muted;
-                                                    background: node.is_selected ? AppTheme.accent_pressed : transparent;
-
-                                                    if node.is_selected: Image {
-                                                        width: 12px;
-                                                        height: 12px;
-                                                        x: (parent.width - self.width) / 2;
-                                                        y: (parent.height - self.height) / 2;
-                                                        source: @image-url("../../assets/icons/check.svg");
-                                                        colorize: white;
-                                                    }
-
-                                                    TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => { root.toggle_browser_selection(node.path, false); }
-                                                    }
-                                                }
-
-                                                // Folder / File Icon + Name
-                                                Rectangle {
-                                                    horizontal-stretch: 1;
-                                                    HorizontalBox {
-                                                        padding: 0;
-                                                        spacing: 6px;
-
-                                                        if node.is_dir: Image {
-                                                            width: 12px;
-                                                            height: 12px;
-                                                            y: (parent.height - self.height) / 2;
-                                                            source: node.is_expanded ? @image-url("../../assets/icons/chevron_down.svg") : @image-url("../../assets/icons/chevron_right.svg");
-                                                            colorize: node.is_selected ? white : AppTheme.text_muted;
-                                                        }
-
-                                                        Image {
-                                                            width: 16px;
-                                                            height: 16px;
-                                                            y: (parent.height - self.height) / 2;
-                                                            source: node.is_dir ? (node.is_expanded ? @image-url("../../assets/icons/folder_open.svg") : @image-url("../../assets/icons/folder.svg")) : @image-url("../../assets/icons/file.svg");
-                                                            colorize: node.is_selected ? white : (node.is_dir ? AppTheme.accent : AppTheme.text_muted);
-                                                        }
-
-                                                        Text {
-                                                            text: node.name;
-                                                            vertical-alignment: center;
-                                                            color: node.is_selected ? white : Palette.foreground;
-                                                            overflow: elide;
-                                                        }
-
-                                                        if node.snapshot_type != "": Rectangle {
-                                                            width: 40px;
-                                                            height: 18px;
-                                                            y: (parent.height - self.height) / 2;
-                                                            border-radius: 4px;
-                                                            background: node.snapshot_type == "VSS" ? #4CAF50 :
-                                                                node.snapshot_type == "APFS" ? #2196F3 :
-                                                                node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
-                                                            Text {
-                                                                text: node.snapshot_type;
-                                                                color: white;
-                                                                font-size: 10px;
-                                                                font-weight: 700;
-                                                                horizontal-alignment: center;
-                                                                vertical-alignment: center;
-                                                                width: parent.width;
-                                                                height: parent.height;
-                                                            }
-                                                        }
-                                                    }
-
-                                                    TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => {
-                                                            if node.is_dir {
-                                                                if node.is_expanded { root.collapse_browser_node(node, false); }
-                                                                else { root.expand_browser_node(node, root.browser_is_remote, false); }
-                                                            } else {
-                                                                root.toggle_browser_selection(node.path, false);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Center Separator Arrow (Primitive Vector Outline)
-                                VerticalBox {
-                                    width: 40px;
-                                    alignment: center;
+                                // Volume Selector Bar
+                                HorizontalBox {
                                     padding: 0px;
-                                    HorizontalLayout {
-                                        alignment: center;
-                                        Image {
-                                            width: 24px;
-                                            height: 24px;
-                                            source: @image-url("../../assets/icons/arrow_right.svg");
-                                            colorize: AppTheme.accent;
+                                    spacing: 0px;
+
+                                    // Source Volume Bar
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 8px;
+                                        horizontal-stretch: 1;
+
+                                        CustomComboBox {
+                                            width: 95px;
+                                            model: root.local_volume_labels;
+                                            current-value: root.current_local_volume;
+                                            selected(vol) => {
+                                                root.current_local_volume = vol;
+                                                root.browser_current_path = vol;
+                                                root.fetch_directory(vol, root.browser_is_remote, false);
+                                            }
+                                        }
+
+                                        Text {
+                                            text: root.browser_current_path;
+                                            color: AppTheme.text_muted;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        RustIconButton {
+                                            icon: @image-url("../../assets/icons/refresh.svg");
+                                            tooltip: "Refresh local source directory";
+                                            clicked => {
+                                                root.fetch_directory(root.browser_current_path, root.browser_is_remote, false);
+                                            }
+                                        }
+
+                                        RustIconButton {
+                                            icon: @image-url("../../assets/icons/arrow_up.svg");
+                                            tooltip: "Navigate up one directory level";
+                                            clicked => {
+                                                root.fetch_directory(root.browser_current_path + "/..", root.browser_is_remote, false);
+                                            }
+                                        }
+                                    }
+
+                                    // Center spacer matching arrow width
+                                    Rectangle {
+                                        width: 40px;
+                                    }
+
+                                    // Destination Volume Bar
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 8px;
+                                        horizontal-stretch: 1;
+
+                                        CustomComboBox {
+                                            width: 95px;
+                                            model: root.remote_volume_labels;
+                                            current-value: root.current_remote_volume;
+                                            selected(rvol) => {
+                                                root.current_remote_volume = rvol;
+                                                root.dest_browser_current_path = rvol;
+                                                root.fetch_directory(rvol, root.dest_browser_is_remote, true);
+                                            }
+                                        }
+
+                                        Text {
+                                            text: root.dest_browser_current_path;
+                                            color: AppTheme.text_muted;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+
+                                        RustIconButton {
+                                            icon: @image-url("../../assets/icons/refresh.svg");
+                                            tooltip: "Refresh remote destination directory";
+                                            clicked => {
+                                                root.fetch_directory(root.dest_browser_current_path, root.dest_browser_is_remote, true);
+                                            }
+                                        }
+
+                                        RustIconButton {
+                                            icon: @image-url("../../assets/icons/arrow_up.svg");
+                                            tooltip: "Navigate up one remote directory level";
+                                            clicked => {
+                                                root.fetch_directory(root.dest_browser_current_path + "/..", root.dest_browser_is_remote, true);
+                                            }
                                         }
                                     }
                                 }
 
-                                // Right Box (Destination)
-                                StyledBox {
-                                    horizontal-stretch: 1;
-                                    min-height: 220px;
+                                // Dual Tree-View Boxes
+                                HorizontalBox {
+                                    padding: 0px;
+                                    spacing: 0px;
                                     vertical-stretch: 1;
-                                    background: AppTheme.surface;
 
-                                    ListView {
-                                        for node[idx] in root.dest_browser_nodes: Rectangle {
-                                            height: 32px;
-                                            background: node.is_selected ? AppTheme.accent : (ta_dest_browser.has-hover ? AppTheme.list_hover : transparent);
-                                            ta_dest_browser := TouchArea { }
+                                    // Left Box (Source)
+                                    StyledBox {
+                                        horizontal-stretch: 1;
+                                        min-height: 220px;
+                                        vertical-stretch: 1;
+                                        background: AppTheme.surface;
 
-                                            HorizontalBox {
-                                                padding: 4px;
-                                                padding-left: 8px + (node.depth * 18px);
-                                                spacing: 8px;
+                                        ListView {
+                                            for node[idx] in root.browser_nodes: Rectangle {
+                                                height: 32px;
+                                                background: node.is_selected ? AppTheme.accent : (ta_browser.has-hover ? AppTheme.list_hover : transparent);
+                                                ta_browser := TouchArea { }
 
-                                                // Selection Checkbox
-                                                Rectangle {
-                                                    width: 16px;
-                                                    height: 16px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    border-radius: 3px;
-                                                    border-width: 1.5px;
-                                                    border-color: node.is_selected ? white : AppTheme.text_muted;
-                                                    background: node.is_selected ? AppTheme.accent_pressed : transparent;
+                                                HorizontalBox {
+                                                    padding: 4px;
+                                                    padding-left: 8px + (node.depth * 18px);
+                                                    spacing: 8px;
 
-                                                    if node.is_selected: Image {
-                                                        width: 12px;
-                                                        height: 12px;
-                                                        x: (parent.width - self.width) / 2;
+                                                    // Selection Checkbox
+                                                    Rectangle {
+                                                        width: 16px;
+                                                        height: 16px;
                                                         y: (parent.height - self.height) / 2;
-                                                        source: @image-url("../../assets/icons/check.svg");
-                                                        colorize: white;
-                                                    }
+                                                        border-radius: 3px;
+                                                        border-width: 1.5px;
+                                                        border-color: node.is_selected ? white : AppTheme.text_muted;
+                                                        background: node.is_selected ? AppTheme.accent_pressed : transparent;
 
-                                                    TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => { root.toggle_browser_selection(node.path, true); }
-                                                    }
-                                                }
-
-                                                // Folder / File Icon + Name
-                                                Rectangle {
-                                                    horizontal-stretch: 1;
-                                                    HorizontalBox {
-                                                        padding: 0;
-                                                        spacing: 6px;
-
-                                                        if node.is_dir: Image {
+                                                        if node.is_selected: Image {
                                                             width: 12px;
                                                             height: 12px;
+                                                            x: (parent.width - self.width) / 2;
                                                             y: (parent.height - self.height) / 2;
-                                                            source: node.is_expanded ? @image-url("../../assets/icons/chevron_down.svg") : @image-url("../../assets/icons/chevron_right.svg");
-                                                            colorize: node.is_selected ? white : AppTheme.text_muted;
+                                                            source: @image-url("../../assets/icons/check.svg");
+                                                            colorize: white;
                                                         }
 
-                                                        Image {
-                                                            width: 16px;
-                                                            height: 16px;
-                                                            y: (parent.height - self.height) / 2;
-                                                            source: node.is_dir ? (node.is_expanded ? @image-url("../../assets/icons/folder_open.svg") : @image-url("../../assets/icons/folder.svg")) : @image-url("../../assets/icons/file.svg");
-                                                            colorize: node.is_selected ? white : (node.is_dir ? AppTheme.accent : AppTheme.text_muted);
-                                                        }
-
-                                                        Text {
-                                                            text: node.name;
-                                                            vertical-alignment: center;
-                                                            color: node.is_selected ? white : Palette.foreground;
-                                                            overflow: elide;
-                                                        }
-
-                                                        if node.snapshot_type != "": Rectangle {
-                                                            width: 40px;
-                                                            height: 18px;
-                                                            y: (parent.height - self.height) / 2;
-                                                            border-radius: 4px;
-                                                            background: node.snapshot_type == "VSS" ? #4CAF50 :
-                                                                node.snapshot_type == "APFS" ? #2196F3 :
-                                                                node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
-                                                            Text {
-                                                                text: node.snapshot_type;
-                                                                color: white;
-                                                                font-size: 10px;
-                                                                font-weight: 700;
-                                                                horizontal-alignment: center;
-                                                                vertical-alignment: center;
-                                                                width: parent.width;
-                                                                height: parent.height;
-                                                            }
+                                                        TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => { root.toggle_browser_selection(node.path, false); }
                                                         }
                                                     }
 
-                                                    TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => {
-                                                            if node.is_dir {
-                                                                if node.is_expanded { root.collapse_browser_node(node, true); }
-                                                                else { root.expand_browser_node(node, root.dest_browser_is_remote, true); }
-                                                            } else {
-                                                                root.toggle_browser_selection(node.path, true);
+                                                    // Folder / File Icon + Name
+                                                    Rectangle {
+                                                        horizontal-stretch: 1;
+                                                        HorizontalBox {
+                                                            padding: 0;
+                                                            spacing: 6px;
+
+                                                            if node.is_dir: Image {
+                                                                width: 12px;
+                                                                height: 12px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                source: node.is_expanded ? @image-url("../../assets/icons/chevron_down.svg") : @image-url("../../assets/icons/chevron_right.svg");
+                                                                colorize: node.is_selected ? white : AppTheme.text_muted;
+                                                            }
+
+                                                            Image {
+                                                                width: 16px;
+                                                                height: 16px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                source: node.is_dir ? (node.is_expanded ? @image-url("../../assets/icons/folder_open.svg") : @image-url("../../assets/icons/folder.svg")) : @image-url("../../assets/icons/file.svg");
+                                                                colorize: node.is_selected ? white : (node.is_dir ? AppTheme.accent : AppTheme.text_muted);
+                                                            }
+
+                                                            Text {
+                                                                text: node.name;
+                                                                vertical-alignment: center;
+                                                                color: node.is_selected ? white : Palette.foreground;
+                                                                overflow: elide;
+                                                            }
+
+                                                            if node.snapshot_type != "": Rectangle {
+                                                                width: 40px;
+                                                                height: 18px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                border-radius: 4px;
+                                                                background: node.snapshot_type == "VSS" ? #4CAF50 :
+                                                                    node.snapshot_type == "APFS" ? #2196F3 :
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                                Text {
+                                                                    text: node.snapshot_type;
+                                                                    color: white;
+                                                                    font-size: 10px;
+                                                                    font-weight: 700;
+                                                                    horizontal-alignment: center;
+                                                                    vertical-alignment: center;
+                                                                    width: parent.width;
+                                                                    height: parent.height;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                if node.is_dir {
+                                                                    if node.is_expanded { root.collapse_browser_node(node, false); }
+                                                                    else { root.expand_browser_node(node, root.browser_is_remote, false); }
+                                                                } else {
+                                                                    root.toggle_browser_selection(node.path, false);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Center Separator Arrow (Primitive Vector Outline)
+                                    VerticalBox {
+                                        width: 40px;
+                                        alignment: center;
+                                        padding: 0px;
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            Image {
+                                                width: 24px;
+                                                height: 24px;
+                                                source: @image-url("../../assets/icons/arrow_right.svg");
+                                                colorize: AppTheme.accent;
+                                            }
+                                        }
+                                    }
+
+                                    // Right Box (Destination)
+                                    StyledBox {
+                                        horizontal-stretch: 1;
+                                        min-height: 220px;
+                                        vertical-stretch: 1;
+                                        background: AppTheme.surface;
+
+                                        ListView {
+                                            for node[idx] in root.dest_browser_nodes: Rectangle {
+                                                height: 32px;
+                                                background: node.is_selected ? AppTheme.accent : (ta_dest_browser.has-hover ? AppTheme.list_hover : transparent);
+                                                ta_dest_browser := TouchArea { }
+
+                                                HorizontalBox {
+                                                    padding: 4px;
+                                                    padding-left: 8px + (node.depth * 18px);
+                                                    spacing: 8px;
+
+                                                    // Selection Checkbox
+                                                    Rectangle {
+                                                        width: 16px;
+                                                        height: 16px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        border-radius: 3px;
+                                                        border-width: 1.5px;
+                                                        border-color: node.is_selected ? white : AppTheme.text_muted;
+                                                        background: node.is_selected ? AppTheme.accent_pressed : transparent;
+
+                                                        if node.is_selected: Image {
+                                                            width: 12px;
+                                                            height: 12px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            source: @image-url("../../assets/icons/check.svg");
+                                                            colorize: white;
+                                                        }
+
+                                                        TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => { root.toggle_browser_selection(node.path, true); }
+                                                        }
+                                                    }
+
+                                                    // Folder / File Icon + Name
+                                                    Rectangle {
+                                                        horizontal-stretch: 1;
+                                                        HorizontalBox {
+                                                            padding: 0;
+                                                            spacing: 6px;
+
+                                                            if node.is_dir: Image {
+                                                                width: 12px;
+                                                                height: 12px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                source: node.is_expanded ? @image-url("../../assets/icons/chevron_down.svg") : @image-url("../../assets/icons/chevron_right.svg");
+                                                                colorize: node.is_selected ? white : AppTheme.text_muted;
+                                                            }
+
+                                                            Image {
+                                                                width: 16px;
+                                                                height: 16px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                source: node.is_dir ? (node.is_expanded ? @image-url("../../assets/icons/folder_open.svg") : @image-url("../../assets/icons/folder.svg")) : @image-url("../../assets/icons/file.svg");
+                                                                colorize: node.is_selected ? white : (node.is_dir ? AppTheme.accent : AppTheme.text_muted);
+                                                            }
+
+                                                            Text {
+                                                                text: node.name;
+                                                                vertical-alignment: center;
+                                                                color: node.is_selected ? white : Palette.foreground;
+                                                                overflow: elide;
+                                                            }
+
+                                                            if node.snapshot_type != "": Rectangle {
+                                                                width: 40px;
+                                                                height: 18px;
+                                                                y: (parent.height - self.height) / 2;
+                                                                border-radius: 4px;
+                                                                background: node.snapshot_type == "VSS" ? #4CAF50 :
+                                                                    node.snapshot_type == "APFS" ? #2196F3 :
+                                                                    node.snapshot_type == "LVM" ? #FF9800 : #9E9E9E;
+                                                                Text {
+                                                                    text: node.snapshot_type;
+                                                                    color: white;
+                                                                    font-size: 10px;
+                                                                    font-weight: 700;
+                                                                    horizontal-alignment: center;
+                                                                    vertical-alignment: center;
+                                                                    width: parent.width;
+                                                                    height: parent.height;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                if node.is_dir {
+                                                                    if node.is_expanded { root.collapse_browser_node(node, true); }
+                                                                    else { root.expand_browser_node(node, root.dest_browser_is_remote, true); }
+                                                                } else {
+                                                                    root.toggle_browser_selection(node.path, true);
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -2145,109 +2480,131 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                            }
 
-                            // Center Action Button (Add Row)
-                            HorizontalBox {
-                                padding-top: 4px;
-                                padding-bottom: 4px;
-                                alignment: center;
-                                RustButton {
-                                    variant: "outline-accent";
-                                    width: 280px;
-                                    height: 34px;
-                                    text: "Add Row";
-                                    clicked => {
-                                        root.commit_browser_selection(root.browser_selection, root.dest_browser_selection);
+                                // Center Action Button (Add Row)
+                                HorizontalBox {
+                                    padding-top: 4px;
+                                    padding-bottom: 4px;
+                                    alignment: center;
+                                    RustButton {
+                                        variant: "outline-accent";
+                                        width: 280px;
+                                        height: 34px;
+                                        text: "Add Row";
+                                        tooltip: "Stage the checked source and destination paths into the transfer mapping table below.";
+                                        clicked => {
+                                            root.commit_browser_selection(root.browser_selection, root.dest_browser_selection);
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        // --- Zone C: Staged Mappings Table (Two-Column Scrollable List) ---
-                        VerticalBox {
-                            padding: 0px;
-                            spacing: 6px;
+                            // --- Zone C: Staged Mappings Table (Two-Column Scrollable List) ---
+                            VerticalBox {
+                                padding: 0px;
+                                spacing: 6px;
 
-                            // Top Divider
-                            Rectangle {
-                                height: 1px;
-                                width: 100%;
-                                background: AppTheme.border;
-                            }
+                                // Top Divider
+                                Rectangle {
+                                    height: 1px;
+                                    width: 100%;
+                                    background: AppTheme.border;
+                                }
 
-                            ListView {
-                                height: 110px;
-                                for mapping[idx] in root.current_mappings: Rectangle {
-                                    height: 34px;
-                                    width: parent.width;
-                                    background: row_ta.has-hover ? AppTheme.list_hover : AppTheme.surface;
-                                    row_ta := TouchArea { }
+                                ListView {
+                                    height: 110px;
+                                    for mapping[idx] in root.current_mappings: Rectangle {
+                                        height: 34px;
+                                        width: parent.width;
+                                        background: row_ta.has-hover ? AppTheme.list_hover : AppTheme.surface;
+                                        row_ta := TouchArea { }
 
-                                    HorizontalLayout {
-                                        padding: 0px;
-                                        spacing: 0px;
+                                        HorizontalLayout {
+                                            padding: 0px;
+                                            spacing: 0px;
 
-                                        // Left Column (Source)
-                                        Rectangle {
-                                            horizontal-stretch: 1;
-                                            Text {
-                                                x: 12px;
-                                                width: parent.width - 24px;
-                                                height: parent.height;
-                                                text: mapping.source;
-                                                overflow: elide;
-                                                vertical-alignment: center;
-                                                horizontal-alignment: center;
-                                                color: Palette.foreground;
-                                            }
-                                        }
-
-                                        // 1px Vertical Divider
-                                        Rectangle {
-                                            width: 1px;
-                                            height: parent.height;
-                                            background: AppTheme.border;
-                                        }
-
-                                        // Right Column (Destination + Remove Button)
-                                        Rectangle {
-                                            horizontal-stretch: 1;
-                                            HorizontalLayout {
-                                                padding-left: 12px;
-                                                padding-right: 8px;
-                                                spacing: 6px;
-
+                                            // Left Column (Source)
+                                            Rectangle {
+                                                horizontal-stretch: 1;
                                                 Text {
-                                                    horizontal-stretch: 1;
-                                                    text: mapping.destination;
+                                                    x: 12px;
+                                                    width: parent.width - 24px;
+                                                    height: parent.height;
+                                                    text: mapping.source;
                                                     overflow: elide;
                                                     vertical-alignment: center;
                                                     horizontal-alignment: center;
                                                     color: Palette.foreground;
                                                 }
+                                            }
 
-                                                Rectangle {
-                                                    width: 22px;
-                                                    height: 22px;
-                                                    y: (parent.height - self.height) / 2;
-                                                    border-radius: 4px;
-                                                    opacity: (row_ta.has-hover || rm_ta.has-hover) ? 1.0 : 0.65;
-                                                    background: rm_ta.has-hover ? AppTheme.accent : transparent;
+                                            // 1px Vertical Divider
+                                            Rectangle {
+                                                width: 1px;
+                                                height: parent.height;
+                                                background: AppTheme.border;
+                                            }
 
-                                                    Image {
-                                                        width: 13px;
-                                                        height: 13px;
-                                                        x: (parent.width - self.width) / 2;
-                                                        y: (parent.height - self.height) / 2;
-                                                        source: @image-url("../../assets/icons/close.svg");
-                                                        colorize: rm_ta.has-hover ? white : AppTheme.text_muted;
+                                            // Right Column (Destination + Remove Button)
+                                            Rectangle {
+                                                horizontal-stretch: 1;
+                                                HorizontalLayout {
+                                                    padding-left: 12px;
+                                                    padding-right: 8px;
+                                                    spacing: 6px;
+
+                                                    Text {
+                                                        horizontal-stretch: 1;
+                                                        text: mapping.destination;
+                                                        overflow: elide;
+                                                        vertical-alignment: center;
+                                                        horizontal-alignment: center;
+                                                        color: Palette.foreground;
                                                     }
 
-                                                    rm_ta := TouchArea {
-                                                        mouse-cursor: pointer;
-                                                        clicked => {
-                                                            root.remove_mapping(idx);
+                                                    rm_btn := Rectangle {
+                                                        width: 22px;
+                                                        height: 22px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        border-radius: 4px;
+                                                        opacity: (row_ta.has-hover || rm_ta.has-hover) ? 1.0 : 0.65;
+                                                        background: rm_ta.has-hover ? AppTheme.accent : transparent;
+
+                                                        Image {
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                            source: @image-url("../../assets/icons/close.svg");
+                                                            colorize: rm_ta.has-hover ? white : AppTheme.text_muted;
+                                                        }
+
+                                                        Timer {
+                                                            interval: 220ms;
+                                                            running: rm_ta.has-hover;
+                                                            triggered => {
+                                                                if (rm_ta.has-hover) {
+                                                                    TooltipState.text = "Remove staged mapping row";
+                                                                    TooltipState.anchor_x = rm_btn.absolute-position.x;
+                                                                    TooltipState.anchor_y = rm_btn.absolute-position.y;
+                                                                    TooltipState.anchor_w = rm_btn.width;
+                                                                    TooltipState.anchor_h = rm_btn.height;
+                                                                    TooltipState.visible = true;
+                                                                }
+                                                            }
+                                                        }
+
+                                                        rm_ta := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            changed has-hover => {
+                                                                if (!self.has-hover && TooltipState.text == "Remove staged mapping row") {
+                                                                    TooltipState.visible = false;
+                                                                }
+                                                            }
+                                                            clicked => {
+                                                                TooltipState.visible = false;
+                                                                root.remove_mapping(idx);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2255,33 +2612,76 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
+
+                                // Bottom Divider
+                                Rectangle {
+                                    height: 1px;
+                                    width: 100%;
+                                    background: AppTheme.border;
+                                }
                             }
 
-                            // Bottom Divider
-                            Rectangle {
-                                height: 1px;
-                                width: 100%;
-                                background: AppTheme.border;
+                            // --- Zone D: Footer Commit Bar ---
+                            HorizontalBox {
+                                padding: 0px;
+                                alignment: end;
+                                spacing: 10px;
+                                RustButton {
+                                    variant: "secondary";
+                                    text: "Commit";
+                                    tooltip: "Save this transfer task configuration without starting the transfer immediately.";
+                                    clicked => { root.save_draft_job(); }
+                                }
+
+                                RustButton {
+                                    variant: "primary";
+                                    text: "Commit & Start";
+                                    tooltip: "Save this transfer task configuration and begin transferring files immediately.";
+                                    clicked => {
+                                        root.save_draft_job();
+                                        root.start_transfer();
+                                    }
+                                }
                             }
                         }
 
-                        // --- Zone D: Footer Commit Bar ---
-                        HorizontalBox {
-                            padding: 0px;
-                            alignment: end;
-                            spacing: 10px;
-                            RustButton {
-                                variant: "secondary";
-                                text: "Commit";
-                                clicked => { root.save_draft_job(); }
+                        // Disabled / Locked Guidance Overlay when no task is created/selected yet
+                        if !root.is_job_setup_unlocked: Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: transparent;
+
+                            TouchArea {
+                                // Intercepts clicks while Transfer Setup is locked
                             }
 
-                            RustButton {
-                                variant: "primary";
-                                text: "Commit & Start";
-                                clicked => {
-                                    root.save_draft_job();
-                                    root.start_transfer();
+                            Rectangle {
+                                x: (parent.width - self.width) / 2;
+                                y: 20px;
+                                width: min(parent.width - 32px, 560px);
+                                height: 52px;
+                                border-radius: 6px;
+                                border-width: 1.5px;
+                                border-color: AppTheme.accent;
+                                background: AppTheme.surface_elevated;
+
+                                HorizontalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    spacing: 10px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: root.is_naming_new_job ?
+                                            "Enter a name for your new transfer task on the left (or press Enter / OK for default naming) to unlock setup." :
+                                            "Click '+ New Transfer Task' on the left to name and initialize a task before selecting files and directories.";
+                                        font-weight: 700;
+                                        font-size: 12px;
+                                        color: Palette.foreground;
+                                        vertical-alignment: center;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                    }
                                 }
                             }
                         }
@@ -2397,6 +2797,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "outline-accent";
                                         text: root.is_transfer_paused ? "Resume Transfer" : "Pause Transfer";
+                                        tooltip: "Temporarily pause or resume the active file transfer stream.";
                                         clicked => {
                                             root.is_transfer_paused = !root.is_transfer_paused;
                                             root.pause_transfer();
@@ -2406,6 +2807,7 @@ export component MainWindow inherits Window {
                                     RustButton {
                                         variant: "outline-accent";
                                         text: "Cancel Transfer";
+                                        tooltip: "Stop the current transfer session and clear remaining queued items.";
                                         clicked => { root.cancel_transfer(); }
                                     }
                                 }
@@ -2436,7 +2838,6 @@ export component MainWindow inherits Window {
                     ListView {
                         for setting[idx] in [
                             "Display",
-                            "Transfer Settings",
                             "Notifications",
                             "Import/Export",
                             "Help",
@@ -2476,7 +2877,7 @@ export component MainWindow inherits Window {
                     padding: 15px;
                     padding-left: 20px;
 
-                    if root.selected_setting_idx == 5: VerticalBox {
+                    if root.selected_setting_idx == 4: VerticalBox {
                         Text {
                             text: "Application Logs";
                             font-size: 20px;
@@ -2501,6 +2902,7 @@ export component MainWindow inherits Window {
                         RustButton {
                             variant: "outline-accent";
                             text: "Open Connection Logs";
+                            tooltip: "Open connection.log in your system text viewer to inspect P2P handshakes and authentication.";
                             clicked => { root.open_log_file("connection.log"); }
                         }
 
@@ -2522,6 +2924,7 @@ export component MainWindow inherits Window {
                         RustButton {
                             variant: "outline-accent";
                             text: "Open Transfer Logs";
+                            tooltip: "Open transfers.log to review QUIC stream progress and SHA-256 verification results.";
                             clicked => { root.open_log_file("transfers.log"); }
                         }
 
@@ -2543,6 +2946,7 @@ export component MainWindow inherits Window {
                         RustButton {
                             variant: "outline-accent";
                             text: "Open Sync Logs";
+                            tooltip: "Open sync.log to inspect continuous directory watcher and delta synchronization events.";
                             clicked => { root.open_log_file("sync.log"); }
                         }
 
@@ -2564,6 +2968,7 @@ export component MainWindow inherits Window {
                         RustButton {
                             variant: "outline-accent";
                             text: "Open Schedule Logs";
+                            tooltip: "Open schedule.log to inspect automated recurring transfer execution history.";
                             clicked => { root.open_log_file("schedule.log"); }
                         }
 
@@ -2635,107 +3040,7 @@ export component MainWindow inherits Window {
 
                     if root.selected_setting_idx == 1: VerticalBox {
                         Text {
-                            text: "Transfer Settings";
-                            font-size: 20px;
-                            font-weight: 700;
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Bandwidth Allocation (MB/s):";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: "Connection: " + root.network_link_type + " | Max Throughput: " + root.network_max_throughput;
-                            font-size: 11px;
-                            color: AppTheme.text_muted;
-                        }
-
-                        Rectangle {
-                            height: 5px;
-                        }
-
-                        LineEdit {
-                            text: "0 (Unlimited)";
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Max Threads:";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: root.os_processor_info;
-                            font-size: 11px;
-                            color: AppTheme.text_muted;
-                        }
-
-                        Rectangle {
-                            height: 5px;
-                        }
-
-                        LineEdit {
-                            text: "16";
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Credential Management:";
-                            font-weight: 700;
-                        }
-
-                        Rectangle {
-                            height: 5px;
-                        }
-
-                        RustButton {
-                            variant: "outline-accent";
-                            text: "Purge Orphaned Keys";
-                            clicked => { root.purge_orphaned_keys(); }
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Max Memory (MB):";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: root.os_memory_info + " | Minimum Required: 512 MB";
-                            font-size: 11px;
-                            color: AppTheme.text_muted;
-                        }
-
-                        Rectangle {
-                            height: 5px;
-                        }
-
-                        LineEdit {
-                            text: "4096";
-                        }
-
-                        Rectangle {
-                            vertical-stretch: 1;
-                        }
-                    }
-
-                    if root.selected_setting_idx == 2: VerticalBox {
-                        Text {
-                            text: "Notifications";
+                            text: "Notifications & OS Permissions";
                             font-size: 20px;
                             font-weight: 700;
                         }
@@ -2770,9 +3075,24 @@ export component MainWindow inherits Window {
                             height: 10px;
                         }
 
-                        RustButton {
-                            variant: "outline-accent";
-                            text: "Request OS Permissions";
+                        HorizontalBox {
+                            padding: 0px;
+                            spacing: 12px;
+                            alignment: start;
+
+                            RustButton {
+                                variant: "outline-accent";
+                                text: "Request OS Permissions";
+                                tooltip: "Perform one-time OS firewall and disk access permission setup for Simply Transfer.";
+                                clicked => { root.request_os_permissions(); }
+                            }
+
+                            if root.os_permissions_status != "": Text {
+                                text: root.os_permissions_status;
+                                font-size: 11px;
+                                color: AppTheme.accent;
+                                vertical-alignment: center;
+                            }
                         }
 
                         Rectangle {
@@ -2780,9 +3100,10 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: "Note: If permissions are denied by the OS, notifications will safely fall back to None.";
+                            text: "Note: Permissions are persisted once granted so you will not be prompted repeatedly. If denied, notifications safely fall back to None.";
                             font-size: 11px;
                             color: AppTheme.text_muted;
+                            wrap: word-wrap;
                         }
 
                         Rectangle {
@@ -2790,7 +3111,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.selected_setting_idx == 3: VerticalBox {
+                    if root.selected_setting_idx == 2: VerticalBox {
                         Text {
                             text: "Import/Export Profiles";
                             font-size: 20px;
@@ -2806,11 +3127,13 @@ export component MainWindow inherits Window {
                             RustButton {
                                 variant: "outline-accent";
                                 text: "Import Profile (.json)";
+                                tooltip: "Import saved connection and transfer task profiles from a JSON backup file.";
                             }
 
                             RustButton {
                                 variant: "outline-accent";
                                 text: "Export Profile (.json)";
+                                tooltip: "Export your connection and transfer task profiles (excluding raw private keys) to a JSON file.";
                             }
                         }
 
@@ -2819,61 +3142,313 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.selected_setting_idx == 4: VerticalBox {
-                        Text {
-                            text: "Help & Support";
-                            font-size: 20px;
-                            font-weight: 700;
+                    if root.selected_setting_idx == 3: VerticalBox {
+                        padding: 0px;
+                        spacing: 10px;
+
+                        HorizontalBox {
+                            padding: 0px;
+                            alignment: space-between;
+                            Text {
+                                text: "Help & Support";
+                                font-size: 20px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "Simply Transfer v1.0.0 Production";
+                                font-size: 12px;
+                                font-weight: 600;
+                                color: AppTheme.accent;
+                                vertical-alignment: center;
+                            }
                         }
 
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Github Repository:";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: "https://github.com/TheInfoMoose/ST_Rust_Age.git";
-                            color: AppTheme.accent;
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "Troubleshooting:";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: "• If connections fail, verify firewall rules for SSH (port 22).\n• Ensure destination tokens are copied completely.\n• OOM crashes are prevented via stream buffering.";
-                            wrap: word-wrap;
-                        }
-
-                        Rectangle {
-                            height: 20px;
-                        }
-
-                        Text {
-                            text: "FAQs:";
-                            font-weight: 700;
-                        }
-
-                        Text {
-                            text: "Q: Can I transfer active databases?\nA: Yes, Windows VSS and Linux LVM snapshots automatically handle locked files.";
-                            wrap: word-wrap;
-                        }
-
-                        Rectangle {
+                        ScrollView {
                             vertical-stretch: 1;
+                            VerticalBox {
+                                padding: 2px;
+                                padding-right: 10px;
+                                spacing: 10px;
+
+                                // 1. How To Section
+                                CollapsibleSection {
+                                    title: "How To — Step-by-Step Guide";
+                                    subtitle: "Walkthrough for P2P pairing, task creation, sync modes, and VPN tunnels";
+                                    expanded: true;
+
+                                    Text {
+                                        text: "1. Establish a P2P Connection (Dashboard Tab):";
+                                        font-weight: 700;
+                                        color: AppTheme.accent;
+                                    }
+                                    Text {
+                                        text: "• On Host A (Initiator): Click '+ New Connection' -> 'New'. Enter a connection name and optional peer IP, click 'Generate' to mint an Ed25519 keypair and st:... token, then click 'Commit' and 'Copy' the token.\n• On Host B (Remote Peer): Click '+ New Connection' -> 'Remote'. Paste the copied token into the Token field, click 'Verify' to complete the encrypted TCP handshake, and click 'Commit'. Both devices will now show 'Connected'.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "2. Create & Name a Transfer Task (Transfer -> Setup Tab):";
+                                        font-weight: 700;
+                                        color: AppTheme.accent;
+                                    }
+                                    Text {
+                                        text: "• Transition to the Transfer tab (top-left arrows icon). The right-hand setup controls start locked to prevent accidental edits.\n• Click '+ New Transfer Task' on the left panel. Type a custom task name into the ready input box (or leave it blank and press Enter / OK to use default naming). The setup controls will immediately unlock.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "3. Select Directories & Stage Mappings:";
+                                        font-weight: 700;
+                                        color: AppTheme.accent;
+                                    }
+                                    Text {
+                                        text: "• Use the left pane (Local Source) and right pane (Remote Destination) to browse volumes and folders. Click a folder name to expand it inline, or check the selection boxes next to files/folders.\n• Click 'Add Row' to stage the selected Source -> Destination pair into the bottom mapping table.\n• Choose 'Single Transfer', 'Continuous Sync' (with interval), or 'Scheduled Transfer' (with active days and time window), then click 'Commit' to save or 'Commit & Start' to launch immediately.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "4. Monitor Progress & Scoped WireGuard WAN VPN:";
+                                        font-weight: 700;
+                                        color: AppTheme.accent;
+                                    }
+                                    Text {
+                                        text: "• Switch to 'Transfer -> Active' to view live multi-stream QUIC throughput, per-file progress bars, snapshot badges (VSS/APFS/LVM), and end-to-end SHA-256 integrity status.\n• For WAN / cross-subnet transfers, check 'Enable WAN VPN (WireGuard)' when creating or editing a connection and import your wg0.conf file.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+                                }
+
+                                // 2. Troubleshooting Section (with Purge Orphaned Keys)
+                                CollapsibleSection {
+                                    title: "Troubleshooting & Credential Maintenance";
+                                    subtitle: "Known fixable issues across Linux (Arch/CachyOS), macOS, and Windows";
+                                    expanded: false;
+
+                                    Text {
+                                        text: "• Destination Directory Shows [Remote Connection Failed] or [Invalid Remote Configuration]:\n  Ensure the remote peer has clicked 'Verify' on your generated token so the connection state is 'Connected', then click the Refresh icon button above the Destination pane. Simply Transfer communicates over built-in P2P port 2222 using native Rust directory traversal.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "• Firewall & Port Requirements (Linux ufw/firewalld, macOS, Windows Defender):\n  Allow TCP Port 2222 (P2P SSH/SFTP control plane), ephemeral UDP ports (QUIC bulk data streams), and ephemeral TCP ports on your LAN interface during initial token verification.\n  - Arch / CachyOS / Ubuntu (ufw): sudo ufw allow 2222/tcp\n  - Fedora / RHEL / CachyOS (firewalld): sudo firewall-cmd --add-port=2222/tcp --permanent && sudo firewall-cmd --reload";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "• CachyOS / Arch Linux Keyring (Secret Service / KWallet / GNOME Keyring):\n  On Arch-based distributions where D-Bus Secret Service sessions may lock or reset between threads, Simply Transfer automatically synchronizes generated Ed25519 keys to both the OS keyring and an AES-256-GCM encrypted local vault (~/.simply-transfer/vault.enc).";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "• macOS Protected Folders & Full Disk Access (macOS 14–27):\n  If browsing ~/Desktop, ~/Documents, or /Volumes on a macOS peer returns an empty or restricted view, open macOS System Settings -> Privacy & Security -> Full Disk Access and enable Simply Transfer.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Rectangle {
+                                        height: 1px;
+                                        background: AppTheme.border;
+                                    }
+
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 12px;
+                                        alignment: start;
+
+                                        Text {
+                                            text: "Credential Cleanup:";
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Purge Orphaned Keys";
+                                            tooltip: "Remove any unreferenced Ed25519 private and public keys from the encrypted vault and peer registry.";
+                                            clicked => {
+                                                let count = root.purge_orphaned_keys();
+                                                if (count > 0) {
+                                                    root.purge_keys_status = "Purged " + count + " orphaned key(s) from secure storage.";
+                                                } else {
+                                                    root.purge_keys_status = "No orphaned keys found — all stored keys belong to active connections.";
+                                                }
+                                            }
+                                        }
+
+                                        if root.purge_keys_status != "": Text {
+                                            text: root.purge_keys_status;
+                                            font-size: 11px;
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // 3. FAQ & Security Auditability Section
+                                CollapsibleSection {
+                                    title: "FAQ — Feature Highlights & Security Key Locations";
+                                    subtitle: "How snapshots, QUIC streams, and local cryptographic storage work";
+                                    expanded: false;
+
+                                    Text {
+                                        text: "Q: How does Simply Transfer copy open or locked files without corruption?\nA: When 'Use Snapshots' is enabled, Simply Transfer creates a point-in-time volume snapshot before reading: Volume Shadow Copy Service (VSS) on Windows, APFS snapshots on macOS, and LVM snapshots on Linux. If snapshots are unavailable or unprivileged, it gracefully falls back to direct streaming.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "Q: How are files encrypted and verified in transit?\nA: Control metadata and directory listings travel over an Ed25519-authenticated SSHv2 channel (port 2222), while bulk file payloads stream out-of-band over TLS 1.3 QUIC (UDP) channels with end-to-end SHA-256 hash verification on every file.";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+
+                                    Text {
+                                        text: "Q: Where are my cryptographic keys and connection profiles stored on disk?\nA: You can audit or back up your security state at any time in the following locations:\n  1. OS Hardware Keyring: Stored under service namespace 'com.simplytransfer.app' (macOS Keychain, Windows Credential Manager, Linux Secret Service).\n  2. Encrypted Local Vault: ~/.simply-transfer/vault.enc (AES-256-GCM encrypted with 0600 permissions).\n  3. Authorized Peer Public Keys: ~/.simply-transfer/p2p_authorized_keys.json and ~/.ssh/authorized_keys.\n  4. Connection & Task Metadata: connections_<os>.json and transfer_jobs_<os>.json (stores only key UUID references such as key_<uuid>, never raw private keys).";
+                                        wrap: word-wrap;
+                                        font-size: 12px;
+                                    }
+                                }
+
+                                // 4. Git References Section
+                                CollapsibleSection {
+                                    title: "Git References — Repository, Issues & Feature Requests";
+                                    subtitle: "Direct links to source code, bug report forms, and feature request templates";
+                                    expanded: false;
+
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: "GitHub Repository:";
+                                            font-weight: 700;
+                                            width: 150px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: "https://github.com/TheInfoMoose/ST_Rust_Age";
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Open Repo";
+                                            tooltip: "Open the Simply Transfer GitHub repository in your default web browser.";
+                                            clicked => { root.open_url("https://github.com/TheInfoMoose/ST_Rust_Age"); }
+                                        }
+                                        RustButton {
+                                            variant: "secondary";
+                                            text: "Copy URL";
+                                            tooltip: "Copy the GitHub repository URL to your clipboard.";
+                                            clicked => { root.copy_text("https://github.com/TheInfoMoose/ST_Rust_Age"); }
+                                        }
+                                    }
+
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: "Bug Report Form:";
+                                            font-weight: 700;
+                                            width: 150px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: "https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=bug_report.md";
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Report Bug";
+                                            tooltip: "Open the GitHub Bug Report issue form in your browser.";
+                                            clicked => { root.open_url("https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=bug_report.md"); }
+                                        }
+                                        RustButton {
+                                            variant: "secondary";
+                                            text: "Copy URL";
+                                            tooltip: "Copy the Bug Report form URL to your clipboard.";
+                                            clicked => { root.copy_text("https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=bug_report.md"); }
+                                        }
+                                    }
+
+                                    HorizontalBox {
+                                        padding: 0px;
+                                        spacing: 10px;
+                                        Text {
+                                            text: "Feature Request Form:";
+                                            font-weight: 700;
+                                            width: 150px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: "https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=feature_request.md";
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Request Feature";
+                                            tooltip: "Open the GitHub Feature Request form in your browser.";
+                                            clicked => { root.open_url("https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=feature_request.md"); }
+                                        }
+                                        RustButton {
+                                            variant: "secondary";
+                                            text: "Copy URL";
+                                            tooltip: "Copy the Feature Request form URL to your clipboard.";
+                                            clicked => { root.copy_text("https://github.com/TheInfoMoose/ST_Rust_Age/issues/new?template=feature_request.md"); }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+
+    // --- Global Floating Styled Tooltip Overlay ---
+    if TooltipState.visible && TooltipState.text != "": Rectangle {
+        property <length> raw_x: TooltipState.anchor_x + (TooltipState.anchor_w - self.width) / 2;
+        property <length> raw_y: (TooltipState.anchor_y + TooltipState.anchor_h + 34px > root.height) ?
+            (TooltipState.anchor_y - self.height - 6px) :
+            (TooltipState.anchor_y + TooltipState.anchor_h + 6px);
+
+        x: clamp(self.raw_x, 8px, max(8px, root.width - self.width - 8px));
+        y: clamp(self.raw_y, 8px, max(8px, root.height - self.height - 8px));
+        width: min(root.width - 16px, tt_label.preferred-width + 20px);
+        height: tt_label.preferred-height + 12px;
+        background: AppTheme.surface_elevated;
+        border-width: 1px;
+        border-color: AppTheme.accent;
+        border-radius: 4px;
+        z: 1000;
+
+        tt_label := Text {
+            x: 10px;
+            y: 6px;
+            width: parent.width - 20px;
+            text: TooltipState.text;
+            color: Palette.foreground;
+            font-size: 11px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
         }
     }
 }

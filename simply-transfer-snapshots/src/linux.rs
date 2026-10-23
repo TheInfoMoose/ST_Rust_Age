@@ -301,15 +301,22 @@ pub fn list_local_volumes() -> Result<Vec<crate::VolumeInfo>, SnapshotError> {
         }
     }
 
-    if volumes.is_empty() {
-        let (total_bytes, available_bytes) = df_stats.get("/").copied().unwrap_or((0, 0));
-        volumes.push(crate::VolumeInfo {
-            mount_point: PathBuf::from("/"),
-            label: "Root (/)".to_string(),
-            fs_type: "rootfs".to_string(),
-            total_bytes,
-            available_bytes,
-        });
+    if !seen_mounts.contains("/") {
+        let (total_bytes, available_bytes) = df_stats
+            .get("/")
+            .copied()
+            .or_else(|| query_df_for_path(Path::new("/")))
+            .unwrap_or((0, 0));
+        volumes.insert(
+            0,
+            crate::VolumeInfo {
+                mount_point: PathBuf::from("/"),
+                label: "Root (/)".to_string(),
+                fs_type: "rootfs".to_string(),
+                total_bytes,
+                available_bytes,
+            },
+        );
     }
 
     Ok(volumes)

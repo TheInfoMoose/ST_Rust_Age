@@ -1,7 +1,11 @@
 [package]
 name = "simply-transfer-ui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "Simply Transfer — Enterprise-grade P2P encrypted file transfer and snapshot sync utility"
+license = "GPL-3.0"
+repository = "https://github.com/TheInfoMoose/ST_Rust_Age"
+homepage = "https://github.com/TheInfoMoose/ST_Rust_Age"
 
 [dependencies]
 arboard = "3.6.1"

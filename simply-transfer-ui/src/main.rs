@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::redundant_pattern_matching)]
 #![allow(clippy::collapsible_if)]
@@ -94,15 +95,41 @@ fn log_event(log_type: &str, message: &str) {
 
 fn open_log(filename: &str) {
     let dir_name = format!("logs_{}", std::env::consts::OS);
+    let dir = std::path::Path::new(&dir_name);
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let path = format!("{}/{}", dir_name, filename);
+    if !std::path::Path::new(&path).exists() {
+        let _ = std::fs::write(&path, "");
+    }
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", &path])
-        .spawn();
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .creation_flags(0x08000000)
+            .spawn();
+    }
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(&path).spawn();
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+}
+
+fn open_url_in_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(0x08000000)
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 use std::sync::OnceLock;
@@ -138,6 +165,81 @@ fn get_user_home_dir() -> std::path::PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(home)
+}
+
+fn permissions_state_path() -> std::path::PathBuf {
+    get_user_home_dir()
+        .join(".simply-transfer")
+        .join("permissions_state.json")
+}
+
+fn is_os_permissions_configured() -> bool {
+    if let Ok(content) = std::fs::read_to_string(permissions_state_path())
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+    {
+        return val
+            .get("granted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    }
+    false
+}
+
+fn save_os_permissions_configured() {
+    let path = permissions_state_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let payload = serde_json::json!({
+        "granted": true,
+        "os": std::env::consts::OS,
+        "updated_at": chrono::Local::now().to_rfc3339(),
+    });
+    if let Ok(s) = serde_json::to_string_pretty(&payload) {
+        let _ = std::fs::write(path, s);
+    }
+}
+
+fn normalize_browse_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    let is_win = trimmed.contains('\\') || (trimmed.len() >= 2 && trimmed.as_bytes()[1] == b':');
+
+    if let Some(prefix) = trimmed
+        .strip_suffix("/..")
+        .or_else(|| trimmed.strip_suffix("\\.."))
+    {
+        let cleaned = prefix.trim_end_matches(['/', '\\']);
+        if cleaned.is_empty() {
+            return if is_win {
+                "C:\\".to_string()
+            } else {
+                "/".to_string()
+            };
+        }
+        if is_win && cleaned.len() == 2 && cleaned.as_bytes()[1] == b':' {
+            return format!("{}\\", cleaned);
+        }
+        if let Some(idx) = cleaned.rfind(['/', '\\']) {
+            if idx == 0 {
+                return "/".to_string();
+            }
+            let parent = &cleaned[..idx];
+            if is_win && parent.len() == 2 && parent.as_bytes()[1] == b':' {
+                return format!("{}\\", parent);
+            }
+            return parent.to_string();
+        }
+        return if is_win {
+            "C:\\".to_string()
+        } else {
+            "/".to_string()
+        };
+    }
+
+    trimmed.to_string()
 }
 
 fn clean_key_identifier(id: &str) -> String {
@@ -396,6 +498,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_selected_job_idx(-1);
         ui.set_open_menu_job_idx(-1);
         ui.set_editing_job_idx(-1);
+        ui.set_is_naming_new_job(false);
+        ui.set_new_job_name_draft("".into());
+        ui.set_is_job_setup_unlocked(false);
         ui.set_current_mappings(
             std::rc::Rc::new(slint::VecModel::from(Vec::<DirectoryMapping>::new())).into(),
         );
@@ -450,6 +555,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into(),
         );
         ui.set_draft_job(selected.clone());
+        ui.set_is_naming_new_job(false);
+        ui.set_is_job_setup_unlocked(true);
     }
 
     fn sync_connection_jobs_ui(
@@ -688,6 +795,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     ui.set_connections(std::rc::Rc::new(slint::VecModel::from(slint_conns)).into());
 
+    if is_os_permissions_configured() {
+        ui.set_os_permissions_status("Configured (Saved)".into());
+    }
+
     {
         let initial_conn_id = active_connection_uuid(&ui);
         reset_draft_job_for_connection(&ui, initial_conn_id);
@@ -735,9 +846,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     {
                         continue;
                     }
-                    if transfer_type != "Remote Transfer" {
-                        continue;
-                    }
                     let mut target_ip = String::new();
                     let token_parts: Vec<&str> = token.split(';').collect();
                     let actual_token = token_parts[0];
@@ -748,15 +856,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     if host.contains('@') {
-                        target_ip = host.split('@').nth(1).unwrap_or("").to_string();
-                    } else if host == "Remote" {
+                        target_ip = host.split('@').nth(1).unwrap_or("").trim().to_string();
+                    } else if host == "Remote"
+                        || (host.trim().is_empty() && transfer_type == "Remote Transfer")
+                    {
                         if let Ok(parsed) =
                             simply_transfer_crypto::token::ConnectionToken::parse(actual_token)
                         {
                             target_ip = parsed.ip;
                         }
-                    } else {
-                        target_ip = host.clone();
+                    } else if !host.trim().is_empty() {
+                        target_ip = host.trim().to_string();
                     }
 
                     if !target_ip.is_empty() {
@@ -866,6 +976,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ui.on_open_log_file(|filename| {
         open_log(filename.as_str());
+    });
+
+    ui.on_open_url(|url| {
+        open_url_in_browser(url.as_str());
+    });
+
+    ui.on_copy_text(|text| {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text.to_string());
+        }
+    });
+
+    let ui_weak_refresh = ui.as_weak();
+    ui.on_refresh_browsers(move || {
+        if let Some(ui) = ui_weak_refresh.upgrade() {
+            populate_inline_browsers(&ui);
+        }
+    });
+
+    let ui_weak_perms = ui.as_weak();
+    ui.on_request_os_permissions(move || {
+        if is_os_permissions_configured() {
+            if let Some(ui) = ui_weak_perms.upgrade() {
+                ui.set_os_permissions_status("All Required Permissions Already Configured".into());
+            }
+            return;
+        }
+        if let Some(ui) = ui_weak_perms.upgrade() {
+            ui.set_os_permissions_status("Configuring one-time OS permissions...".into());
+        }
+        let ui_weak_done = ui_weak_perms.clone();
+        tokio::task::spawn_blocking(move || {
+            let home_ssh = get_user_home_dir().join(".ssh");
+            let _ = std::fs::create_dir_all(&home_ssh);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&home_ssh, std::fs::Permissions::from_mode(0o700));
+            }
+            save_os_permissions_configured();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak_done.upgrade() {
+                    ui.set_os_permissions_status(
+                        "Configured (Saved — One-Time Setup Complete)".into(),
+                    );
+                }
+            });
+        });
     });
 
     let ui_handle = ui.as_weak();
@@ -1391,26 +1549,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let mut conn_to_save = new_conn.clone();
 
-            tokio::spawn(async move {
-                if !simply_transfer_core::ssh_server::SshServer::is_installed() {
-                    log_event("connection", "SSH server is not installed. Prompting for privileges to install it...");
-                    if let Err(e) = simply_transfer_core::ssh_server::SshServer::install_server() {
-                        log_event("connection", &format!("Failed to install SSH server: {}", e));
-                    } else {
-                        log_event("connection", "SSH server installed successfully.");
-                    }
-                }
-
-                if !simply_transfer_core::ssh_server::SshServer::is_running() {
-                    log_event("connection", "SSH server is not running. Prompting for privileges to start it...");
-                    if let Err(e) = simply_transfer_core::ssh_server::SshServer::start_server() {
-                        log_event("connection", &format!("Failed to start SSH server: {}", e));
-                    } else {
-                        log_event("connection", "SSH server started successfully.");
-                    }
-                }
-            });
-
             if conn_to_save.transfer_type != "Remote Transfer" {
                 let mut pub_key = conn_to_save.token.trim().to_string();
                 if pub_key.starts_with("st:")
@@ -1423,6 +1561,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(gen_key) = key_mgr.generate_and_store() {
                         pub_key = gen_key;
                     }
+                }
+
+                if !pub_key.is_empty()
+                    && let Some(srv) = P2P_SERVER.get()
+                {
+                    let srv_clone = srv.clone();
+                    let pk_to_auth = pub_key.clone();
+                    tokio::spawn(async move {
+                        let _ = srv_clone.add_authorized_key_from_str(&pk_to_auth).await;
+                    });
                 }
 
                 // We must embed OUR local IP in the token so the remote device knows where to reach us.
@@ -1507,6 +1655,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ui.set_remote_verification_status("Connected".into());
 
                                                 save_connections(&conns);
+                                                populate_inline_browsers(&ui);
                                             }
                                         });
                                         return;
@@ -1537,7 +1686,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let token = conn_to_save.token.to_string();
                 if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                     if conn_to_save.host.trim().is_empty() || conn_to_save.host == "Remote" {
-                        conn_to_save.host = parsed.ip.clone().into();
+                        if let Some(u) = &parsed.user {
+                            conn_to_save.host = format!("{}@{}", u, parsed.ip).into();
+                        } else {
+                            conn_to_save.host = parsed.ip.clone().into();
+                        }
                     }
                     if conn_to_save.name == "Remote" {
                         conn_to_save.name = format!("Remote ({})", parsed.ip).into();
@@ -1552,19 +1705,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            let was_empty = conns.is_empty();
             conns.push(conn_to_save);
+            let new_idx = (conns.len() - 1) as i32;
             save_connections(&conns);
             let model = std::rc::Rc::new(slint::VecModel::from(conns));
             ui.set_connections(model.into());
-            if was_empty {
-                let conn_id = active_connection_uuid(&ui);
-                reset_draft_job_for_connection(&ui, conn_id);
-                if let Ok(reg) = reg_for_commit_conn.lock() {
-                    sync_connection_jobs_ui(&ui, &reg, conn_id);
-                }
-                populate_inline_browsers(&ui);
+            ui.set_selected_connection_idx(new_idx);
+
+            let conn_id = active_connection_uuid(&ui);
+            reset_draft_job_for_connection(&ui, conn_id);
+            if let Ok(reg) = reg_for_commit_conn.lock() {
+                sync_connection_jobs_ui(&ui, &reg, conn_id);
             }
+            populate_inline_browsers(&ui);
         }
     });
 
@@ -1581,7 +1734,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_weak = ui.as_weak();
     ui.on_fetch_directory(move |path, is_remote, is_dest| {
         let ui_weak = ui_weak.clone();
-        let path_str = path.to_string();
+        let path_str = normalize_browse_path(path.as_str());
 
         let mut token_str = String::new();
         let mut dest_ip = String::new();
@@ -1600,15 +1753,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if host.contains('@') {
                         let parts: Vec<&str> = host.split('@').collect();
-                        dest_user = parts[0].to_string();
+                        dest_user = parts[0].trim().to_string();
                         dest_ip = parts[1].trim().to_string();
-                    } else if host == "Remote" {
+                    } else if host == "Remote" || (host.trim().is_empty() && t_type == "Remote Transfer") {
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_ip = parsed.ip;
                             dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                         }
-                    } else {
-                        dest_ip = host.clone();
+                    } else if !host.trim().is_empty() {
+                        dest_ip = host.trim().to_string();
                         if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                             dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                         } else {
@@ -1634,24 +1787,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                        // Extract the sender's public key ID from the token (second part after semicolon)
-                        let private_key_id = match token_str.split(';').nth(1) {
-                            Some(key_id) => key_id.to_string(),
-                            None => {
-                                if t_type == "Remote Transfer" {
-                                    String::new()
-                                } else {
-                                    parsed.pub_key.clone()
-                                }
-                            }
-                        };
+                        let private_key_id = token_str
+                            .split(';')
+                            .nth(1)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| parsed.pub_key.clone());
 
-                        if !private_key_id.is_empty() {
-                            if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
-                                priv_pem_str = pem;
-                            } else {
-                                tracing::error!("on_fetch_directory: Failed to retrieve private key from keyring for pub_key {}", private_key_id);
-                            }
+                        if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
+                            priv_pem_str = pem;
+                        } else {
+                            tracing::error!(
+                                "on_fetch_directory: Failed to retrieve private key from keyring/vault for pub_key {}",
+                                private_key_id
+                            );
                         }
                     } else {
                         tracing::error!("on_fetch_directory: Failed to parse token {}", token_str);
@@ -1681,37 +1830,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
 
-                        let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
-                            .await
-                            .map(|out| out.trim() == "Windows")
-                            .unwrap_or(false);
-
-                        let mut resolved_path = path_str.clone();
-                        if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
-                            resolved_path = "C:\\".to_string();
-                        } else if !is_windows && (resolved_path.is_empty() || resolved_path == "\\") {
-                            resolved_path = "/".to_string();
-                        }
+                        let mut resolved_path = if path_str.trim().is_empty() {
+                            "/".to_string()
+                        } else {
+                            path_str.clone()
+                        };
                         final_path = resolved_path.clone();
 
-                        let cmd = if is_windows {
-                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", resolved_path)
-                        } else {
-                            format!("ls -1p \"{}\"", resolved_path)
-                        };
+                        // 1. Primary path: Native built-in Rust P2P directory listing (no shell / cmd.exe required)
+                        let native_cmd = format!("simply-transfer-list|{}", resolved_path);
+                        if let Ok(output) = ssh_client.execute_command(&native_cmd).await {
+                            let trimmed_out = output.trim();
+                            let is_native_format = !trimmed_out.starts_with("E|")
+                                && trimmed_out
+                                    .lines()
+                                    .all(|l| {
+                                        let t = l.trim();
+                                        t.is_empty() || t.starts_with("D|") || t.starts_with("F|")
+                                    });
+                            if is_native_format {
+                                success = true;
+                                for line in trimmed_out.lines() {
+                                    let line = line.trim();
+                                    if line.is_empty() {
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = line.splitn(3, '|').collect();
+                                    if parts.len() == 3 {
+                                        let is_dir = parts[0] == "D";
+                                        let name = parts[1];
+                                        let full_path = parts[2];
+                                        nodes.push(FileNode {
+                                            name: name.into(),
+                                            is_dir,
+                                            path: full_path.into(),
+                                            is_selected: false,
+                                            depth: 0,
+                                            is_expanded: false,
+                                            snapshot_type: get_file_snapshot_type(name).into(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
 
-                        match ssh_client.execute_command(&cmd).await {
-                            Ok(output) => {
-                                tracing::info!("Remote file listing command executed successfully: {}", cmd);
-                                tracing::info!("Raw output length: {}", output.len());
-                                tracing::debug!("Raw output content: {:?}", output);
+                        // 2. Fallback path for legacy peers
+                        if !success {
+                            let is_windows = ssh_client
+                                .execute_command("cmd.exe /c echo Windows")
+                                .await
+                                .map(|out| out.trim() == "Windows")
+                                .unwrap_or(false);
+
+                            if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
+                                resolved_path = "C:\\".to_string();
+                            } else if !is_windows
+                                && (resolved_path.is_empty() || resolved_path == "\\")
+                            {
+                                resolved_path = "/".to_string();
+                            }
+                            final_path = resolved_path.clone();
+
+                            let cmd = if is_windows {
+                                format!(
+                                    "powershell -NoProfile -NonInteractive -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"",
+                                    resolved_path
+                                )
+                            } else {
+                                format!("ls -1p \"{}\"", resolved_path)
+                            };
+
+                            if let Ok(output) = ssh_client.execute_command(&cmd).await {
                                 success = true;
                                 for line in output.lines() {
                                     let line = line.trim();
-                                    if line.is_empty() { continue; }
+                                    if line.is_empty() {
+                                        continue;
+                                    }
                                     let is_dir = line.ends_with('/');
-                                    let name = if is_dir { &line[..line.len()-1] } else { line };
-                                    let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
+                                    let name = if is_dir {
+                                        &line[..line.len() - 1]
+                                    } else {
+                                        line
+                                    };
+                                    let full_path = if resolved_path.ends_with('/')
+                                        || resolved_path.ends_with('\\')
+                                    {
                                         format!("{}{}", resolved_path, name)
                                     } else {
                                         let sep = if is_windows { "\\" } else { "/" };
@@ -1727,9 +1931,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         snapshot_type: get_file_snapshot_type(name).into(),
                                     });
                                 }
-                            }
-                            Err(e) => {
-                                tracing::error!("Remote file listing command failed: {} - Error: {}", cmd, e);
                             }
                         }
                     }
@@ -1868,18 +2069,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if idx < conns.len() {
                 let host = conns[idx].host.to_string();
                 let token = conns[idx].token.to_string();
+                let t_type = conns[idx].transfer_type.to_string();
                 token_str = token.clone();
                 if host.contains('@') {
                     let parts: Vec<&str> = host.split('@').collect();
-                    dest_user = parts[0].to_string();
+                    dest_user = parts[0].trim().to_string();
                     dest_ip = parts[1].trim().to_string();
-                } else if host == "Remote" {
+                } else if host == "Remote" || (host.trim().is_empty() && t_type == "Remote Transfer") {
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                         dest_ip = parsed.ip;
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     }
-                } else {
-                    dest_ip = host;
+                } else if !host.trim().is_empty() {
+                    dest_ip = host.trim().to_string();
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     } else {
@@ -1921,12 +2123,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
                         let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
-                        // Extract the sender's public key ID from the token (second part after semicolon)
-                        let private_key_id = if let Some(parts) = token_str.split(';').nth(1) {
-                            parts.to_string()
-                        } else {
-                            parsed.pub_key.clone() // fallback to receiver's public key
-                        };
+                        let private_key_id = token_str
+                            .split(';')
+                            .nth(1)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| parsed.pub_key.clone());
 
                         if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
                             priv_pem_str = pem;
@@ -1939,41 +2141,102 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tracing::error!("on_expand_node: SSH connect to {} failed: {}", dest_ip, e);
                     } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &priv_pem_str, None).await {
                         tracing::error!("on_expand_node: SSH auth for {}@{} failed: {}", dest_user, dest_ip, e);
-                    }
-                    else {
-                        let is_windows = ssh_client.execute_command("cmd.exe /c echo Windows")
-                            .await.map(|out| out.trim() == "Windows").unwrap_or(false);
-
-                        let mut resolved_path = node_path.clone();
-                        let cmd = if is_windows {
-                            if resolved_path.is_empty() { resolved_path = "C:\\".to_string(); }
-                            format!("powershell -NoProfile -Command \"Get-ChildItem -Path '{}' | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"", resolved_path.replace("'", "''"))
+                    } else {
+                        let mut resolved_path = if node_path.trim().is_empty() {
+                            "/".to_string()
                         } else {
-                            if resolved_path.is_empty() { resolved_path = "/".to_string(); }
-                            format!("ls -1p '{}'", resolved_path.replace("'", "'\\''"))
+                            node_path.clone()
                         };
+                        let mut expanded_via_native = false;
 
-                        if let Ok(output) = ssh_client.execute_command(&cmd).await {
-                            for line in output.lines() {
-                                let line = line.trim();
-                                if line.is_empty() { continue; }
-                                let is_dir = line.ends_with('/');
-                                let name = if is_dir { &line[..line.len()-1] } else { line };
-                                let full_path = if resolved_path.ends_with('/') || resolved_path.ends_with('\\') {
-                                    format!("{}{}", resolved_path, name)
-                                } else {
-                                    let sep = if is_windows { "\\" } else { "/" };
-                                    format!("{}{}{}", resolved_path, sep, name)
-                                };
-                                nodes.push(FileNode {
-                                    name: name.into(),
-                                    is_dir,
-                                    path: full_path.into(),
-                                    is_selected: false,
-                                    depth,
-                                    is_expanded: false,
-                                    snapshot_type: get_file_snapshot_type(name).into(),
-                                });
+                        let native_cmd = format!("simply-transfer-list|{}", resolved_path);
+                        if let Ok(output) = ssh_client.execute_command(&native_cmd).await {
+                            let trimmed_out = output.trim();
+                            let is_native_format = !trimmed_out.starts_with("E|")
+                                && trimmed_out
+                                    .lines()
+                                    .all(|l| {
+                                        let t = l.trim();
+                                        t.is_empty() || t.starts_with("D|") || t.starts_with("F|")
+                                    });
+                            if is_native_format {
+                                expanded_via_native = true;
+                                for line in trimmed_out.lines() {
+                                    let line = line.trim();
+                                    if line.is_empty() {
+                                        continue;
+                                    }
+                                    let parts: Vec<&str> = line.splitn(3, '|').collect();
+                                    if parts.len() == 3 {
+                                        let is_dir = parts[0] == "D";
+                                        let name = parts[1];
+                                        let full_path = parts[2];
+                                        nodes.push(FileNode {
+                                            name: name.into(),
+                                            is_dir,
+                                            path: full_path.into(),
+                                            is_selected: false,
+                                            depth,
+                                            is_expanded: false,
+                                            snapshot_type: get_file_snapshot_type(name).into(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        if !expanded_via_native {
+                            let is_windows = ssh_client
+                                .execute_command("cmd.exe /c echo Windows")
+                                .await
+                                .map(|out| out.trim() == "Windows")
+                                .unwrap_or(false);
+
+                            let cmd = if is_windows {
+                                if resolved_path.is_empty() {
+                                    resolved_path = "C:\\".to_string();
+                                }
+                                format!(
+                                    "powershell -NoProfile -NonInteractive -Command \"Get-ChildItem -Path '{}' | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"",
+                                    resolved_path.replace("'", "''")
+                                )
+                            } else {
+                                if resolved_path.is_empty() {
+                                    resolved_path = "/".to_string();
+                                }
+                                format!("ls -1p '{}'", resolved_path.replace("'", "'\\''"))
+                            };
+
+                            if let Ok(output) = ssh_client.execute_command(&cmd).await {
+                                for line in output.lines() {
+                                    let line = line.trim();
+                                    if line.is_empty() {
+                                        continue;
+                                    }
+                                    let is_dir = line.ends_with('/');
+                                    let name = if is_dir {
+                                        &line[..line.len() - 1]
+                                    } else {
+                                        line
+                                    };
+                                    let full_path = if resolved_path.ends_with('/')
+                                        || resolved_path.ends_with('\\')
+                                    {
+                                        format!("{}{}", resolved_path, name)
+                                    } else {
+                                        let sep = if is_windows { "\\" } else { "/" };
+                                        format!("{}{}{}", resolved_path, sep, name)
+                                    };
+                                    nodes.push(FileNode {
+                                        name: name.into(),
+                                        is_dir,
+                                        path: full_path.into(),
+                                        is_selected: false,
+                                        depth,
+                                        is_expanded: false,
+                                        snapshot_type: get_file_snapshot_type(name).into(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -2323,6 +2586,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = ui_weak.upgrade() {
             let conn_id = active_connection_uuid(&ui);
             reset_draft_job_for_connection(&ui, conn_id);
+            ui.set_is_naming_new_job(true);
+            ui.set_new_job_name_draft("".into());
+            ui.set_is_job_setup_unlocked(false);
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_create_named_job = job_registry.clone();
+    ui.on_create_named_transfer_job(move |raw_name| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            let existing_jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+            let trimmed = raw_name.trim().to_string();
+            let final_name = if trimmed.is_empty() {
+                if existing_jobs.is_empty() {
+                    "Default Transfer Task".to_string()
+                } else {
+                    format!("Transfer Task {}", existing_jobs.len() + 1)
+                }
+            } else {
+                trimmed
+            };
+
+            reset_draft_job_for_connection(&ui, conn_id);
+            let job_id = uuid::Uuid::new_v4();
+            let mut draft = ui.get_draft_job();
+            draft.job_id = job_id.to_string().into();
+            draft.connection_id = conn_id.to_string().into();
+            draft.name = final_name.clone().into();
+            ui.set_draft_job(draft.clone());
+
+            let new_job = simply_transfer_core::TransferJob {
+                job_id,
+                connection_id: conn_id,
+                name: final_name,
+                job_type: simply_transfer_core::TransferJobType::Backup,
+                source_paths: Vec::new(),
+                destination_path: PathBuf::new(),
+                mappings: Vec::new(),
+                schedule: Some(simply_transfer_core::ScheduleConfig {
+                    mode: draft.job_type.to_string(),
+                    interval_secs: None,
+                    window_start: Some(draft.start_permitted.to_string()),
+                    window_end: Some(draft.finish_permitted.to_string()),
+                    sync_frequency: Some(draft.sync_frequency.to_string()),
+                    active_days: Some(draft.active_days.to_string()),
+                }),
+                use_snapshots: draft.use_snapshots,
+            };
+
+            if let Ok(mut reg) = reg_for_create_named_job.lock() {
+                reg.upsert_job(new_job);
+                save_job_registry(&reg);
+                sync_connection_jobs_ui(&ui, &reg, conn_id);
+                let updated_jobs: Vec<TransferJobUi> = ui.get_connection_jobs().iter().collect();
+                let job_id_str = job_id.to_string();
+                if let Some(pos) = updated_jobs
+                    .iter()
+                    .position(|j| j.job_id.as_str() == job_id_str.as_str())
+                {
+                    ui.set_selected_job_idx(pos as i32);
+                }
+            }
+
+            ui.set_is_naming_new_job(false);
+            ui.set_new_job_name_draft("".into());
+            ui.set_is_job_setup_unlocked(true);
             populate_inline_browsers(&ui);
         }
     });
@@ -2665,6 +2995,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = writeln!(file, "{}", pub_key_line);
                                 log_event("connection", "Appended public key to administrators_authorized_keys.");
                             } else {
+                                use std::os::windows::process::CommandExt;
                                 let ps_inner = format!(
                                     "$dir = 'C:\\ProgramData\\ssh'; \
                                      if (!(Test-Path $dir)) {{ New-Item -ItemType Directory -Path $dir -Force | Out-Null }}; \
@@ -2678,11 +3009,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                                 let encoded_inner = simply_transfer_crypto::token::encode_utf16le_base64(&ps_inner);
                                 let outer_cmd = format!(
-                                    "Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand {}'",
+                                    "Start-Process powershell -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}'",
                                     encoded_inner
                                 );
                                 match std::process::Command::new("powershell")
-                                    .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &outer_cmd])
+                                    .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &outer_cmd])
+                                    .creation_flags(0x08000000)
                                     .status()
                                 {
                                     Ok(st) if st.success() => {
@@ -2707,22 +3039,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = std::process::Command::new("/sbin/restorecon").arg("-R").arg(&ssh_dir).status();
                     }
 
-                    // Ensure OS SSH server is installed/running asynchronously in the background (non-blocking)
-                    tokio::task::spawn_blocking(|| {
-                        if !simply_transfer_core::ssh_server::SshServer::is_installed() {
-                            log_event("connection", "OS SSH server not detected; attempting background installation...");
-                            let _ = simply_transfer_core::ssh_server::SshServer::install_server();
-                        }
-                        if !simply_transfer_core::ssh_server::SshServer::is_running() {
-                            let _ = simply_transfer_core::ssh_server::SshServer::start_server();
-                        }
-                    });
-
                     // Trigger remote handshake (TCP connect to source device)
                     let addr = format!("{}:{}", parsed.ip, parsed.port);
                     log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
 
-                    // Generate our own key pair and securely store it in the system keyring
+                    // Generate our own key pair and securely store it in the system keyring & encrypted vault
                     let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     let mut my_pub_key_id = String::new();
                     match key_mgr.generate_and_store() {
@@ -2744,6 +3065,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         });
                         return;
+                    }
+
+                    if let Some(srv) = P2P_SERVER.get() {
+                        let _ = srv.add_authorized_key_from_str(my_pub_key_id.trim()).await;
+                    }
+
+                    let fallback_remote_user = parsed
+                        .user
+                        .clone()
+                        .unwrap_or_else(|| "simply-transfer".to_string());
+                    let fallback_host = format!("{}@{}", fallback_remote_user, parsed.ip);
+                    let default_appended_token = format!("{};{}", token, my_pub_key_id);
+                    {
+                        let ui_init = ui_weak.clone();
+                        let host_init = fallback_host.clone();
+                        let tok_init = default_appended_token.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_init.upgrade() {
+                                ui.set_remote_verified_host(host_init.into());
+                                ui.set_remote_verified_full_token(tok_init.into());
+                            }
+                        });
                     }
 
                     // Use a short timeout for the handshake
@@ -2768,7 +3111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     log_event("connection", "Remote token validated and handshake succeeded.");
 
                                     if let Ok(res) = serde_json::from_str::<serde_json::Value>(&line) {
-                                        let remote_user = res["user"].as_str().unwrap_or("simply-transfer").to_string();
+                                        let remote_user = res["user"].as_str().unwrap_or(&fallback_remote_user).to_string();
                                         let new_host = format!("{}@{}", remote_user, parsed.ip);
                                         let clone_ui = ui_weak.clone();
                                         let token_clone = token.clone();
@@ -2794,6 +3137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ui.set_remote_verification_status("Verified".into());
                                                 ui.set_remote_verified_full_token(appended_token.clone().into());
                                                 ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns)).into());
+                                                populate_inline_browsers(&ui);
                                             }
                                         });
                                     } else {
@@ -2882,9 +3226,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let ui_weak = ui.as_weak();
+    let reg_for_purge = job_registry.clone();
     ui.on_purge_orphaned_keys(move || {
-        tracing::warn!("Purging orphaned keys from OS keyring requires manual intervention via secret-tool currently.");
-        0
+        let mut active_keys: Vec<String> = Vec::new();
+        let mut active_pub_keys: Vec<String> = Vec::new();
+        if let Some(ui) = ui_weak.upgrade() {
+            let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            for c in conns {
+                let tok = c.token.to_string();
+                let parts: Vec<&str> = tok.split(';').collect();
+                if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(parts[0])
+                {
+                    let clean_pk = clean_key_identifier(&parsed.pub_key);
+                    if !clean_pk.is_empty() {
+                        active_keys.push(clean_pk);
+                        active_pub_keys.push(parsed.pub_key);
+                    }
+                }
+                if parts.len() > 1 {
+                    let peer_raw = parts[1].trim().to_string();
+                    let clean_peer = clean_key_identifier(&peer_raw);
+                    if !clean_peer.is_empty() {
+                        active_keys.push(clean_peer);
+                        active_pub_keys.push(peer_raw);
+                    }
+                }
+            }
+        }
+        if let Ok(reg) = reg_for_purge.lock() {
+            for conn in reg.connections.values() {
+                if !conn.auth_config.key_id.is_empty() {
+                    active_keys.push(conn.auth_config.key_id.clone());
+                }
+                if let Some(vpn) = &conn.vpn_config {
+                    active_keys.push(format!("wg_priv_{}", vpn.peer_public_key));
+                    active_keys.push(format!("wg_psk_{}", vpn.peer_public_key));
+                }
+            }
+        }
+
+        let storage = simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+        let vault_purged = storage.purge_orphaned_keys(&active_keys).unwrap_or(0);
+
+        let p2p_purged = if let Some(srv) = P2P_SERVER.get() {
+            let srv_clone = srv.clone();
+            let pks = active_pub_keys.clone();
+            tokio::task::block_in_place(move || {
+                tokio::runtime::Handle::current()
+                    .block_on(async move { srv_clone.purge_unauthorized_keys(&pks).await })
+            })
+        } else {
+            0
+        };
+
+        let total = vault_purged + p2p_purged;
+        log_event(
+            "connection",
+            &format!(
+                "Purged {} orphaned keys ({} vault, {} P2P authorized keys).",
+                total, vault_purged, p2p_purged
+            ),
+        );
+        total as i32
     });
 
     let ui_weak = ui.as_weak();

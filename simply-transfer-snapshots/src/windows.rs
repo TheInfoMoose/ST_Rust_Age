@@ -1,5 +1,16 @@
 use crate::{Snapshot, SnapshotDriver, SnapshotError};
 use std::path::{Path, PathBuf};
+
+fn hidden_powershell() -> std::process::Command {
+    let mut cmd = std::process::Command::new("powershell");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 pub struct VssSnapshotDriver;
 
 impl Default for VssSnapshotDriver {
@@ -36,7 +47,7 @@ impl SnapshotDriver for VssSnapshotDriver {
             drive
         );
 
-        let output = std::process::Command::new("powershell")
+        let output = hidden_powershell()
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .map_err(|e| SnapshotError::CreationFailed(e.to_string()))?;
@@ -83,7 +94,7 @@ impl SnapshotDriver for VssSnapshotDriver {
             snapshot.id
         );
 
-        let output = std::process::Command::new("powershell")
+        let output = hidden_powershell()
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .map_err(|e| SnapshotError::CleanupFailed(e.to_string()))?;
@@ -121,7 +132,7 @@ pub fn list_local_volumes() -> Result<Vec<crate::VolumeInfo>, SnapshotError> {
     }";
 
     let mut volumes = Vec::new();
-    if let Ok(output) = std::process::Command::new("powershell")
+    if let Ok(output) = hidden_powershell()
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         && output.status.success()

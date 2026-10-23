@@ -90,11 +90,12 @@ pub fn get_active_network_info() -> (String, String) {
 
     #[cfg(target_os = "windows")]
     {
-        // Use PowerShell to get active NetAdapter info
+        use std::os::windows::process::CommandExt;
+        // Use PowerShell to get active NetAdapter info without flashing a console window
         let ps_cmd = "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, MediaType, LinkSpeed | ConvertTo-Json";
         if let Ok(output) = Command::new("powershell")
-            .arg("-Command")
-            .arg(ps_cmd)
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
         {
             let json_str = String::from_utf8_lossy(&output.stdout);

@@ -45,8 +45,14 @@ impl SecureStorage {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
-        let dir = PathBuf::from(home).join(".simply-transfer");
-        let _ = std::fs::create_dir_all(&dir);
+        let primary_dir = PathBuf::from(&home).join(".simply-transfer");
+        let dir = if std::fs::create_dir_all(&primary_dir).is_ok() {
+            primary_dir
+        } else {
+            let fallback_dir = std::env::temp_dir().join("simply-transfer-vault");
+            let _ = std::fs::create_dir_all(&fallback_dir);
+            fallback_dir
+        };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -120,19 +126,16 @@ impl SecureStorage {
         Ok(())
     }
 
-    /// Store a sensitive string securely. Prioritizes the OS keyring, with an AES-256-GCM encrypted vault fallback.
+    /// Store a sensitive string securely. Synchronizes with both the OS keyring and the AES-256-GCM encrypted vault fallback
+    /// so transient D-Bus Secret Service sessions (e.g. on Arch/CachyOS Linux) never lose keys across threads or restarts.
     pub fn set_secret(&self, account: &str, mut secret: String) -> Result<(), CryptoError> {
-        let entry_res = self.get_entry(account);
-        let keyring_ok = match entry_res {
-            Ok(entry) => entry.set_password(&secret).is_ok(),
-            Err(_) => false,
-        };
-
-        if !keyring_ok {
-            let mut vault = self.load_encrypted_vault();
-            vault.insert(account.to_string(), secret.clone());
-            self.save_encrypted_vault(&vault)?;
+        if let Ok(entry) = self.get_entry(account) {
+            let _ = entry.set_password(&secret);
         }
+
+        let mut vault = self.load_encrypted_vault();
+        vault.insert(account.to_string(), secret.clone());
+        self.save_encrypted_vault(&vault)?;
         secret.zeroize();
         Ok(())
     }
@@ -141,11 +144,14 @@ impl SecureStorage {
     pub fn get_secret(&self, account: &str) -> Result<String, CryptoError> {
         if let Ok(entry) = self.get_entry(account)
             && let Ok(pwd) = entry.get_password()
+            && !pwd.trim().is_empty()
         {
             return Ok(pwd);
         }
         let vault = self.load_encrypted_vault();
-        if let Some(secret) = vault.get(account) {
+        if let Some(secret) = vault.get(account)
+            && !secret.trim().is_empty()
+        {
             return Ok(secret.clone());
         }
         Err(CryptoError::NotFound)
@@ -161,6 +167,33 @@ impl SecureStorage {
             let _ = self.save_encrypted_vault(&vault);
         }
         Ok(())
+    }
+
+    /// Purge all stored secrets that are not referenced in `active_accounts`.
+    /// Returns the number of orphaned keys purged.
+    pub fn purge_orphaned_keys(&self, active_accounts: &[String]) -> Result<usize, CryptoError> {
+        let mut vault = self.load_encrypted_vault();
+        let mut to_remove = Vec::new();
+        for key in vault.keys() {
+            let is_managed_key = key.starts_with("key_")
+                || key.starts_with("AAAAC3NzaC1lZDI1NTE5")
+                || key.starts_with("ssh-ed25519")
+                || key.starts_with("wg_");
+            if is_managed_key && !active_accounts.iter().any(|a| a == key) {
+                to_remove.push(key.clone());
+            }
+        }
+        let purged_count = to_remove.len();
+        for key in &to_remove {
+            if let Ok(entry) = self.get_entry(key) {
+                let _ = entry.delete_credential();
+            }
+            vault.remove(key);
+        }
+        if purged_count > 0 {
+            self.save_encrypted_vault(&vault)?;
+        }
+        Ok(purged_count)
     }
 
     /// Encrypts a sensitive value at rest using AES-256-GCM and returns a base64-encoded nonce+ciphertext.
@@ -221,6 +254,21 @@ mod tests {
 
         storage.delete_secret(account).unwrap();
         assert!(storage.get_secret(account).is_err());
+
+        // Test purge_orphaned_keys
+        storage
+            .set_secret("key_active_1", "secret_active".to_string())
+            .unwrap();
+        storage
+            .set_secret("key_orphan_1", "secret_orphan".to_string())
+            .unwrap();
+        let purged = storage
+            .purge_orphaned_keys(&["key_active_1".to_string()])
+            .unwrap();
+        assert!(purged >= 1);
+        assert!(storage.get_secret("key_orphan_1").is_err());
+        assert_eq!(storage.get_secret("key_active_1").unwrap(), "secret_active");
+        storage.delete_secret("key_active_1").unwrap();
     }
 }
 pub mod keys;
