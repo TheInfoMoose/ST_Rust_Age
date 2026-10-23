@@ -59,15 +59,76 @@ pub enum TransferEvent {
     TransferFailed(String),
 }
 
+/// Minimum interval between progress telemetry emissions (~12 Hz).
+pub const PROGRESS_THROTTLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(85);
+
+/// Throttles high-frequency transfer progress callbacks to at most once every `85ms`
+/// (plus unconditional emission at 100% completion) and computes a rolling `bytes_per_sec`.
+#[derive(Debug, Clone)]
+pub struct ProgressThrottler {
+    last_emit: std::time::Instant,
+    last_bytes: u64,
+    rolling_bytes_per_sec: u64,
+    initialized: bool,
+}
+
+impl ProgressThrottler {
+    pub fn new(initial_offset: u64) -> Self {
+        Self {
+            last_emit: std::time::Instant::now(),
+            last_bytes: initial_offset,
+            rolling_bytes_per_sec: 0,
+            initialized: false,
+        }
+    }
+
+    /// Evaluates whether a progress update should be emitted now.
+    /// Returns `Some(rolling_bytes_per_sec)` when the `85ms` throttle window has elapsed
+    /// or when `progress_bytes >= total_bytes` (`100%` completion).
+    pub fn should_emit(&mut self, progress_bytes: u64, total_bytes: u64) -> Option<u64> {
+        let now = std::time::Instant::now();
+        let is_complete = total_bytes > 0 && progress_bytes >= total_bytes;
+        let elapsed = now.duration_since(self.last_emit);
+
+        if !self.initialized || is_complete || elapsed >= PROGRESS_THROTTLE_INTERVAL {
+            let elapsed_secs = elapsed.as_secs_f64();
+            let delta_bytes = progress_bytes.saturating_sub(self.last_bytes);
+            if elapsed_secs > 0.0 {
+                let window_bps = (delta_bytes as f64 / elapsed_secs) as u64;
+                self.rolling_bytes_per_sec = if self.rolling_bytes_per_sec == 0 {
+                    window_bps
+                } else {
+                    ((self.rolling_bytes_per_sec as f64 * 0.7) + (window_bps as f64 * 0.3)) as u64
+                };
+            }
+            self.last_emit = now;
+            self.last_bytes = progress_bytes;
+            self.initialized = true;
+            Some(self.rolling_bytes_per_sec)
+        } else {
+            None
+        }
+    }
+
+    pub fn rolling_bytes_per_sec(&self) -> u64 {
+        self.rolling_bytes_per_sec
+    }
+}
+
 /// The core engine orchestrating the 3-phase transfer.
 pub struct TransferEngine {
     source_dir: PathBuf,
+    source_paths: Vec<PathBuf>,
     destination_dir: String, // Remote path
     event_sender: mpsc::Sender<TransferEvent>,
     ssh_client: Arc<dyn SshClient>,
     validation_ssh_client: Arc<dyn SshClient>,
     snapshot_driver: Arc<dyn SnapshotDriver>,
     control_rx: Option<watch::Receiver<ControlSignal>>,
+    rolling_bytes_per_sec: Arc<std::sync::atomic::AtomicU64>,
+    connection_id: Option<uuid::Uuid>,
+    connection_pool: Option<crate::russh_client::SshConnectionPool>,
+    vpn_tunnel_manager: Option<crate::firewall::VpnTunnelManager>,
 }
 
 impl TransferEngine {
@@ -80,7 +141,97 @@ impl TransferEngine {
         snapshot_driver: Arc<dyn SnapshotDriver>,
         control_rx: Option<watch::Receiver<ControlSignal>>,
     ) -> Self {
+        let source_paths = vec![source_dir.clone()];
         Self {
+            source_dir,
+            source_paths,
+            destination_dir,
+            event_sender,
+            ssh_client,
+            validation_ssh_client,
+            snapshot_driver,
+            control_rx,
+            rolling_bytes_per_sec: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            connection_id: None,
+            connection_pool: None,
+            vpn_tunnel_manager: None,
+        }
+    }
+
+    /// Configures multiple source paths (which may span multiple local volumes/drives) for this job.
+    pub fn with_source_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        if let Some(first) = paths.first() {
+            self.source_dir = first.clone();
+        }
+        self.source_paths = paths;
+        self
+    }
+
+    /// Associates this `TransferEngine` with a `connection_id` and `SshConnectionPool`
+    /// so concurrent `TransferJob` runs reuse the authenticated SSH session and multiplex channels.
+    pub fn with_connection_pool(
+        mut self,
+        connection_id: uuid::Uuid,
+        pool: crate::russh_client::SshConnectionPool,
+    ) -> Self {
+        self.connection_id = Some(connection_id);
+        self.connection_pool = Some(pool);
+        self
+    }
+
+    /// Associates a `VpnTunnelManager` so scoped WAN tunnels are torn down cleanly when jobs finish.
+    pub fn with_vpn_tunnel_manager(
+        mut self,
+        connection_id: uuid::Uuid,
+        manager: crate::firewall::VpnTunnelManager,
+    ) -> Self {
+        self.connection_id = Some(connection_id);
+        self.vpn_tunnel_manager = Some(manager);
+        self
+    }
+
+    /// Constructs a `TransferEngine` for a `TransferJob` by reusing or establishing an authenticated
+    /// session in `SshConnectionPool` for `job.connection_id`. Both transfer and validation
+    /// multiplex dedicated channels (`channel_open_session`) over the same pooled session.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn from_job_with_pool(
+        job: &crate::registry::TransferJob,
+        profile: &crate::registry::ConnectionProfile,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+        pool: crate::russh_client::SshConnectionPool,
+        event_sender: mpsc::Sender<TransferEvent>,
+        snapshot_driver: Arc<dyn SnapshotDriver>,
+        control_rx: Option<watch::Receiver<ControlSignal>>,
+    ) -> Result<Self, EngineError> {
+        let tunnel_mgr = crate::firewall::VpnTunnelManager::new();
+        let storage = simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+        let pooled_client = pool
+            .get_or_connect_with_vpn(
+                job.connection_id,
+                &profile.host,
+                profile.port,
+                &profile.username,
+                private_key_pem,
+                passphrase,
+                profile.vpn_config.as_ref(),
+                &tunnel_mgr,
+                &storage,
+            )
+            .await
+            .map_err(|e| EngineError::Network(e.to_string()))?;
+
+        let source_dir = job
+            .source_paths
+            .first()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."));
+        let destination_dir = job.destination_path.to_string_lossy().to_string();
+
+        let ssh_client: Arc<dyn SshClient> = pooled_client.clone();
+        let validation_ssh_client: Arc<dyn SshClient> = pooled_client;
+
+        Ok(Self::new(
             source_dir,
             destination_dir,
             event_sender,
@@ -88,28 +239,73 @@ impl TransferEngine {
             validation_ssh_client,
             snapshot_driver,
             control_rx,
-        }
+        )
+        .with_source_paths(job.source_paths.clone())
+        .with_connection_pool(job.connection_id, pool)
+        .with_vpn_tunnel_manager(job.connection_id, tunnel_mgr))
+    }
+
+    /// Returns all discovered local volumes/drives on this machine.
+    pub fn list_local_volumes() -> Result<Vec<simply_transfer_snapshots::VolumeInfo>, EngineError> {
+        simply_transfer_snapshots::list_local_volumes()
+            .map_err(|e| EngineError::PhaseError(e.to_string()))
+    }
+
+    /// Queries all mounted volumes/drives on the remote server over the active SSH session.
+    pub async fn list_remote_volumes(
+        &self,
+    ) -> Result<Vec<simply_transfer_snapshots::VolumeInfo>, EngineError> {
+        crate::russh_client::list_remote_volumes_via_ssh(self.ssh_client.as_ref())
+            .await
+            .map_err(|e| EngineError::Network(e.to_string()))
+    }
+
+    /// Returns the most recently computed rolling transfer throughput in bytes per second.
+    pub fn rolling_bytes_per_sec(&self) -> u64 {
+        self.rolling_bytes_per_sec
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Execute the full 3-phase transfer protocol.
     pub async fn execute(&self) -> Result<(), EngineError> {
         self.emit_phase(0, "Snapshot Preparation".to_string()).await;
 
-        // Take a snapshot
-        let snapshot = match self.snapshot_driver.create_snapshot(&self.source_dir) {
-            Ok(s) => Some(s),
+        // Discover local volumes and group source_paths by owning volume to create one snapshot per unique volume
+        let local_volumes = simply_transfer_snapshots::list_local_volumes().unwrap_or_default();
+        let paths_to_group = if self.source_paths.is_empty() {
+            vec![self.source_dir.clone()]
+        } else {
+            self.source_paths.clone()
+        };
+        let grouped_by_vol =
+            simply_transfer_snapshots::group_paths_by_volume(&paths_to_group, &local_volumes);
+        let unique_volumes: Vec<PathBuf> = grouped_by_vol.keys().cloned().collect();
+
+        let snapshot_set = match self.snapshot_driver.create_snapshot_set(&unique_volumes) {
+            Ok(set) => Some(set),
             Err(e) => {
                 warn!(
-                    "Failed to create OS snapshot, proceeding with live filesystem: {}",
+                    "Failed to create multi-volume OS snapshot set, proceeding with live filesystem: {}",
                     e
                 );
                 None
             }
         };
 
-        let active_source_dir = if let Some(ref s) = snapshot {
+        let owning_volume =
+            simply_transfer_snapshots::resolve_owning_volume(&self.source_dir, &local_volumes)
+                .unwrap_or_else(|| {
+                    unique_volumes
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| PathBuf::from("/"))
+                });
+
+        let active_source_dir = if let Some(ref set) = snapshot_set
+            && let Some(snap) = set.get(&owning_volume)
+        {
             self.snapshot_driver
-                .resolve_snapshot_path(s, &self.source_dir)
+                .resolve_snapshot_path_for_volume(snap, &owning_volume, &self.source_dir)
                 .unwrap_or_else(|_| self.source_dir.clone())
         } else {
             self.source_dir.clone()
@@ -209,7 +405,7 @@ impl TransferEngine {
             to_skip,
         };
 
-        let final_snapshot_type = if snapshot.is_some() {
+        let final_snapshot_type = if snapshot_set.is_some() {
             self.snapshot_driver.snapshot_type().to_string()
         } else {
             "Live".to_string()
@@ -450,7 +646,7 @@ impl TransferEngine {
                 let event_sender = self.event_sender.clone();
                 let validation_tx = validation_tx.clone();
                 let failed_count_atomic = failed_count_atomic.clone();
-
+                let rolling_bps = self.rolling_bytes_per_sec.clone();
 
                 async move {
                     if let Some(ref rx) = rx_clone {
@@ -500,16 +696,36 @@ impl TransferEngine {
                     for attempt in 0..=max_retries {
                         let file_progress = file.clone();
                         let sender = event_sender.clone();
+                        let rolling_bps_cb = rolling_bps.clone();
+                        let throttler = std::sync::Mutex::new(ProgressThrottler::new(offset));
                         let progress_cb = Box::new(move |progress: u64| {
-                            let _ = sender.try_send(TransferEvent::FileStatusChanged(
-                                file_progress.clone(),
-                                FileTransferStatus::Transferring { progress_bytes: progress, total_bytes: size },
-                            ));
+                            if let Ok(mut guard) = throttler.lock()
+                                && let Some(bps) = guard.should_emit(progress, size)
+                            {
+                                rolling_bps_cb.store(bps, Ordering::Relaxed);
+                                let _ = sender.try_send(TransferEvent::FileStatusChanged(
+                                    file_progress.clone(),
+                                    FileTransferStatus::Transferring {
+                                        progress_bytes: progress,
+                                        total_bytes: size,
+                                    },
+                                ));
+                            }
                         });
 
                         let upload_cancel_rx = rx_clone.clone().unwrap_or_else(|| tokio::sync::watch::channel(ControlSignal::Run).1);
                         match ssh_client.upload_file(&local_path, &remote_path, offset, Some(progress_cb), upload_cancel_rx).await {
                             Ok(_) => {
+                                // Unconditional 100% progress & completion emission
+                                let _ = event_sender
+                                    .send(TransferEvent::FileStatusChanged(
+                                        file.clone(),
+                                        FileTransferStatus::Transferring {
+                                            progress_bytes: size,
+                                            total_bytes: size,
+                                        },
+                                    ))
+                                    .await;
                                 let _ = event_sender.send(TransferEvent::FileStatusChanged(file.clone(), FileTransferStatus::Completed)).await;
                                 let _ = validation_tx.send(file.clone()).await;
                                 break;
@@ -558,11 +774,18 @@ impl TransferEngine {
             failed_count += val_failed;
         }
 
-        // Cleanup snapshot
-        if let Some(ref s) = snapshot
-            && let Err(e) = self.snapshot_driver.cleanup_snapshot(s)
+        // Cleanup all snapshots in the multi-volume snapshot set
+        if let Some(ref set) = snapshot_set
+            && let Err(e) = self.snapshot_driver.cleanup_snapshot_set(set)
         {
-            warn!("Failed to clean up OS snapshot: {}", e);
+            warn!("Failed to clean up OS snapshot set: {}", e);
+        }
+
+        // Tear down scoped WAN VPN tunnel when job finishes (unless persistent_tunnel is enabled)
+        if let (Some(conn_id), Some(tunnel_mgr)) = (self.connection_id, &self.vpn_tunnel_manager)
+            && let Err(e) = tunnel_mgr.teardown_tunnel(conn_id, false).await
+        {
+            warn!("Failed to tear down WAN VPN tunnel: {}", e);
         }
 
         self.event_sender
@@ -986,5 +1209,27 @@ mod tests {
             TransferEngine::resolve_destination_dir(&file, "/Users/moose_dev/Dev", false),
             "/Users/moose_dev/Dev"
         );
+    }
+
+    #[test]
+    fn test_progress_throttler_window_and_completion() {
+        let mut throttler = ProgressThrottler::new(0);
+        let total = 1_000_000;
+
+        // First call initializes and emits immediately
+        assert!(throttler.should_emit(100_000, total).is_some());
+
+        // Immediate subsequent packets within 85ms are suppressed
+        assert!(throttler.should_emit(200_000, total).is_none());
+        assert!(throttler.should_emit(300_000, total).is_none());
+
+        // Sleeping 90ms (> 85ms) allows the next emission and computes rolling bytes_per_sec
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        let bps = throttler.should_emit(600_000, total);
+        assert!(bps.is_some());
+        assert!(bps.unwrap() > 0);
+
+        // Unconditional emission at 100% completion even within the 85ms window
+        assert!(throttler.should_emit(total, total).is_some());
     }
 }

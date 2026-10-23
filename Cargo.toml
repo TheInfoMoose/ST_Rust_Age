@@ -7,5 +7,11 @@ members = [
 ]
 resolver = "2"
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [patch.crates-io]
 ttf-parser = { git = "https://github.com/RazrFalcon/ttf-parser" }

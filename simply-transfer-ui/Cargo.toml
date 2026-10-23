@@ -1,7 +1,11 @@
 [package]
 name = "simply-transfer-ui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "Simply Transfer — Enterprise-grade P2P encrypted file transfer and snapshot sync utility"
+license = "GPL-3.0"
+repository = "https://github.com/TheInfoMoose/ST_Rust_Age"
+homepage = "https://github.com/TheInfoMoose/ST_Rust_Age"
 
 [dependencies]
 arboard = "3.6.1"
@@ -20,5 +24,7 @@ tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 strict-num = "0.1"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
 [build-dependencies]
 slint-build = "1.18.1"
+

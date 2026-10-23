@@ -1,19 +1,19 @@
 ---
-name: Feature request
-about: Suggest an idea for this project
+name: Feature Request
+about: Suggest an enhancement or new capability for Simply Transfer
 title: "[FEATURE] "
 labels: enhancement
 assignees: ''
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+## Problem or Use Case
+Describe the workflow or problem this feature would solve.
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+## Proposed Solution
+Describe how you envision the feature working in the UI or transfer engine.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-Add any other context or screenshots about the feature request here.
+## Target Platforms
+- [ ] Linux (AppImage / Native)
+- [ ] macOS (Apple Silicon / Intel)
+- [ ] Windows (x86_64)
+- [ ] Headless / NAS

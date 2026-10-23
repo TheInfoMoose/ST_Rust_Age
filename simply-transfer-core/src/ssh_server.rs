@@ -22,11 +22,18 @@ impl SshServer {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
+            if std::path::Path::new("C:\\Windows\\System32\\OpenSSH\\sshd.exe").exists() {
+                return true;
+            }
             if let Ok(output) = Command::new("powershell")
                 .args([
+                    "-NoProfile",
+                    "-NonInteractive",
                     "-Command",
                     "Get-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0",
                 ])
+                .creation_flags(0x08000000)
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -82,18 +89,22 @@ impl SshServer {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
             let status = Command::new("powershell")
                 .args([
+                    "-NoProfile",
+                    "-NonInteractive",
                     "Start-Process",
                     "powershell",
                     "-ArgumentList",
-                    "'-Command Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0'",
+                    "'-NoProfile -Command Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0'",
                     "-Verb",
                     "RunAs",
                     "-WindowStyle",
                     "Hidden",
                     "-Wait",
                 ])
+                .creation_flags(0x08000000)
                 .status()
                 .map_err(|e| format!("Failed to run powershell: {}", e))?;
 
@@ -142,8 +153,15 @@ impl SshServer {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
             if let Ok(output) = Command::new("powershell")
-                .args(["-Command", "(Get-Service sshd).Status"])
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "(Get-Service sshd).Status",
+                ])
+                .creation_flags(0x08000000)
                 .output()
             {
                 let status = String::from_utf8_lossy(&output.stdout)
@@ -217,18 +235,22 @@ impl SshServer {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
             let status = Command::new("powershell")
                 .args([
+                    "-NoProfile",
+                    "-NonInteractive",
                     "Start-Process",
                     "powershell",
                     "-ArgumentList",
-                    "'-Command Start-Service sshd'",
+                    "'-NoProfile -Command Start-Service sshd'",
                     "-Verb",
                     "RunAs",
                     "-WindowStyle",
                     "Hidden",
                     "-Wait",
                 ])
+                .creation_flags(0x08000000)
                 .status()
                 .map_err(|e| format!("Failed to run powershell: {}", e))?;
 

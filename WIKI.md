@@ -1,76 +1,42 @@
-# Simply Transfer V2 - Development Wiki
+# Simply Transfer v1.0.0 — Architecture & Development Wiki
 
-Welcome to the Simply Transfer V2 Wiki. This document serves as a comprehensive map of the application's architecture, development lifecycle, and roadmap.
+Welcome to the Simply Transfer Wiki. This document maps the application's crate architecture, security model, and production capabilities.
 
 ## 1. Project Overview
-Simply Transfer V2 is a high-performance, secure, and cross-platform file transfer utility designed to handle large files and high file-count directories reliably. It combines a robust Rust core (`simply-transfer-core`) with a sleek, responsive UI powered by Slint (`simply-transfer-ui`).
+Simply Transfer is a high-performance, zero-trust P2P file transfer utility designed for cross-platform reliability across Linux (including Arch/CachyOS), macOS (13–27), and Windows (10/11/Server). It combines an asynchronous Rust engine (`simply-transfer-core`) with a native Slint GUI (`simply-transfer-ui`).
 
-### Core Objectives:
-- **Security First:** End-to-end encryption, SSH-backed transport, and active dependency vulnerability monitoring.
-- **Reliability:** Chunked file hashing, snapshot-driven change detection, and resumption of interrupted transfers.
-- **Performance:** Asynchronous execution using Tokio, designed to scale with extreme workloads (e.g., thousands of files or massive sparse files).
-
-## 2. Architecture & Modules
+## 2. Crate Architecture
 
 ### `simply-transfer-ui`
-The frontend, written using Slint and Rust. 
-- Manages user interactions, connection configurations, and live transfer progress.
-- Spawns background tasks (`TransferEngine`) and communicates with them via `tokio::sync::mpsc` channels to ensure the UI remains non-blocking.
-- **Key Files:** `src/main.rs`, `src/network.rs`, `ui/main.slint`.
+- **Role**: Native desktop frontend built with Slint and Tokio.
+- **Key Features**:
+  - Guided **New Transfer Task** workflow: right-hand Transfer Setup controls remain locked until a task is named or selected, preventing accidental unassociated edits.
+  - Dual-pane inline local/remote directory browser with volume free-space badges and instant refresh.
+  - Adaptive styled tooltips (`220ms` fast delay for icon-only controls, `650ms` for text buttons with usage descriptions).
+  - Collapsible **Help & Support** center with step-by-step How-To guide, platform-specific Troubleshooting (including one-click **Purge Orphaned Keys**), Security FAQ, and GitHub issue/feature form links.
+  - Zero console window popups on Windows (`#![windows_subsystem = "windows"]` and `CREATE_NO_WINDOW`).
 
 ### `simply-transfer-core`
-The backbone of the application.
-- Orchestrates the actual data transfer and integrates an embedded P2P `russh` server daemon, bypassing OS-level OpenSSH dependencies.
-- Pivots bulk data transit to a dedicated Out-of-Band (OOB) QUIC channel (`quinn`) to saturate Gigabit links and bypass SSH packet fragmentation.
-- Implements the 3-phase process: **Snapshot -> Transmission -> Integrity Validation**.
-- **Key Files:** `src/engine.rs` (Transfer Engine), `src/ssh.rs` (SSH Client abstractions), `src/russh_server.rs` (Embedded Daemon).
+- **Role**: Embedded P2P `russh` SSHv2 daemon (port 2222) and QUIC bulk data engine (`quinn`).
+- **Key Features**:
+  - In-process Rust commands (`simply-transfer-list|`, `simply-transfer-volumes`, `simply-transfer-mkdir|`, `simply-transfer-hash|`) that eliminate `/bin/sh` and `cmd.exe` subprocesses during browsing and transfers.
+  - Out-of-Band (OOB) TLS 1.3 QUIC bulk streaming with automatic resume and byte-level SHA-256 verification.
 
 ### `simply-transfer-crypto`
-Handles all cryptographic operations.
-- Ed25519 SSH Keypair generation and storage (via the native OS keyring).
-- Base64 XOR-obfuscated `ConnectionToken` generation and parsing.
-- Secure hashing for file integrity verification.
+- **Role**: Cryptographic identity, pairing tokens, and encrypted storage.
+- **Key Features**:
+  - Synchronized dual-write storage: every Ed25519 and WireGuard secret is written to both the OS hardware keyring (`com.simplytransfer.app`) and an AES-256-GCM local vault (`~/.simply-transfer/vault.enc`), preventing key loss across D-Bus Secret Service sessions on Arch/CachyOS.
+  - Orphaned key purging (`SecureStorage::purge_orphaned_keys` and `TransferServer::purge_unauthorized_keys`).
 
 ### `simply-transfer-snapshots`
-Responsible for calculating changes between directories to minimize data transfer over the wire.
-- Uses `FallbackSnapshotDriver` to generate manifests and diffs.
+- **Role**: Point-in-time volume snapshots for open/locked files.
+- **Key Features**: Windows VSS (executed with hidden PowerShell flags), macOS APFS (`tmutil`), and Linux LVM with automatic fallback to live streaming.
 
-## 3. Security Model
-- **Authentication:** Peer-to-peer SSH authentication. The source generates an Ed25519 keypair and creates a token. The destination ingests this token into the embedded `russh` daemon's memory (no `~/.ssh/authorized_keys` required), and the source initiates the connection.
-- **Auditing:** CI is equipped with `cargo-audit` to block builds if active vulnerabilities are detected in any crates. Exceptions are explicitly managed and documented.
-
-## 4. Development Workflow
-1. **Local Testing:** Run `cargo test --all-features` to ensure logic is sound. Note: Stress tests (`test_stress_*`) utilize temporary directories to avoid permission conflicts on local systems.
-2. **Formatting & Linting:** Strict enforcement of `cargo fmt` and `cargo clippy -- -D warnings`.
-3. **CI Pipelines:** Automated testing on MacOS, Windows, and Ubuntu.
-
-## 5. Roadmap & Future Work
-- **Multi-transfer UI Decoupling:** Decouple global UI setup models so users can configure Connection B while Connection A is actively transmitting.
-- **Dependency Management:** Address technical debt and unmaintained crates (e.g., replacing `ttf-parser` dependency in the UI).
-
----
-*For contributing guidelines, please refer to the main repository documentation.*
-
-## 6. Project Tracker & Implementation Steps
-
-This section serves as a living document to track the current state of features, what needs work, and what remains to be implemented. For a detailed breakdown of items prioritized by dependency, necessity, and resource expenditure across our 5-phase roadmap, see the [Task Hierarchy & Phase Progression](TASK_HIERARCHY.md).
-
-### ✅ Features Enabled and Functioning
-- **Cross-Platform Automated CI/CD:** Fully operational GitHub Actions pipelines.
-- **Pre-Release Workflow:** Automated pre-release tags and cache cleanup.
-- **UI Persistence & State:** Connections list successfully saving/loading.
-- **Out-Of-Band (OOB) Handshake:** Token generation, parsing, and TCP handshake.
-- **P2P Embedded SSH Daemon:** App hosts a dedicated `russh` daemon, securely validating OOB Ed25519 keys without OS-level `sshd` dependencies.
-- **Dedicated QUIC Data Channel:** Bulk data is streamed over a direct `quinn` UDP/QUIC socket to bypass SSH TCP packet bottlenecks and saturate Gigabit Ethernet links.
-- **Network Resiliency:** Exponential backoff, socket re-negotiation, and atomic `seek()` alignment for resuming interrupted transfers cleanly.
-- **Native Hash Validation:** Instead of OS shell hashing, the destination daemon intercepts `simply-transfer-hash|` commands and natively computes local hashes using a 1MB buffer with large (600s) SSH execution timeouts.
-
-### 🚧 Started, but Needing Work (In Progress)
-- **Multi-transfer UI Decoupling:** Decouple `connections.json` models from active background transfers.
-
-### 🛑 Scaffolded, but Not Implemented
-- **PowerShell UAC / Console Masking:** Hide visible external PowerShell console windows during Windows administrative key ingestion.
-
-### ❓ Clarifications & Verifications Needed
-1. **Firewalls & NAT Traversal:** The temporary TCP listener binds to a random port. We need to verify if Windows Firewall (or equivalent) will prompt the user and potentially block the handshake. We may need to look into UPnP or hole-punching for true P2P across different subnets.
-2. **Keyring Services:** Verify the reliability of the native OS keyring integration across different Linux desktop environments (GNOME Keyring vs KWallet) and Windows Credential Manager.
+## 3. Production Status Checklist
+- ✅ **Cross-Platform Automated CI/CD & Provenance Attestation**
+- ✅ **Zero-Shell Native Remote Directory Listing (`simply-transfer-list|`)**
+- ✅ **Dual-Backed Keyring + AES-256-GCM Vault (`~/.simply-transfer/vault.enc`)**
+- ✅ **Windows Console Window Suppression (`windows_subsystem` + `CREATE_NO_WINDOW`)**
+- ✅ **One-Time Persisted OS Permission State (`~/.simply-transfer/permissions_state.json`)**
+- ✅ **Guided New Transfer Task Naming & Lock/Unlock Workflow**
+- ✅ **Adaptive Styled Tooltips & Collapsible Help Center**

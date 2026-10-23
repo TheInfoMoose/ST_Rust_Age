@@ -3,6 +3,7 @@ name: Release Builds
 on:
   push:
     branches:
+      - "main"
       - "feature/pipeline-optimization"
   release:
     types: [created]
@@ -23,13 +24,12 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary_name: simply-transfer-ui.exe
+            binary_name: simply-transfer.exe
             archive_name: simply-transfer-windows-x86_64.zip
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: simply-transfer
-            archive_name: simply-transfer-macos-silicon.tar.gz
-
+            archive_name: SimplyTransfer-macos-silicon.app.tar.gz
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_name: simply-transfer
@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -46,28 +46,91 @@ jobs:
 
       - name: Install Linux Dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config libxcb-shape0-dev libxcb-xfixes0-dev
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config libxcb-shape0-dev libxcb-xfixes0-dev libdbus-1-dev file wget
 
       - name: Build Release Binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package Release (Unix)
-        if: runner.os != 'Windows'
+      - name: Package & Sign Release (macOS .app Bundle)
+        if: runner.os == 'macOS'
         run: |
-          mv target/${{ matrix.target }}/release/simply-transfer-ui ${{ matrix.binary_name }}
-          tar -czvf ${{ matrix.archive_name }} ${{ matrix.binary_name }}
+          mkdir -p SimplyTransfer.app/Contents/MacOS
+          mkdir -p SimplyTransfer.app/Contents/Resources
+          cp target/${{ matrix.target }}/release/simply-transfer-ui SimplyTransfer.app/Contents/MacOS/${{ matrix.binary_name }}
+          cp target/${{ matrix.target }}/release/simply-transfer-ui ${{ matrix.binary_name }}
+          chmod +x SimplyTransfer.app/Contents/MacOS/${{ matrix.binary_name }} ${{ matrix.binary_name }}
+          cat << 'EOF' > SimplyTransfer.app/Contents/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>simply-transfer</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.simplytransfer.app</string>
+              <key>CFBundleName</key>
+              <string>Simply Transfer</string>
+              <key>CFBundleDisplayName</key>
+              <string>Simply Transfer</string>
+              <key>CFBundleVersion</key>
+              <string>1.0.0</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0.0</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          cat << 'EOF' > entitlements.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.network.client</key>
+              <true/>
+              <key>com.apple.security.network.server</key>
+              <true/>
+              <key>com.apple.security.files.user-selected.read-write</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          codesign --force --deep --options runtime --entitlements entitlements.plist --sign - SimplyTransfer.app
+          codesign --verify --deep --strict --verbose=2 SimplyTransfer.app
+          tar -czvf ${{ matrix.archive_name }} SimplyTransfer.app ${{ matrix.binary_name }}
+          shasum -a 256 ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
-      - name: Package Release (Windows)
-        if: runner.os == 'Windows'
+      - name: Package Release (Linux AppImage & Tarball)
+        if: runner.os == 'Linux'
         run: |
-          mv -Force target\${{ matrix.target }}\release\simply-transfer-ui.exe ${{ matrix.binary_name }}
+          cp target/${{ matrix.target }}/release/simply-transfer-ui ${{ matrix.binary_name }}
+          chmod +x ${{ matrix.binary_name }}
+          ./package.sh
+          tar -czvf ${{ matrix.archive_name }} ${{ matrix.binary_name }} -C dist SimplyTransfer.AppDir
+          sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+
+      - name: Package & Sign Release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Force target\${{ matrix.target }}\release\simply-transfer-ui.exe ${{ matrix.binary_name }}
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Simply Transfer Open Source, O=Simply Transfer" -CertStoreLocation "Cert:\CurrentUser\My"
+          Set-AuthenticodeSignature -FilePath ${{ matrix.binary_name }} -Certificate $cert
           Compress-Archive -Force -Path ${{ matrix.binary_name }} -DestinationPath ${{ matrix.archive_name }}
+          (Get-FileHash -Algorithm SHA256 ${{ matrix.archive_name }}).Hash + "  ${{ matrix.archive_name }}" | Out-File -Encoding ascii "${{ matrix.archive_name }}.sha256"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
           name: simply-transfer-${{ matrix.target }}
-          path: ${{ matrix.binary_name }}
+          path: |
+            ${{ matrix.binary_name }}
+            ${{ matrix.archive_name }}
+            ${{ matrix.archive_name }}.sha256
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v1
@@ -81,4 +144,6 @@ jobs:
           tag_name: "${{ github.event_name == 'release' && github.event.release.tag_name || format('dev-build-{0}', github.run_number) }}"
           name: "${{ github.event_name == 'release' && github.event.release.name || format('Development Build #{0}', github.run_number) }}"
           prerelease: ${{ github.event_name != 'release' }}
-          files: ${{ matrix.archive_name }}
+          files: |
+            ${{ matrix.archive_name }}
+            ${{ matrix.archive_name }}.sha256

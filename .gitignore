@@ -60,5 +60,12 @@ PHASE_PROGRESSION.md
 schedules.json
 schedules_*.json
 settings_*.json
+transfer_jobs_*.json
 *.json
-
+*.exe
+*.patch
+actionlint
+BugFix.txt
+.roomodes
+TODO.md
+scripts/time_tracker.py

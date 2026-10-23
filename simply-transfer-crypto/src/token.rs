@@ -1,4 +1,16 @@
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD},
+};
+
+/// Encodes a string as UTF-16LE Base64 for safe execution via `powershell -EncodedCommand`.
+pub fn encode_utf16le_base64(script: &str) -> String {
+    let utf16_bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    STANDARD.encode(&utf16_bytes)
+}
 
 const MASK: &[u8] = b"SimplyTransferV2ObfuscationMask!";
 
@@ -29,13 +41,15 @@ impl ConnectionToken {
     }
 
     pub fn parse(token: &str) -> Result<Self, &'static str> {
-        if !token.starts_with("st:") {
+        let clean = token.trim().split(';').next().unwrap_or("").trim();
+        let Some(b64_raw) = clean.strip_prefix("st:") else {
             return Err("Invalid token format, must start with st:");
-        }
+        };
 
-        let b64 = &token[3..];
+        let b64 = b64_raw.trim().trim_end_matches('=');
         let decoded = URL_SAFE_NO_PAD
             .decode(b64)
+            .or_else(|_| URL_SAFE.decode(b64_raw.trim()))
             .map_err(|_| "Failed to decode base64 token")?;
 
         let unxored: Vec<u8> = decoded
@@ -81,5 +95,17 @@ mod tests {
         assert_eq!(parsed.ip, "172.17.2.214");
         assert_eq!(parsed.port, 59770);
         assert_eq!(parsed.user.as_deref(), Some("Zak"));
+    }
+
+    #[test]
+    fn test_parse_token_with_whitespace_and_semicolon_suffix() {
+        let tok =
+            ConnectionToken::generate("192.168.1.50", 51234, "AAAAC3NzaC1lZDI1NTE5", Some("Admin"));
+        let decorated = format!("  \r\n{};AAAAC3NzaC1lZDI1NTE5_peer\r\n  ", tok);
+        let parsed = ConnectionToken::parse(&decorated).unwrap();
+        assert_eq!(parsed.ip, "192.168.1.50");
+        assert_eq!(parsed.port, 51234);
+        assert_eq!(parsed.pub_key, "AAAAC3NzaC1lZDI1NTE5");
+        assert_eq!(parsed.user.as_deref(), Some("Admin"));
     }
 }
