@@ -1,31 +1,27 @@
 ---
-name: Bug report
-about: Create a report to help us improve Simply Transfer
+name: Bug Report
+about: Report a bug or unexpected behavior in Simply Transfer
 title: "[BUG] "
 labels: bug
 assignees: ''
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## Environment
+- **Source OS & Version** (e.g., CachyOS Linux, macOS 27, Windows 11):
+- **Destination OS & Version**:
+- **Simply Transfer Version** (e.g., v1.0.0 Production):
+- **Network Mode** (LAN P2P / Scoped WireGuard WAN VPN):
 
-**To Reproduce**
-Steps to reproduce the behavior:
+## Description of the Issue
+A clear and concise description of what happened.
+
+## Steps to Reproduce
 1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+2. Click on '...'
+3. Observe error '...'
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Expected Behavior
+What you expected to happen.
 
-**Environment (please complete the following information):**
- - OS: [e.g. Windows Server 2019, macOS Silicon, Ubuntu]
- - Version [e.g. v2.0.1]
- - Installation method [e.g. Pre-compiled release binary, built from source]
-
-**Logs / Screenshots**
-If applicable, add screenshots or terminal output to help explain your problem.
-
-**Additional context**
-Add any other context about the problem here (e.g., specific to network conditions, NAS configurations, etc.).
+## Relevant Logs
+Attach or paste relevant lines from `logs_<os>/connection.log`, `logs_<os>/transfer.log`, or `logs_<os>/sync.log` (ensure no private IP addresses or sensitive paths are included if public).

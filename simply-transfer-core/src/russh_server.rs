@@ -30,25 +30,12 @@ impl TransferServer {
         let home_dir = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
-        let ide_path = PathBuf::from(format!(
-            "{}/.gemini/antigravity-ide/p2p_authorized_keys.json",
+        let keys_file_path = PathBuf::from(format!(
+            "{}/.simply-transfer/p2p_authorized_keys.json",
             home_dir
         ));
-        let keys_file_path = if ide_path.exists() {
-            ide_path
-        } else {
-            let ide_parent = PathBuf::from(format!("{}/.gemini/antigravity-ide", home_dir));
-            if ide_parent.exists() {
-                ide_parent.join("p2p_authorized_keys.json")
-            } else {
-                PathBuf::from(format!(
-                    "{}/.simply-transfer/p2p_authorized_keys.json",
-                    home_dir
-                ))
-            }
-        };
 
-        let loaded_keys = if keys_file_path.exists() {
+        let mut loaded_keys = if keys_file_path.exists() {
             if let Ok(file) = File::open(&keys_file_path) {
                 let reader = BufReader::new(file);
                 if let Ok(keys_map) = serde_json::from_reader::<_, HashMap<String, String>>(reader)
@@ -76,6 +63,37 @@ impl TransferServer {
         } else {
             HashMap::new()
         };
+
+        // Also ingest any keys already present in standard OS authorized_keys files
+        let mut os_key_files = vec![
+            PathBuf::from(&home_dir)
+                .join(".ssh")
+                .join("authorized_keys"),
+        ];
+        if cfg!(windows) {
+            os_key_files.push(PathBuf::from(
+                "C:\\ProgramData\\ssh\\administrators_authorized_keys",
+            ));
+        }
+        for key_file in os_key_files {
+            if let Ok(contents) = fs::read_to_string(&key_file) {
+                for line in contents.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    if let Ok(public_key) = parse_public_key(trimmed) {
+                        let canonical_fp = public_key.fingerprint(HashAlg::Sha256).to_string();
+                        let raw_fp = canonical_fp
+                            .strip_prefix("SHA256:")
+                            .unwrap_or(&canonical_fp)
+                            .to_string();
+                        loaded_keys.insert(canonical_fp, public_key.clone());
+                        loaded_keys.insert(raw_fp, public_key);
+                    }
+                }
+            }
+        }
 
         TransferServer {
             authorized_keys_file_path: keys_file_path,
@@ -142,6 +160,56 @@ impl TransferServer {
         } else {
             false
         }
+    }
+
+    /// Purge authorized keys from memory and `p2p_authorized_keys.json` that are not in `active_key_strs`
+    /// (while preserving keys present in the OS `~/.ssh/authorized_keys` file).
+    pub async fn purge_unauthorized_keys(&self, active_key_strs: &[String]) -> usize {
+        let mut allowed_fps = std::collections::HashSet::new();
+        for k_str in active_key_strs {
+            if let Ok(pk) = parse_public_key(k_str) {
+                let canonical_fp = pk.fingerprint(HashAlg::Sha256).to_string();
+                let raw_fp = canonical_fp
+                    .strip_prefix("SHA256:")
+                    .unwrap_or(&canonical_fp)
+                    .to_string();
+                allowed_fps.insert(canonical_fp);
+                allowed_fps.insert(raw_fp);
+            }
+        }
+
+        let mut keys = self.authorized_keys.write().await;
+        let mut unique_before = std::collections::HashSet::new();
+        for pk in keys.values() {
+            unique_before.insert(pk.fingerprint(HashAlg::Sha256).to_string());
+        }
+
+        keys.retain(|fp, pk| {
+            let canonical = pk.fingerprint(HashAlg::Sha256).to_string();
+            allowed_fps.contains(fp) || allowed_fps.contains(&canonical)
+        });
+
+        let mut unique_after = std::collections::HashSet::new();
+        let mut keys_map: HashMap<String, String> = HashMap::new();
+        for public_key in keys.values() {
+            let fp = public_key.fingerprint(HashAlg::Sha256).to_string();
+            unique_after.insert(fp.clone());
+            if let Ok(openssh) = public_key.to_openssh() {
+                keys_map.insert(fp, openssh);
+            }
+        }
+
+        let path = &self.authorized_keys_file_path;
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(file) = File::create(path) {
+            let mut writer = BufWriter::new(file);
+            let _ = serde_json::to_writer_pretty(&mut writer, &keys_map);
+            let _ = writer.flush();
+        }
+
+        unique_before.len().saturating_sub(unique_after.len())
     }
 }
 
@@ -326,6 +394,8 @@ impl Handler for TransferServer {
 
                                     let mut buf = vec![0u8; 1024 * 1024];
                                     let mut total_bytes_written = offset;
+                                    let mut throttler =
+                                        crate::engine::ProgressThrottler::new(offset);
 
                                     if let Some(sender) = &event_sender_clone {
                                         let _ = sender.send(
@@ -344,11 +414,18 @@ impl Handler for TransferServer {
                                             break;
                                         }
                                         total_bytes_written += n as u64;
-                                        if let Some(sender) = &event_sender_clone {
+                                        if let Some(sender) = &event_sender_clone
+                                            && throttler
+                                                .should_emit(total_bytes_written, 0)
+                                                .is_some()
+                                        {
                                             let _ = sender.send(crate::engine::TransferEvent::FileStatusChanged(
-                                                    remote_path.clone(),
-                                                    crate::engine::FileTransferStatus::Transferring { progress_bytes: total_bytes_written, total_bytes: 0 }
-                                                ));
+                                                remote_path.clone(),
+                                                crate::engine::FileTransferStatus::Transferring {
+                                                    progress_bytes: total_bytes_written,
+                                                    total_bytes: 0,
+                                                },
+                                            ));
                                         }
                                     }
                                     let _ = file.flush().await;
@@ -389,6 +466,56 @@ impl Handler for TransferServer {
     ) -> Result<(), Self::Error> {
         let cmd_str = String::from_utf8_lossy(program).to_string();
         tracing::info!("Executing command via exec_request: {}", cmd_str);
+
+        if cmd_str.trim() == "simply-transfer-volumes" {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload = tokio::task::spawn_blocking(|| {
+                    let mut lines = Vec::new();
+                    if let Ok(vols) = simply_transfer_snapshots::list_local_volumes() {
+                        for v in vols {
+                            lines.push(format!(
+                                "{}|{}|{}|{}|{}",
+                                v.mount_point.to_string_lossy(),
+                                v.label,
+                                v.fs_type,
+                                v.total_bytes,
+                                v.available_bytes
+                            ));
+                        }
+                    }
+                    format!("{}\n", lines.join("\n"))
+                })
+                .await
+                .unwrap_or_default();
+
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
+        if cmd_str.starts_with("simply-transfer-list|") {
+            let target_path = cmd_str
+                .trim_start_matches("simply-transfer-list|")
+                .trim()
+                .to_string();
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload =
+                    tokio::task::spawn_blocking(move || list_directory_entries(&target_path))
+                        .await
+                        .unwrap_or_default();
+
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
 
         if cmd_str.starts_with("simply-transfer-mkdir|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-mkdir|");
@@ -491,6 +618,7 @@ impl Handler for TransferServer {
                 .arg("/Q")
                 .arg("/c")
                 .raw_arg(&cmd_str)
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .output()
         };
         #[cfg(not(windows))]
@@ -580,6 +708,80 @@ pub async fn run_server(
 pub fn generate_host_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
         .expect("Failed to generate Ed25519 host key")
+}
+
+pub fn list_directory_entries(target_path: &str) -> String {
+    let trimmed = target_path.trim();
+    if cfg!(windows) && (trimmed.is_empty() || trimmed == "/") {
+        let mut drive_lines = Vec::new();
+        for letter in b'A'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            if std::path::Path::new(&root).exists() {
+                drive_lines.push(format!("D|{}|{}", root, root));
+            }
+        }
+        return format!("{}\n", drive_lines.join("\n"));
+    }
+
+    let effective_path = if trimmed.is_empty() { "/" } else { trimmed };
+    let normalized = if cfg!(windows) {
+        effective_path.replace('/', "\\")
+    } else {
+        effective_path.replace('\\', "/")
+    };
+
+    let read_res = fs::read_dir(&normalized);
+    let entries = match read_res {
+        Ok(rd) => rd,
+        Err(e) => {
+            tracing::warn!("list_directory_entries failed for '{}': {}", normalized, e);
+            return format!("E|{}\n", e);
+        }
+    };
+
+    let mut dirs: Vec<(String, String)> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.is_empty() || name == "." || name == ".." || name.starts_with('.') {
+            continue;
+        }
+        let path_buf = entry.path();
+        let is_dir = entry
+            .file_type()
+            .map(|ft| ft.is_dir() || (ft.is_symlink() && path_buf.is_dir()))
+            .unwrap_or_else(|_| path_buf.is_dir());
+
+        let full_path = if cfg!(windows) {
+            path_buf.to_string_lossy().replace('/', "\\")
+        } else {
+            path_buf.to_string_lossy().replace('\\', "/")
+        };
+
+        if is_dir {
+            dirs.push((name, full_path));
+        } else {
+            files.push((name, full_path));
+        }
+    }
+
+    dirs.sort_by_key(|a| a.0.to_lowercase());
+    files.sort_by_key(|a| a.0.to_lowercase());
+
+    let mut out_lines = Vec::with_capacity(dirs.len() + files.len());
+    for (name, full_path) in dirs {
+        out_lines.push(format!("D|{}|{}", name, full_path));
+    }
+    for (name, full_path) in files {
+        out_lines.push(format!("F|{}|{}", name, full_path));
+    }
+
+    if out_lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", out_lines.join("\n"))
+    }
 }
 
 pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
@@ -683,5 +885,27 @@ mod tests {
         );
         let parsed = parse_public_key(&token_str).unwrap();
         assert_eq!(parsed, pub_key);
+    }
+
+    #[test]
+    fn test_list_directory_entries() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "st_list_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(temp_dir.join("alpha_dir"));
+        let _ = std::fs::write(temp_dir.join("beta_file.txt"), b"hello");
+        let _ = std::fs::write(temp_dir.join(".hidden_file"), b"hidden");
+
+        let output = list_directory_entries(&temp_dir.to_string_lossy());
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("D|alpha_dir|"));
+        assert!(lines[1].starts_with("F|beta_file.txt|"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -138,6 +138,269 @@ impl RusshClient {
         tracing::info!("SSH auto-reconnect succeeded!");
         Ok(channel)
     }
+
+    /// Returns true if an active, open SSH session handle is present.
+    pub async fn is_connected(&self) -> bool {
+        let guard = self.handle.lock().await;
+        guard.as_ref().is_some_and(|h| !h.is_closed())
+    }
+
+    /// Opens a dedicated multiplexed SSH channel (`channel_open_session`) on this connection,
+    /// allowing concurrent jobs bound to the same `connection_id` to operate independently
+    /// without re-handshaking or colliding.
+    pub async fn open_dedicated_session_channel(
+        &self,
+    ) -> Result<russh::Channel<russh::client::Msg>, SshError> {
+        self.open_channel_with_retry().await
+    }
+
+    /// Queries mounted volumes/drives on the remote server over this SSH session.
+    pub async fn list_remote_volumes(
+        &self,
+    ) -> Result<Vec<simply_transfer_snapshots::VolumeInfo>, SshError> {
+        list_remote_volumes_via_ssh(self).await
+    }
+}
+
+/// Queries mounted volumes/drives on a remote server over any `SshClient`.
+pub async fn list_remote_volumes_via_ssh(
+    ssh: &dyn SshClient,
+) -> Result<Vec<simply_transfer_snapshots::VolumeInfo>, SshError> {
+    if let Ok(native_out) = ssh.execute_command("simply-transfer-volumes").await {
+        let mut native_volumes = Vec::new();
+        for line in native_out.lines() {
+            let parts: Vec<&str> = line.trim().split('|').collect();
+            if parts.len() == 5 {
+                native_volumes.push(simply_transfer_snapshots::VolumeInfo {
+                    mount_point: std::path::PathBuf::from(parts[0]),
+                    label: parts[1].to_string(),
+                    fs_type: parts[2].to_string(),
+                    total_bytes: parts[3].parse::<u64>().unwrap_or(0),
+                    available_bytes: parts[4].parse::<u64>().unwrap_or(0),
+                });
+            }
+        }
+        if !native_volumes.is_empty() {
+            return Ok(native_volumes);
+        }
+    }
+
+    let is_windows = ssh
+        .execute_command("cmd.exe /c echo Windows")
+        .await
+        .map(|out| out.trim() == "Windows")
+        .unwrap_or(false);
+
+    if is_windows {
+        let cmd = "powershell -NoProfile -NonInteractive -Command \"[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | ForEach-Object { $r = $_.Name; $f = [uint64]$_.AvailableFreeSpace; $t = [uint64]$_.TotalSize; $fs = if ($_.DriveFormat) { $_.DriveFormat } else { 'NTFS' }; $d = if ($_.VolumeLabel) { $_.VolumeLabel } else { $_.Name.TrimEnd('\\') }; Write-Output ($r + '|' + $d + '|' + $fs + '|' + $t + '|' + $f) }\"";
+        let output = ssh.execute_command(cmd).await?;
+        let mut volumes = Vec::new();
+        for line in output.lines() {
+            let parts: Vec<&str> = line.trim().split('|').collect();
+            if parts.len() == 5 {
+                volumes.push(simply_transfer_snapshots::VolumeInfo {
+                    mount_point: std::path::PathBuf::from(parts[0]),
+                    label: parts[1].to_string(),
+                    fs_type: parts[2].to_string(),
+                    total_bytes: parts[3].parse::<u64>().unwrap_or(0),
+                    available_bytes: parts[4].parse::<u64>().unwrap_or(0),
+                });
+            }
+        }
+        if volumes.is_empty() {
+            volumes.push(simply_transfer_snapshots::VolumeInfo {
+                mount_point: std::path::PathBuf::from("C:\\"),
+                label: "Local Disk (C:)".to_string(),
+                fs_type: "NTFS".to_string(),
+                total_bytes: 0,
+                available_bytes: 0,
+            });
+        }
+        Ok(volumes)
+    } else {
+        let output = ssh.execute_command("df -k -P 2>/dev/null").await?;
+        let mut volumes = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut root_stats = (0u64, 0u64);
+        for line in output.lines().skip(1) {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            if let Some(cap_idx) = tokens.iter().position(|t| t.ends_with('%'))
+                && cap_idx >= 3
+                && cap_idx + 1 < tokens.len()
+            {
+                let dev = tokens[0];
+                let total_kb = tokens[cap_idx - 3].parse::<u64>().unwrap_or(0);
+                let avail_kb = tokens[cap_idx - 1].parse::<u64>().unwrap_or(0);
+                let total_bytes = total_kb.saturating_mul(1024);
+                let avail_bytes = avail_kb.saturating_mul(1024);
+                let mount_str = tokens[cap_idx + 1..].join(" ");
+                if mount_str == "/" {
+                    root_stats = (total_bytes, avail_bytes);
+                }
+                if mount_str.starts_with("/proc")
+                    || mount_str.starts_with("/sys")
+                    || mount_str.starts_with("/dev")
+                    || (mount_str.starts_with("/run") && !mount_str.starts_with("/run/media"))
+                    || mount_str.starts_with("/snap")
+                    || mount_str.starts_with("/boot")
+                    || dev == "tmpfs"
+                    || dev == "devtmpfs"
+                    || dev == "overlay"
+                    || dev == "efivarfs"
+                {
+                    continue;
+                }
+                if seen.insert(mount_str.clone()) {
+                    volumes.push(simply_transfer_snapshots::VolumeInfo {
+                        mount_point: std::path::PathBuf::from(&mount_str),
+                        label: format!("{} ({})", mount_str, dev),
+                        fs_type: "posix".to_string(),
+                        total_bytes,
+                        available_bytes: avail_bytes,
+                    });
+                }
+            }
+        }
+        if let Ok(mnt_out) = ssh
+            .execute_command(
+                "for d in /mnt/* /media/*; do [ -d \"$d\" ] && echo \"$d\"; done 2>/dev/null",
+            )
+            .await
+        {
+            for line in mnt_out.lines() {
+                let mount_str = line.trim().to_string();
+                if mount_str.is_empty() || mount_str.starts_with("/mnt/st_snap_") {
+                    continue;
+                }
+                if seen.insert(mount_str.clone()) {
+                    volumes.push(simply_transfer_snapshots::VolumeInfo {
+                        mount_point: std::path::PathBuf::from(&mount_str),
+                        label: mount_str.clone(),
+                        fs_type: "posix".to_string(),
+                        total_bytes: root_stats.0,
+                        available_bytes: root_stats.1,
+                    });
+                }
+            }
+        }
+        if volumes.is_empty() {
+            volumes.push(simply_transfer_snapshots::VolumeInfo {
+                mount_point: std::path::PathBuf::from("/"),
+                label: "Root (/)".to_string(),
+                fs_type: "posix".to_string(),
+                total_bytes: 0,
+                available_bytes: 0,
+            });
+        }
+        Ok(volumes)
+    }
+}
+
+/// Pools active authenticated SSH client handles by `connection_id: Uuid` so multiple
+/// `TransferJob` instances (e.g., hourly syncs and daily backups) share a single SSH session
+/// and multiplex dedicated channels via `channel_open_session`.
+#[derive(Clone, Default)]
+pub struct SshConnectionPool {
+    sessions: Arc<tokio::sync::RwLock<std::collections::HashMap<uuid::Uuid, Arc<RusshClient>>>>,
+}
+
+impl SshConnectionPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Retrieves an existing connected `RusshClient` for `connection_id`, or establishes and
+    /// authenticates a new session if none is active.
+    pub async fn get_or_connect(
+        &self,
+        connection_id: uuid::Uuid,
+        host: &str,
+        port: u16,
+        username: &str,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+    ) -> Result<Arc<RusshClient>, SshError> {
+        {
+            let read_guard = self.sessions.read().await;
+            if let Some(existing) = read_guard.get(&connection_id)
+                && existing.is_connected().await
+            {
+                tracing::info!(
+                    "Reusing pooled SSH session for connection_id={} ({}:{})",
+                    connection_id,
+                    host,
+                    port
+                );
+                return Ok(existing.clone());
+            }
+        }
+
+        let mut write_guard = self.sessions.write().await;
+        if let Some(existing) = write_guard.get(&connection_id)
+            && existing.is_connected().await
+        {
+            return Ok(existing.clone());
+        }
+
+        let mut client = RusshClient::new();
+        client.connect(host, port).await?;
+        client
+            .authenticate_publickey(username, private_key_pem, passphrase)
+            .await?;
+
+        let arc_client = Arc::new(client);
+        write_guard.insert(connection_id, arc_client.clone());
+        Ok(arc_client)
+    }
+
+    /// Retrieves or establishes a pooled SSH session, automatically bringing up the scoped
+    /// WireGuard WAN tunnel first if `vpn_config` is enabled.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn get_or_connect_with_vpn(
+        &self,
+        connection_id: uuid::Uuid,
+        host: &str,
+        port: u16,
+        username: &str,
+        private_key_pem: &str,
+        passphrase: Option<&str>,
+        vpn_config: Option<&simply_transfer_crypto::VpnConfig>,
+        tunnel_mgr: &crate::firewall::VpnTunnelManager,
+        storage: &simply_transfer_crypto::SecureStorage,
+    ) -> Result<Arc<RusshClient>, SshError> {
+        if let Some(cfg) = vpn_config
+            && cfg.enabled
+        {
+            tunnel_mgr
+                .bring_up_tunnel(connection_id, cfg, storage, host)
+                .await
+                .map_err(SshError::ConnectionFailed)?;
+        }
+        self.get_or_connect(
+            connection_id,
+            host,
+            port,
+            username,
+            private_key_pem,
+            passphrase,
+        )
+        .await
+    }
+
+    /// Inserts an already-authenticated `RusshClient` into the pool under `connection_id`.
+    pub async fn insert(&self, connection_id: uuid::Uuid, client: Arc<RusshClient>) {
+        self.sessions.write().await.insert(connection_id, client);
+    }
+
+    /// Looks up a pooled `RusshClient` by `connection_id`.
+    pub async fn get(&self, connection_id: uuid::Uuid) -> Option<Arc<RusshClient>> {
+        self.sessions.read().await.get(&connection_id).cloned()
+    }
+
+    /// Removes a pooled `RusshClient` for `connection_id`.
+    pub async fn remove(&self, connection_id: uuid::Uuid) -> Option<Arc<RusshClient>> {
+        self.sessions.write().await.remove(&connection_id)
+    }
 }
 
 #[async_trait]
