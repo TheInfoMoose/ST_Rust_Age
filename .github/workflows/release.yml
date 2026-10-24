@@ -58,6 +58,9 @@ jobs:
           mkdir -p SimplyTransfer.app/Contents/Resources
           cp target/${{ matrix.target }}/release/simply-transfer-ui SimplyTransfer.app/Contents/MacOS/${{ matrix.binary_name }}
           cp target/${{ matrix.target }}/release/simply-transfer-ui ${{ matrix.binary_name }}
+          if [ -f "assets/logo.icns" ]; then
+            cp assets/logo.icns SimplyTransfer.app/Contents/Resources/AppIcon.icns
+          fi
           chmod +x SimplyTransfer.app/Contents/MacOS/${{ matrix.binary_name }} ${{ matrix.binary_name }}
           cat << 'EOF' > SimplyTransfer.app/Contents/Info.plist
           <?xml version="1.0" encoding="UTF-8"?>
@@ -66,6 +69,8 @@ jobs:
           <dict>
               <key>CFBundleExecutable</key>
               <string>simply-transfer</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
               <key>CFBundleIdentifier</key>
               <string>com.simplytransfer.app</string>
               <key>CFBundleName</key>
@@ -107,10 +112,10 @@ jobs:
       - name: Package Release (Linux AppImage & Tarball)
         if: runner.os == 'Linux'
         run: |
-          cp target/${{ matrix.target }}/release/simply-transfer-ui ${{ matrix.binary_name }}
-          chmod +x ${{ matrix.binary_name }}
           ./package.sh
-          tar -czvf ${{ matrix.archive_name }} ${{ matrix.binary_name }} -C dist SimplyTransfer.AppDir
+          cp dist/SimplyTransfer-Linux-x64/simply-transfer ${{ matrix.binary_name }}
+          chmod +x ${{ matrix.binary_name }}
+          tar -czvf ${{ matrix.archive_name }} -C dist/SimplyTransfer-Linux-x64 .
           sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
 
       - name: Package & Sign Release (Windows)
