@@ -296,19 +296,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (global_tx, mut global_rx) =
         tokio::sync::broadcast::channel::<simply_transfer_core::engine::TransferEvent>(1000);
 
-    let host_key = simply_transfer_core::russh_server::generate_host_key();
-    let mut p2p_server = simply_transfer_core::russh_server::TransferServer::new();
-    p2p_server.set_event_sender(global_tx.clone());
-    P2P_SERVER.set(p2p_server.clone()).ok();
-
-    rt.spawn(async move {
-        if let Err(e) =
-            simply_transfer_core::russh_server::run_server(2222, p2p_server, host_key).await
-        {
-            tracing::error!("P2P Daemon globally crashed: {}", e);
-        }
-    });
-
     fn sync_transfer_queue_in_place(ui: &MainWindow, items: &[TransferQueueItem]) {
         let model = ui.get_transfer_queue();
         if let Some(vec_model) = model
@@ -628,6 +615,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui = MainWindow::new()?;
     let job_registry = std::sync::Arc::new(std::sync::Mutex::new(load_job_registry()));
+    let vpn_manager = simply_transfer_core::firewall::VpnTunnelManager::new();
+    let draft_vpn_config: Arc<Mutex<Option<simply_transfer_crypto::VpnConfig>>> =
+        Arc::new(Mutex::new(None));
+
+    {
+        let host_key = simply_transfer_core::russh_server::generate_host_key();
+        let mut p2p_server = simply_transfer_core::russh_server::TransferServer::new();
+        p2p_server.set_event_sender(global_tx.clone());
+
+        let ui_weak_oob_verify = ui.as_weak();
+        let verify_cb: simply_transfer_core::russh_server::OobVerifyCallback =
+            Arc::new(move |dest_ip, dest_user, dest_pub_clean| {
+                let ui_weak_inner = ui_weak_oob_verify.clone();
+                let new_host = format!("{}@{}", dest_user, dest_ip);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak_inner.upgrade() {
+                        let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                        let mut matched_any = false;
+                        for conn in &mut conns {
+                            let clean_token = conn
+                                .token
+                                .split(';')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            let conn_host = conn.host.to_string();
+                            let conn_ip = conn_host
+                                .split('@')
+                                .next_back()
+                                .unwrap_or(&conn_host)
+                                .split(':')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+
+                            if conn.state == "Waiting for peer..."
+                                || conn_ip == dest_ip
+                                || conn_host.trim().is_empty()
+                                || conn_host == "Remote"
+                            {
+                                conn.host = new_host.clone().into();
+                                if !clean_token.is_empty() {
+                                    conn.token =
+                                        format!("{};{}", clean_token, dest_pub_clean).into();
+                                }
+                                conn.state = "Connected".into();
+                                conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                                matched_any = true;
+                            }
+                        }
+                        if !matched_any && let Some(conn) = conns.last_mut() {
+                            let clean_token = conn
+                                .token
+                                .split(';')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            conn.host = new_host.clone().into();
+                            if !clean_token.is_empty() {
+                                conn.token = format!("{};{}", clean_token, dest_pub_clean).into();
+                            }
+                            conn.state = "Connected".into();
+                            conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
+                        }
+                        ui.set_connections(
+                            std::rc::Rc::new(slint::VecModel::from(conns.clone())).into(),
+                        );
+                        ui.set_overall_status("Connection Confirmed".into());
+                        ui.set_remote_verification_status("Connected".into());
+                        save_connections(&conns);
+                        populate_inline_browsers(&ui);
+                    }
+                });
+            });
+
+        let ui_weak_oob_commit = ui.as_weak();
+        let commit_cb: simply_transfer_core::russh_server::OobActionCallback =
+            Arc::new(move |action| {
+                if action == "commit" {
+                    let ui_weak_inner = ui_weak_oob_commit.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak_inner.upgrade() {
+                            ui.set_overall_status("Bidirectional sync configured".into());
+                        }
+                    });
+                }
+            });
+
+        p2p_server.set_oob_callbacks(verify_cb, commit_cb);
+        P2P_SERVER.set(p2p_server.clone()).ok();
+
+        rt.spawn(async move {
+            if let Err(e) =
+                simply_transfer_core::russh_server::run_server(2222, p2p_server, host_key).await
+            {
+                tracing::error!("P2P Daemon globally crashed: {}", e);
+            }
+        });
+    }
+
     let persistent_transfer_model: std::rc::Rc<slint::VecModel<TransferQueueItem>> =
         std::rc::Rc::new(slint::VecModel::from(Vec::new()));
     let persistent_completed_model: std::rc::Rc<slint::VecModel<CompletedItem>> =
@@ -809,10 +899,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_selected_job_idx(0);
                 load_job_into_draft_ui(&ui, &reg, first_job);
             }
+            if let Some(vpn_cfg) = reg
+                .get_connection(initial_conn_id)
+                .and_then(|c| c.vpn_config.as_ref())
+            {
+                let clean_ip =
+                    simply_transfer_core::firewall::VpnTunnelManager::extract_interface_ip(
+                        &vpn_cfg.address,
+                    );
+                ui.set_vpn_enabled(vpn_cfg.enabled);
+                ui.set_vpn_endpoint(vpn_cfg.endpoint.clone().into());
+                ui.set_vpn_interface_ip(clean_ip.into());
+                ui.set_vpn_masked_pubkey(vpn_cfg.masked_public_key().into());
+                ui.set_vpn_tunnel_status(
+                    if vpn_cfg.enabled {
+                        "Configured (Ready)"
+                    } else {
+                        "Disabled"
+                    }
+                    .into(),
+                );
+                if let Ok(mut d_lock) = draft_vpn_config.lock() {
+                    *d_lock = Some(vpn_cfg.clone());
+                }
+            }
         }
     }
 
     let ui_weak_hb = ui.as_weak();
+    let reg_for_hb = job_registry.clone();
+    let vpn_mgr_for_hb = vpn_manager.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
@@ -827,6 +943,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for (i, c) in conns.iter().enumerate() {
                         conn_data.push((
                             i,
+                            connection_uuid_for_item(c),
                             c.host.to_string(),
                             c.token.to_string(),
                             c.state.to_string(),
@@ -839,7 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Ok(conn_data) = rx.await {
                 let mut updates = Vec::new();
-                for (i, host, token, state, transfer_type) in conn_data {
+                for (i, conn_uuid, host, token, state, transfer_type) in conn_data {
                     if state.starts_with("Transmitting")
                         || state == "Waiting for peer..."
                         || state == "Connected"
@@ -868,8 +985,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if !host.trim().is_empty() {
                         target_ip = host.trim().to_string();
                     }
+                    target_ip = target_ip
+                        .split(':')
+                        .next()
+                        .unwrap_or(&target_ip)
+                        .trim()
+                        .to_string();
 
                     if !target_ip.is_empty() {
+                        let vpn_cfg_opt = reg_for_hb
+                            .lock()
+                            .ok()
+                            .and_then(|r| {
+                                r.get_connection(conn_uuid)
+                                    .and_then(|c| c.vpn_config.clone())
+                            })
+                            .filter(|v| v.enabled);
+
+                        if let Some(vpn_cfg) = vpn_cfg_opt {
+                            let storage = simply_transfer_crypto::SecureStorage::new(
+                                "com.simplytransfer.app",
+                            );
+                            let _ = vpn_mgr_for_hb
+                                .bring_up_tunnel(conn_uuid, &vpn_cfg, &storage, &target_ip)
+                                .await;
+                        }
+
                         let is_tcp_open = tokio::time::timeout(
                             std::time::Duration::from_secs(2),
                             tokio::net::TcpStream::connect(format!("{}:2222", target_ip)),
@@ -997,14 +1138,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak_perms = ui.as_weak();
     ui.on_request_os_permissions(move || {
-        if is_os_permissions_configured() {
-            if let Some(ui) = ui_weak_perms.upgrade() {
-                ui.set_os_permissions_status("All Required Permissions Already Configured".into());
-            }
-            return;
-        }
         if let Some(ui) = ui_weak_perms.upgrade() {
-            ui.set_os_permissions_status("Configuring one-time OS permissions...".into());
+            ui.set_os_permissions_status(
+                "Configuring OS permissions & firewall (Port 2222)...".into(),
+            );
         }
         let ui_weak_done = ui_weak_perms.clone();
         tokio::task::spawn_blocking(move || {
@@ -1015,11 +1152,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 use std::os::unix::fs::PermissionsExt;
                 let _ = std::fs::set_permissions(&home_ssh, std::fs::Permissions::from_mode(0o700));
             }
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(e) = simply_transfer_core::firewall::Firewall::open_port(2222) {
+                    tracing::warn!("Firewall port 2222 setup warning: {}", e);
+                }
+            }
             save_os_permissions_configured();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak_done.upgrade() {
                     ui.set_os_permissions_status(
-                        "Configured (Saved — One-Time Setup Complete)".into(),
+                        "Configured (Saved — Port 2222 & SSH Ready)".into(),
                     );
                 }
             });
@@ -1035,11 +1178,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pause_tx = active_control_tx.clone();
     let cancel_tx = active_control_tx.clone();
     let global_tx_for_start = global_tx.clone();
+    let reg_for_start = job_registry.clone();
+    let vpn_mgr_for_start = vpn_manager.clone();
+    let draft_vpn_for_start = draft_vpn_config.clone();
 
     ui.on_start_transfer(move || {
         let global_tx = global_tx_for_start.clone();
         let ui_handle = ui_handle.clone();
         let control_tx_ref = start_tx.clone();
+        let reg_clone = reg_for_start.clone();
+        let vpn_mgr_clone = vpn_mgr_for_start.clone();
+        let draft_vpn_clone = draft_vpn_for_start.clone();
 
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
@@ -1047,7 +1196,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut my_pub_key = None;
         let mut conn_name = String::new();
         let mut target_host = String::new();
+        let mut conn_id = uuid::Uuid::nil();
+        let mut ui_vpn_enabled = false;
         if let Some(ui) = ui_handle.upgrade() {
+            conn_id = active_connection_uuid(&ui);
+            ui_vpn_enabled = ui.get_vpn_enabled();
             let conns: Vec<_> = ui.get_connections().iter().collect();
             let idx = ui.get_selected_connection_idx() as usize;
             if idx < conns.len() {
@@ -1075,6 +1228,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dest_ip = host.clone();
                     dest_user = "simply-transfer".to_string();
                 }
+                dest_ip = dest_ip
+                    .split(':')
+                    .next()
+                    .unwrap_or(&dest_ip)
+                    .trim()
+                    .to_string();
             }
         }
 
@@ -1142,6 +1301,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut ssh_client = simply_transfer_core::russh_client::RusshClient::new();
             let mut val_ssh_client = simply_transfer_core::russh_client::RusshClient::new();
             if !dest_ip.is_empty() {
+                let vpn_cfg_opt = reg_clone
+                    .lock()
+                    .ok()
+                    .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                    .or_else(|| {
+                        if ui_vpn_enabled {
+                            draft_vpn_clone.lock().ok().and_then(|d| d.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|v| v.enabled);
+
+                if let Some(vpn_cfg) = vpn_cfg_opt {
+                    let storage =
+                        simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                    let _ = vpn_mgr_clone
+                        .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &dest_ip)
+                        .await;
+                }
+
                 use simply_transfer_core::ssh::SshClient;
                 let mut priv_pem = String::new();
 
@@ -1544,6 +1724,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     let reg_for_commit_conn = job_registry.clone();
+    let vpn_mgr_for_commit = vpn_manager.clone();
+    let draft_vpn_for_commit = draft_vpn_config.clone();
     ui.on_commit_connection(move |new_conn| {
         if let Some(ui) = ui_weak.upgrade() {
             let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
@@ -1552,12 +1734,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if conn_to_save.transfer_type != "Remote Transfer" {
                 let mut pub_key = conn_to_save.token.trim().to_string();
                 if pub_key.starts_with("st:")
-                    && let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&pub_key)
+                    && let Ok(parsed) =
+                        simply_transfer_crypto::token::ConnectionToken::parse(&pub_key)
                 {
                     pub_key = parsed.pub_key;
                 }
                 if pub_key.is_empty() {
-                    let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    let key_mgr =
+                        simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
                     if let Ok(gen_key) = key_mgr.generate_and_store() {
                         pub_key = gen_key;
                     }
@@ -1573,10 +1757,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     });
                 }
 
-                // We must embed OUR local IP in the token so the remote device knows where to reach us.
-                // The 'host' field here is the destination IP, so we should NOT use it for the token.
+                // Determine the best local IP to advertise in the token:
+                // 1. If Preflight VPN is enabled, advertise our WireGuard interface IP.
+                // 2. Else if a peer host IP was entered, probe the local interface routed toward that peer.
+                // 3. Fallback to default internet route probe (8.8.8.8:80).
                 let mut local_ip = String::new();
-                if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
+                if ui.get_vpn_enabled() && !ui.get_vpn_interface_ip().trim().is_empty() {
+                    local_ip =
+                        simply_transfer_core::firewall::VpnTunnelManager::extract_interface_ip(
+                            ui.get_vpn_interface_ip().as_str(),
+                        );
+                }
+
+                let raw_peer_host = conn_to_save.host.trim().to_string();
+                let peer_ip_hint = raw_peer_host
+                    .split('@')
+                    .next_back()
+                    .unwrap_or(&raw_peer_host)
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+
+                if local_ip.is_empty()
+                    && !peer_ip_hint.is_empty()
+                    && peer_ip_hint != "Remote"
+                    && let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
+                    && socket.connect(format!("{}:2222", peer_ip_hint)).is_ok()
+                    && let Ok(addr) = socket.local_addr()
+                {
+                    local_ip = addr.ip().to_string();
+                }
+
+                if local_ip.is_empty()
+                    && let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0")
                     && socket.connect("8.8.8.8:80").is_ok()
                     && let Ok(addr) = socket.local_addr()
                 {
@@ -1587,104 +1802,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     local_ip = "127.0.0.1".to_string();
                 }
 
-                let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
-                let port = listener.local_addr().unwrap().port();
-                listener.set_nonblocking(true).unwrap();
-                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-
-                let pub_key_clone = pub_key.clone();
-                let ui_handle = ui_weak.clone();
-
-                tokio::spawn(async move {
-                    while let Ok((mut socket, addr)) = listener.accept().await {
-                        let ui_handle = ui_handle.clone();
-                        let pub_key_expected = pub_key_clone.clone();
-                        tokio::spawn(async move {
-                            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-                            let (reader, mut writer) = socket.split();
-                            let mut buf_reader = tokio::io::BufReader::new(reader);
-                            let mut line = String::new();
-
-                            if buf_reader.read_line(&mut line).await.is_ok()
-                                && let Ok(req) = serde_json::from_str::<serde_json::Value>(&line)
-                            {
-                                if req["action"] == "verify" {
-                                    let dest_ip = addr.ip().to_string();
-                                    let dest_user = req["user"].as_str().unwrap_or("simply-transfer").to_string();
-                                    let dest_pub = req.get("pub_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                    tracing::info!("Received verify request from {}@{}", dest_user, dest_ip);
-
-                                    if !dest_pub.trim().is_empty() {
-                                        tracing::info!("Ingesting dest_pub from TCP handshake");
-                                        if let Some(srv) = P2P_SERVER.get() {
-                                            if srv.add_authorized_key_from_str(dest_pub.trim()).await {
-                                                tracing::info!("Authorized key added to global P2P Daemon!");
-                                            }
-                                        }
-
-                                        let my_user = std::env::var("USER")
-                                            .or_else(|_| std::env::var("USERNAME"))
-                                            .unwrap_or_else(|_| "simply-transfer".to_string());
-                                        let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
-                                        let _ = writer.write_all(res.as_bytes()).await;
-
-                                        let new_host = format!("{}@{}", dest_user, dest_ip);
-                                        tracing::info!("Attempting to map TCP handshake for remote host: {}", new_host);
-                                        let dest_pub_clean = dest_pub.split(';').next().unwrap_or(&dest_pub).trim().to_string();
-                                        let _ = slint::invoke_from_event_loop(move || {
-                                            if let Some(ui) = ui_handle.upgrade() {
-                                                let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
-                                                for conn in &mut conns {
-                                                    let mut conn_pub = String::new();
-                                                    let clean_token = conn.token.to_string();
-                                                    let clean_token = clean_token.split(';').next().unwrap_or(&clean_token).trim().to_string();
-                                                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&clean_token) {
-                                                        conn_pub = parsed.pub_key;
-                                                    }
-
-                                                    if (conn_pub == pub_key_expected || conn.state == "Waiting for peer...") && !conn_pub.is_empty() {
-                                                        tracing::info!("Found connection waiting for peer. Updating state to Connected.");
-                                                        conn.host = new_host.clone().into();
-                                                        conn.token = format!("{};{}", clean_token, dest_pub_clean).into();
-                                                        conn.state = "Connected".into();
-                                                        conn.state_color = slint::Color::from_rgb_u8(50, 200, 50);
-                                                    }
-                                                }
-                                                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
-                                                ui.set_overall_status("Connection Confirmed".into());
-                                                ui.set_remote_verification_status("Connected".into());
-
-                                                save_connections(&conns);
-                                                populate_inline_browsers(&ui);
-                                            }
-                                        });
-                                        return;
-                                    } else {
-                                        tracing::warn!("Did not receive dest_pub via OOB. Connection invalid.");
-                                    }
-                                    let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
-                                } else if req["action"] == "commit" {
-                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(ui) = ui_handle.upgrade() {
-                                            ui.set_overall_status("Bidirectional sync configured".into());
-                                        }
-                                    });
-                                } else if req["action"] == "cancel" {
-                                    let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
-                                }
-                            }
-                        });
-                    }
-                });
-
-                let my_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
-                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(&local_ip, port, &pub_key, Some(&my_user));
+                let my_user = std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "simply-transfer".to_string());
+                // Use port 2222 (the permanent P2P server port, which handles both OOB JSON handshakes and SSH)
+                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(
+                    &local_ip,
+                    2222,
+                    &pub_key,
+                    Some(&my_user),
+                );
                 conn_to_save.token = generated_token.into();
                 conn_to_save.state = "Waiting for peer...".into();
             } else {
                 let token = conn_to_save.token.to_string();
-                if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                let first_token = token.split(';').next().unwrap_or(&token);
+                if let Ok(parsed) =
+                    simply_transfer_crypto::token::ConnectionToken::parse(first_token)
+                {
                     if conn_to_save.host.trim().is_empty() || conn_to_save.host == "Remote" {
                         if let Some(u) = &parsed.user {
                             conn_to_save.host = format!("{}@{}", u, parsed.ip).into();
@@ -1695,16 +1830,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if conn_to_save.name == "Remote" {
                         conn_to_save.name = format!("Remote ({})", parsed.ip).into();
                     }
-                    let addr = format!("{}:{}", parsed.ip, parsed.port);
+                    let primary_addr = format!("{}:{}", parsed.ip, parsed.port);
+                    let fallback_addr = format!("{}:2222", parsed.ip);
                     tokio::spawn(async move {
-                        if let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await {
-                            use tokio::io::AsyncWriteExt;
+                        use tokio::io::AsyncWriteExt;
+                        if let Ok(Ok(mut stream)) = tokio::time::timeout(
+                            std::time::Duration::from_secs(4),
+                            tokio::net::TcpStream::connect(&primary_addr),
+                        )
+                        .await
+                        {
+                            let _ = stream.write_all(b"{\"action\":\"commit\"}\n").await;
+                        } else if primary_addr != fallback_addr
+                            && let Ok(Ok(mut stream)) = tokio::time::timeout(
+                                std::time::Duration::from_secs(4),
+                                tokio::net::TcpStream::connect(&fallback_addr),
+                            )
+                            .await
+                        {
                             let _ = stream.write_all(b"{\"action\":\"commit\"}\n").await;
                         }
                     });
                 }
             }
 
+            let saved_conn_snapshot = conn_to_save.clone();
             conns.push(conn_to_save);
             let new_idx = (conns.len() - 1) as i32;
             save_connections(&conns);
@@ -1714,7 +1864,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let conn_id = active_connection_uuid(&ui);
             reset_draft_job_for_connection(&ui, conn_id);
-            if let Ok(reg) = reg_for_commit_conn.lock() {
+
+            let vpn_cfg_to_attach = if ui.get_vpn_enabled() {
+                draft_vpn_for_commit.lock().ok().and_then(|d| d.clone())
+            } else {
+                None
+            };
+
+            if let Ok(mut reg) = reg_for_commit_conn.lock() {
+                if let Some(mut vpn_cfg) = vpn_cfg_to_attach {
+                    vpn_cfg.enabled = true;
+                    vpn_cfg.persistent_tunnel = true;
+                    let raw_host = saved_conn_snapshot.host.to_string();
+                    let clean_host_ip = raw_host
+                        .split('@')
+                        .next_back()
+                        .unwrap_or(&raw_host)
+                        .split(':')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let profile = simply_transfer_core::ConnectionProfile {
+                        id: conn_id,
+                        name: saved_conn_snapshot.name.to_string(),
+                        host: saved_conn_snapshot.host.to_string(),
+                        port: 2222,
+                        username: "simply-transfer".to_string(),
+                        auth_config: simply_transfer_core::AuthConfig::default(),
+                        vpn_config: Some(vpn_cfg.clone()),
+                    };
+                    reg.upsert_connection(profile);
+                    save_job_registry(&reg);
+
+                    let vpn_mgr_clone = vpn_mgr_for_commit.clone();
+                    let ui_weak_vpn = ui.as_weak();
+                    tokio::spawn(async move {
+                        let storage =
+                            simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                        let status_msg = match vpn_mgr_clone
+                            .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &clean_host_ip)
+                            .await
+                        {
+                            Ok(_handle) => match vpn_mgr_clone
+                                .verify_tunnel_handshake(conn_id, &vpn_cfg)
+                                .await
+                            {
+                                Ok(msg) => msg,
+                                Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                            },
+                            Err(e) => format!("VPN Error: {}", e),
+                        };
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_weak_vpn.upgrade() {
+                                ui.set_vpn_tunnel_status(status_msg.into());
+                            }
+                        });
+                    });
+                }
                 sync_connection_jobs_ui(&ui, &reg, conn_id);
             }
             populate_inline_browsers(&ui);
@@ -1732,17 +1939,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
+    let reg_for_fetch_dir = job_registry.clone();
+    let vpn_mgr_for_fetch_dir = vpn_manager.clone();
+    let draft_vpn_for_fetch_dir = draft_vpn_config.clone();
     ui.on_fetch_directory(move |path, is_remote, is_dest| {
         let ui_weak = ui_weak.clone();
         let path_str = normalize_browse_path(path.as_str());
+        let reg_clone = reg_for_fetch_dir.clone();
+        let vpn_mgr_clone = vpn_mgr_for_fetch_dir.clone();
+        let draft_vpn_clone = draft_vpn_for_fetch_dir.clone();
 
         let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
         let mut t_type = String::new();
+        let mut conn_id = uuid::Uuid::nil();
+        let mut ui_vpn_enabled = false;
 
         if is_remote
             && let Some(ui) = ui_weak.upgrade() {
+                conn_id = active_connection_uuid(&ui);
+                ui_vpn_enabled = ui.get_vpn_enabled();
                 let conns: Vec<_> = ui.get_connections().iter().collect();
                 let idx = ui.get_selected_connection_idx() as usize;
                 if idx < conns.len() {
@@ -1750,24 +1967,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let token = conns[idx].token.to_string();
                     t_type = conns[idx].transfer_type.to_string();
                     token_str = token.clone();
+                    let first_token = token.split(';').next().unwrap_or(&token);
 
                     if host.contains('@') {
                         let parts: Vec<&str> = host.split('@').collect();
                         dest_user = parts[0].trim().to_string();
                         dest_ip = parts[1].trim().to_string();
                     } else if host == "Remote" || (host.trim().is_empty() && t_type == "Remote Transfer") {
-                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
                             dest_ip = parsed.ip;
                             dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                         }
                     } else if !host.trim().is_empty() {
                         dest_ip = host.trim().to_string();
-                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                        if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
                             dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                         } else {
                             dest_user = "simply-transfer".to_string();
                         }
                     }
+                    dest_ip = dest_ip
+                        .split(':')
+                        .next()
+                        .unwrap_or(&dest_ip)
+                        .trim()
+                        .to_string();
                 }
             }
 
@@ -1776,9 +2000,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut discovered_remote_volumes: Option<Vec<VolumeUi>> = None;
             let mut success = false;
             let mut final_path = path_str.clone();
+            let mut failure_reason = String::new();
 
             if is_remote {
                 if !dest_ip.is_empty() && !dest_user.is_empty() {
+                    let vpn_cfg_opt = reg_clone
+                        .lock()
+                        .ok()
+                        .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                        .or_else(|| {
+                            if ui_vpn_enabled {
+                                draft_vpn_clone.lock().ok().and_then(|d| d.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .filter(|v| v.enabled);
+
+                    if let Some(vpn_cfg) = vpn_cfg_opt {
+                        let storage =
+                            simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                        if let Err(e) = vpn_mgr_clone
+                            .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &dest_ip)
+                            .await
+                        {
+                            tracing::warn!(
+                                "on_fetch_directory: Preflight VPN bring_up_tunnel warning: {}",
+                                e
+                            );
+                        }
+                    }
+
                     use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
 
@@ -1801,17 +2053,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 "on_fetch_directory: Failed to retrieve private key from keyring/vault for pub_key {}",
                                 private_key_id
                             );
+                            failure_reason = "Missing Local Private Key for Peer".to_string();
                         }
                     } else {
                         tracing::error!("on_fetch_directory: Failed to parse token {}", token_str);
+                        failure_reason = "Invalid Connection Token".to_string();
                     }
 
                     if priv_pem_str.is_empty() {
                         tracing::error!("on_fetch_directory: Private key not available for authentication.");
+                        if failure_reason.is_empty() {
+                            failure_reason = "Private Key Unavailable".to_string();
+                        }
                     } else if let Err(e) = ssh_client.connect(&dest_ip, 2222).await {
                         tracing::error!("on_fetch_directory: SSH connect to {} failed: {}", dest_ip, e);
+                        failure_reason = format!("Unreachable ({}:2222) — Check Firewall / VPN", dest_ip);
                     } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &priv_pem_str, None).await {
                         tracing::error!("on_fetch_directory: SSH auth for {}@{} failed: {}", dest_user, dest_ip, e);
+                        failure_reason = format!("Key Rejected by {}@{} — Verify Token on Peer", dest_user, dest_ip);
                     } else {
                         if let Ok(rvols) = ssh_client.list_remote_volumes().await {
                             discovered_remote_volumes = Some(
@@ -1937,8 +2196,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 if !success {
+                    let label = if dest_ip.is_empty() {
+                        "[Waiting for Peer Verification / Host IP]".to_string()
+                    } else if !failure_reason.is_empty() {
+                        format!("[{}]", failure_reason)
+                    } else {
+                        "[Remote Connection Failed]".to_string()
+                    };
                     nodes.push(FileNode {
-                        name: if dest_ip.is_empty() { "[Invalid Remote Configuration]".into() } else { "[Remote Connection Failed]".into() },
+                        name: label.into(),
                         is_dir: false,
                         path: path_str.clone().into(),
                         is_selected: false,
@@ -2055,15 +2321,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
+    let reg_for_expand = job_registry.clone();
+    let vpn_mgr_for_expand = vpn_manager.clone();
+    let draft_vpn_for_expand = draft_vpn_config.clone();
     ui.on_expand_browser_node(move |node, is_remote, is_dest| {
         let node_path = node.path.to_string();
         let ui_weak = ui_weak.clone();
+        let reg_clone = reg_for_expand.clone();
+        let vpn_mgr_clone = vpn_mgr_for_expand.clone();
+        let draft_vpn_clone = draft_vpn_for_expand.clone();
 
         let mut token_str = String::new();
         let mut dest_ip = String::new();
         let mut dest_user = String::new();
+        let mut conn_id = uuid::Uuid::nil();
+        let mut ui_vpn_enabled = false;
 
         if is_remote && let Some(ui) = ui_weak.upgrade() {
+            conn_id = active_connection_uuid(&ui);
+            ui_vpn_enabled = ui.get_vpn_enabled();
             let conns: Vec<_> = ui.get_connections().iter().collect();
             let idx = ui.get_selected_connection_idx() as usize;
             if idx < conns.len() {
@@ -2071,23 +2347,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let token = conns[idx].token.to_string();
                 let t_type = conns[idx].transfer_type.to_string();
                 token_str = token.clone();
+                let first_token = token.split(';').next().unwrap_or(&token);
                 if host.contains('@') {
                     let parts: Vec<&str> = host.split('@').collect();
                     dest_user = parts[0].trim().to_string();
                     dest_ip = parts[1].trim().to_string();
                 } else if host == "Remote" || (host.trim().is_empty() && t_type == "Remote Transfer") {
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
                         dest_ip = parsed.ip;
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     }
                 } else if !host.trim().is_empty() {
                     dest_ip = host.trim().to_string();
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     } else {
                         dest_user = "simply-transfer".to_string();
                     }
                 }
+                dest_ip = dest_ip
+                    .split(':')
+                    .next()
+                    .unwrap_or(&dest_ip)
+                    .trim()
+                    .to_string();
             }
         }
 
@@ -2115,6 +2398,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if is_remote {
                 if !dest_ip.is_empty() {
+                    let vpn_cfg_opt = reg_clone
+                        .lock()
+                        .ok()
+                        .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                        .or_else(|| {
+                            if ui_vpn_enabled {
+                                draft_vpn_clone.lock().ok().and_then(|d| d.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .filter(|v| v.enabled);
+
+                    if let Some(vpn_cfg) = vpn_cfg_opt {
+                        let storage =
+                            simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                        let _ = vpn_mgr_clone
+                            .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &dest_ip)
+                            .await;
+                    }
+
                     use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
 
@@ -2461,14 +2765,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     let reg_for_conn_select = job_registry.clone();
+    let draft_vpn_for_select = draft_vpn_config.clone();
+    let vpn_mgr_for_select = vpn_manager.clone();
     ui.on_connection_selected(move |idx| {
         if let Some(ui) = ui_weak.upgrade() {
             let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
             let idx = idx as usize;
-            let conn_id = if idx < conns.len() {
-                connection_uuid_for_item(&conns[idx])
+            let (conn_id, host_ip) = if idx < conns.len() {
+                let raw_h = conns[idx].host.to_string();
+                let clean_h = raw_h
+                    .split('@')
+                    .next_back()
+                    .unwrap_or(&raw_h)
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                (connection_uuid_for_item(&conns[idx]), clean_h)
             } else {
-                uuid::Uuid::nil()
+                (uuid::Uuid::nil(), String::new())
             };
             // Explicitly reset draft_job to a clean default bound to the active connection_id
             // so previous connection transfer settings never bleed into new connections or tasks.
@@ -2484,12 +2800,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .get_connection(conn_id)
                     .and_then(|c| c.vpn_config.as_ref())
                 {
-                    ui.set_vpn_enabled(true);
+                    let clean_ip =
+                        simply_transfer_core::firewall::VpnTunnelManager::extract_interface_ip(
+                            &vpn_cfg.address,
+                        );
+                    ui.set_vpn_enabled(vpn_cfg.enabled);
                     ui.set_vpn_endpoint(vpn_cfg.endpoint.clone().into());
-                    ui.set_vpn_interface_ip(vpn_cfg.address.clone().into());
+                    ui.set_vpn_interface_ip(clean_ip.into());
                     ui.set_vpn_masked_pubkey(vpn_cfg.masked_public_key().into());
-                    ui.set_vpn_tunnel_status("Configured (Ready)".into());
+                    ui.set_vpn_tunnel_status(
+                        if vpn_cfg.enabled {
+                            "Checking Tunnel..."
+                        } else {
+                            "Disabled"
+                        }
+                        .into(),
+                    );
+                    if let Ok(mut d_lock) = draft_vpn_for_select.lock() {
+                        *d_lock = Some(vpn_cfg.clone());
+                    }
+                    if vpn_cfg.enabled {
+                        let vpn_cfg_clone = vpn_cfg.clone();
+                        let vpn_mgr_clone = vpn_mgr_for_select.clone();
+                        let ui_weak_vpn = ui.as_weak();
+                        tokio::spawn(async move {
+                            let storage = simply_transfer_crypto::SecureStorage::new(
+                                "com.simplytransfer.app",
+                            );
+                            let status_msg = match vpn_mgr_clone
+                                .bring_up_tunnel(conn_id, &vpn_cfg_clone, &storage, &host_ip)
+                                .await
+                            {
+                                Ok(_handle) => match vpn_mgr_clone
+                                    .verify_tunnel_handshake(conn_id, &vpn_cfg_clone)
+                                    .await
+                                {
+                                    Ok(msg) => msg,
+                                    Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                                },
+                                Err(e) => format!("VPN Error: {}", e),
+                            };
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(ui) = ui_weak_vpn.upgrade() {
+                                    ui.set_vpn_tunnel_status(status_msg.into());
+                                }
+                            });
+                        });
+                    }
                 } else {
+                    if let Ok(mut d_lock) = draft_vpn_for_select.lock() {
+                        *d_lock = None;
+                    }
                     ui.set_vpn_enabled(false);
                     ui.set_vpn_conf_path("".into());
                     ui.set_vpn_endpoint("".into());
@@ -2504,6 +2865,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ui_weak = ui.as_weak();
     let reg_for_vpn_import = job_registry.clone();
+    let draft_vpn_for_import = draft_vpn_config.clone();
+    let vpn_mgr_for_import = vpn_manager.clone();
     ui.on_import_wireguard_conf(move |path_arg| {
         if let Some(ui) = ui_weak.upgrade() {
             let chosen_path = if !path_arg.trim().is_empty() {
@@ -2526,15 +2889,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match simply_transfer_crypto::VpnConfig::from_wireguard_conf(
                             &parsed, &storage,
                         ) {
-                            Ok(vpn_cfg) => {
+                            Ok(mut vpn_cfg) => {
+                                vpn_cfg.enabled = true;
+                                vpn_cfg.persistent_tunnel = true;
+                                let clean_ip = simply_transfer_core::firewall::VpnTunnelManager::extract_interface_ip(&vpn_cfg.address);
                                 ui.set_vpn_enabled(true);
                                 ui.set_vpn_conf_path(
                                     conf_path.to_string_lossy().to_string().into(),
                                 );
                                 ui.set_vpn_endpoint(vpn_cfg.endpoint.clone().into());
-                                ui.set_vpn_interface_ip(vpn_cfg.address.clone().into());
+                                ui.set_vpn_interface_ip(clean_ip.into());
                                 ui.set_vpn_masked_pubkey(vpn_cfg.masked_public_key().into());
-                                ui.set_vpn_tunnel_status("Configured (Ready)".into());
+                                ui.set_vpn_tunnel_status(
+                                    "Bringing up tunnel & verifying handshake...".into(),
+                                );
+
+                                if let Ok(mut d_lock) = draft_vpn_for_import.lock() {
+                                    *d_lock = Some(vpn_cfg.clone());
+                                }
 
                                 let conns: Vec<ConnectionItem> =
                                     ui.get_connections().iter().collect();
@@ -2543,27 +2915,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let (name, host) = if idx < conns.len() {
                                     (conns[idx].name.to_string(), conns[idx].host.to_string())
                                 } else {
-                                    ("Default Connection".to_string(), vpn_cfg.endpoint.clone())
+                                    ("Default Connection".to_string(), String::new())
                                 };
 
-                                if let Ok(mut reg) = reg_for_vpn_import.lock() {
+                                if !ui.get_is_adding_connection()
+                                    && let Ok(mut reg) = reg_for_vpn_import.lock()
+                                {
                                     let mut profile = reg
                                         .get_connection(conn_id)
                                         .cloned()
                                         .unwrap_or(simply_transfer_core::ConnectionProfile {
                                             id: conn_id,
                                             name,
-                                            host,
+                                            host: host.clone(),
                                             port: 2222,
                                             username: "simply-transfer".to_string(),
                                             auth_config: simply_transfer_core::AuthConfig::default(
                                             ),
                                             vpn_config: None,
                                         });
-                                    profile.vpn_config = Some(vpn_cfg);
+                                    profile.vpn_config = Some(vpn_cfg.clone());
                                     reg.upsert_connection(profile);
                                     save_job_registry(&reg);
                                 }
+
+                                let target_host_ip = if ui.get_is_adding_connection() {
+                                    String::new()
+                                } else {
+                                    host.split('@')
+                                        .next_back()
+                                        .unwrap_or(&host)
+                                        .split(':')
+                                        .next()
+                                        .unwrap_or("")
+                                        .trim()
+                                        .to_string()
+                                };
+                                let vpn_mgr_clone = vpn_mgr_for_import.clone();
+                                let ui_weak_vpn = ui.as_weak();
+                                tokio::spawn(async move {
+                                    let storage = simply_transfer_crypto::SecureStorage::new(
+                                        "com.simplytransfer.app",
+                                    );
+                                    let status_msg = match vpn_mgr_clone
+                                        .bring_up_tunnel(
+                                            conn_id,
+                                            &vpn_cfg,
+                                            &storage,
+                                            &target_host_ip,
+                                        )
+                                        .await
+                                    {
+                                        Ok(_handle) => match vpn_mgr_clone
+                                            .verify_tunnel_handshake(conn_id, &vpn_cfg)
+                                            .await
+                                        {
+                                            Ok(msg) => msg,
+                                            Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                                        },
+                                        Err(e) => format!("VPN Error: {}", e),
+                                    };
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(ui) = ui_weak_vpn.upgrade() {
+                                            ui.set_vpn_tunnel_status(status_msg.into());
+                                        }
+                                    });
+                                });
                             }
                             Err(e) => {
                                 ui.set_vpn_tunnel_status(format!("Vault Error: {}", e).into());
@@ -2577,6 +2994,213 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(e) => {
                     ui.set_vpn_tunnel_status(format!("File Error: {}", e).into());
                 }
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_vpn_toggle = job_registry.clone();
+    let draft_vpn_for_toggle = draft_vpn_config.clone();
+    let vpn_mgr_for_toggle = vpn_manager.clone();
+    ui.on_toggle_vpn(move |enabled| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            let mut active_vpn_cfg = None;
+
+            if let Ok(mut d_lock) = draft_vpn_for_toggle.lock()
+                && let Some(ref mut cfg) = *d_lock
+            {
+                cfg.enabled = enabled;
+                cfg.persistent_tunnel = true;
+                active_vpn_cfg = Some(cfg.clone());
+            }
+
+            if !ui.get_is_adding_connection()
+                && let Ok(mut reg) = reg_for_vpn_toggle.lock()
+                && let Some(mut profile) = reg.get_connection(conn_id).cloned()
+                && let Some(ref mut cfg) = profile.vpn_config
+            {
+                cfg.enabled = enabled;
+                cfg.persistent_tunnel = true;
+                if active_vpn_cfg.is_none() {
+                    active_vpn_cfg = Some(cfg.clone());
+                }
+                reg.upsert_connection(profile);
+                save_job_registry(&reg);
+            }
+
+            if !enabled {
+                ui.set_vpn_tunnel_status("Disconnecting VPN...".into());
+                let vpn_mgr_clone = vpn_mgr_for_toggle.clone();
+                let ui_weak_vpn = ui.as_weak();
+                tokio::spawn(async move {
+                    let _ = vpn_mgr_clone.teardown_tunnel(conn_id, true).await;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak_vpn.upgrade() {
+                            ui.set_vpn_tunnel_status("Disabled".into());
+                        }
+                    });
+                });
+            } else if let Some(vpn_cfg) = active_vpn_cfg {
+                ui.set_vpn_tunnel_status("Bringing up tunnel & verifying handshake...".into());
+                let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+                let idx = ui.get_selected_connection_idx() as usize;
+                let target_host_ip = if !ui.get_is_adding_connection() && idx < conns.len() {
+                    let raw_h = conns[idx].host.to_string();
+                    raw_h
+                        .split('@')
+                        .next_back()
+                        .unwrap_or(&raw_h)
+                        .split(':')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                } else {
+                    String::new()
+                };
+                let vpn_mgr_clone = vpn_mgr_for_toggle.clone();
+                let ui_weak_vpn = ui.as_weak();
+                tokio::spawn(async move {
+                    let storage =
+                        simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                    let status_msg = match vpn_mgr_clone
+                        .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &target_host_ip)
+                        .await
+                    {
+                        Ok(_handle) => match vpn_mgr_clone
+                            .verify_tunnel_handshake(conn_id, &vpn_cfg)
+                            .await
+                        {
+                            Ok(msg) => msg,
+                            Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                        },
+                        Err(e) => format!("VPN Error: {}", e),
+                    };
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = ui_weak_vpn.upgrade() {
+                            ui.set_vpn_tunnel_status(status_msg.into());
+                        }
+                    });
+                });
+            } else {
+                ui.set_vpn_tunnel_status("Waiting for WireGuard .conf import...".into());
+            }
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_vpn_test = job_registry.clone();
+    let draft_vpn_for_test = draft_vpn_config.clone();
+    let vpn_mgr_for_test = vpn_manager.clone();
+    ui.on_test_vpn_connection(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            let conn_id = active_connection_uuid(&ui);
+            let vpn_cfg_opt = draft_vpn_for_test
+                .lock()
+                .ok()
+                .and_then(|d| d.clone())
+                .or_else(|| {
+                    reg_for_vpn_test
+                        .lock()
+                        .ok()
+                        .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                });
+
+            let Some(vpn_cfg) = vpn_cfg_opt else {
+                ui.set_vpn_tunnel_status("No WireGuard .conf imported yet".into());
+                return;
+            };
+
+            ui.set_vpn_tunnel_status("Verifying VPN tunnel & peer handshake...".into());
+            let conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            let idx = ui.get_selected_connection_idx() as usize;
+            let target_host_ip = if !ui.get_is_adding_connection() && idx < conns.len() {
+                let raw_h = conns[idx].host.to_string();
+                raw_h
+                    .split('@')
+                    .next_back()
+                    .unwrap_or(&raw_h)
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+
+            let vpn_mgr_clone = vpn_mgr_for_test.clone();
+            let ui_weak_vpn = ui.as_weak();
+            tokio::spawn(async move {
+                let storage = simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                let status_msg = match vpn_mgr_clone
+                    .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &target_host_ip)
+                    .await
+                {
+                    Ok(_handle) => match vpn_mgr_clone
+                        .verify_tunnel_handshake(conn_id, &vpn_cfg)
+                        .await
+                    {
+                        Ok(msg) => msg,
+                        Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                    },
+                    Err(e) => format!("VPN Error: {}", e),
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui_weak_vpn.upgrade() {
+                        ui.set_vpn_tunnel_status(status_msg.into());
+                    }
+                });
+            });
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    let reg_for_update_conn = job_registry.clone();
+    let draft_vpn_for_update = draft_vpn_config.clone();
+    ui.on_update_connection(move |idx, name, host, key| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let mut conns: Vec<ConnectionItem> = ui.get_connections().iter().collect();
+            let idx = idx as usize;
+            if idx < conns.len() {
+                let old_conn_id = connection_uuid_for_item(&conns[idx]);
+                conns[idx].name = name.clone();
+                conns[idx].host = host.clone();
+                if !key.trim().is_empty() {
+                    conns[idx].token = key;
+                }
+                let new_conn_id = connection_uuid_for_item(&conns[idx]);
+                save_connections(&conns);
+                ui.set_connections(std::rc::Rc::new(slint::VecModel::from(conns.clone())).into());
+
+                if let Ok(mut reg) = reg_for_update_conn.lock() {
+                    let existing_vpn = reg
+                        .get_connection(old_conn_id)
+                        .and_then(|c| c.vpn_config.clone());
+                    let draft_vpn = draft_vpn_for_update.lock().ok().and_then(|d| d.clone());
+                    let final_vpn = if ui.get_vpn_enabled() {
+                        draft_vpn.or(existing_vpn).map(|mut v| {
+                            v.enabled = true;
+                            v.persistent_tunnel = true;
+                            v
+                        })
+                    } else {
+                        None
+                    };
+                    let profile = simply_transfer_core::ConnectionProfile {
+                        id: new_conn_id,
+                        name: name.to_string(),
+                        host: host.to_string(),
+                        port: 2222,
+                        username: "simply-transfer".to_string(),
+                        auth_config: simply_transfer_core::AuthConfig::default(),
+                        vpn_config: final_vpn,
+                    };
+                    reg.upsert_connection(profile);
+                    save_job_registry(&reg);
+                }
+                populate_inline_browsers(&ui);
             }
         }
     });
@@ -2938,14 +3562,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let ui_weak = ui.as_weak();
+    let reg_for_verify = job_registry.clone();
+    let draft_vpn_for_verify = draft_vpn_config.clone();
+    let vpn_mgr_for_verify = vpn_manager.clone();
     ui.on_verify_remote_token(move |token| {
         let ui_weak = ui_weak.clone();
         let token = token.trim().to_string();
+        let reg_clone = reg_for_verify.clone();
+        let draft_vpn_clone = draft_vpn_for_verify.clone();
+        let vpn_mgr_clone = vpn_mgr_for_verify.clone();
+
+        let (conn_id, ui_vpn_enabled) = if let Some(ui) = ui_weak.upgrade() {
+            (active_connection_uuid(&ui), ui.get_vpn_enabled())
+        } else {
+            (uuid::Uuid::nil(), false)
+        };
+
         tokio::spawn(async move {
             log_event("connection", &format!("Validating remote token: {}", token));
 
             let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
                 Ok(parsed) => {
+                    // 0. If Preflight VPN is enabled, bring up the persistent WireGuard tunnel targeting parsed.ip first!
+                    let vpn_cfg_opt = if ui_vpn_enabled {
+                        draft_vpn_clone.lock().ok().and_then(|d| d.clone()).or_else(|| {
+                            reg_clone
+                                .lock()
+                                .ok()
+                                .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                        })
+                    } else {
+                        reg_clone
+                            .lock()
+                            .ok()
+                            .and_then(|r| r.get_connection(conn_id).and_then(|c| c.vpn_config.clone()))
+                            .filter(|v| v.enabled)
+                    };
+
+                    if let Some(vpn_cfg) = vpn_cfg_opt {
+                        let ui_vpn_init = ui_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_vpn_init.upgrade() {
+                                ui.set_vpn_tunnel_status(
+                                    "Activating Preflight VPN for handshake...".into(),
+                                );
+                            }
+                        });
+                        let storage =
+                            simply_transfer_crypto::SecureStorage::new("com.simplytransfer.app");
+                        let vpn_status_msg = match vpn_mgr_clone
+                            .bring_up_tunnel(conn_id, &vpn_cfg, &storage, &parsed.ip)
+                            .await
+                        {
+                            Ok(_handle) => match vpn_mgr_clone
+                                .verify_tunnel_handshake(conn_id, &vpn_cfg)
+                                .await
+                            {
+                                Ok(msg) => msg,
+                                Err(e) => format!("Tunnel Up (Verify Warning: {})", e),
+                            },
+                            Err(e) => format!("VPN Error: {}", e),
+                        };
+                        let ui_vpn_done = ui_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = ui_vpn_done.upgrade() {
+                                ui.set_vpn_tunnel_status(vpn_status_msg.into());
+                            }
+                        });
+                    }
+
                     // 1. Immediately ingest the peer's public key into the built-in P2P SSH server (port 2222)
                     // before any network handshake or external OS commands so Windows/Linux key ingestion is never delayed.
                     if let Some(srv) = P2P_SERVER.get() {
@@ -3040,8 +3725,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     // Trigger remote handshake (TCP connect to source device)
-                    let addr = format!("{}:{}", parsed.ip, parsed.port);
-                    log_event("connection", &format!("Attempting TCP handshake with source at {}", addr));
+                    let primary_addr = format!("{}:{}", parsed.ip, parsed.port);
+                    let fallback_addr = format!("{}:2222", parsed.ip);
+                    log_event("connection", &format!("Attempting TCP handshake with source at {}", primary_addr));
 
                     // Generate our own key pair and securely store it in the system keyring & encrypted vault
                     let key_mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
@@ -3089,12 +3775,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
 
-                    // Use a short timeout for the handshake
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(15),
-                        tokio::net::TcpStream::connect(&addr)
-                    ).await {
-                        Ok(Ok(mut stream)) => {
+                    // Connect to primary_addr first (8s timeout), falling back to port 2222 if primary_addr differs
+                    let mut connected_stream = match tokio::time::timeout(
+                        std::time::Duration::from_secs(8),
+                        tokio::net::TcpStream::connect(&primary_addr),
+                    )
+                    .await
+                    {
+                        Ok(Ok(s)) => Ok(s),
+                        Ok(Err(e)) => Err(e.to_string()),
+                        Err(_) => Err("Connection timed out".to_string()),
+                    };
+
+                    if connected_stream.is_err() && primary_addr != fallback_addr {
+                        log_event(
+                            "connection",
+                            &format!(
+                                "Primary handshake port {} unreachable, retrying on permanent port {}",
+                                primary_addr, fallback_addr
+                            ),
+                        );
+                        connected_stream = match tokio::time::timeout(
+                            std::time::Duration::from_secs(8),
+                            tokio::net::TcpStream::connect(&fallback_addr),
+                        )
+                        .await
+                        {
+                            Ok(Ok(s)) => Ok(s),
+                            Ok(Err(e)) => Err(e.to_string()),
+                            Err(_) => Err("Connection timed out".to_string()),
+                        };
+                    }
+
+                    match connected_stream {
+                        Ok(mut stream) => {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
                             let dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
                             let req = format!("{{\"action\":\"verify\",\"user\":\"{}\",\"pub_key\":\"{}\"}}\n", dest_user, my_pub_key_id);
@@ -3102,7 +3816,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut reader = tokio::io::BufReader::new(stream);
                             let mut line = String::new();
                             let read_result = tokio::time::timeout(
-                                std::time::Duration::from_secs(10),
+                                std::time::Duration::from_secs(8),
                                 reader.read_line(&mut line)
                             ).await;
 
@@ -3146,21 +3860,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     (true, "Connection Verified Successfully".to_string())
                                 } else {
                                     log_event("connection", "Handshake failed to return OK.");
-                                    (false, "Handshake Failed".to_string())
+                                    (false, "Handshake Rejected by Peer".to_string())
                                 }
                             } else {
                                 log_event("connection", "Remote handshake read timed out.");
-                                (true, "Key Ingested, but Handshake Read Timed Out".to_string())
+                                (
+                                    false,
+                                    format!(
+                                        "Handshake Timed Out waiting for response from {}:2222",
+                                        parsed.ip
+                                    ),
+                                )
                             }
                         }
-                        Ok(Err(e)) => {
+                        Err(e) => {
                             log_event("connection", &format!("Handshake failed: {}", e));
-                            // Still return verified true since we ingested the key, but indicate connection issue
-                            (true, format!("Key Ingested, but Handshake Failed: {}", e))
-                        }
-                        Err(_) => {
-                            log_event("connection", "Handshake timed out.");
-                            (true, "Key Ingested, but Handshake Timed Out".to_string())
+                            (
+                                false,
+                                format!(
+                                    "Cannot reach Host {}:2222 ({}) — Check Host Firewall (One-Time Setup) or Preflight VPN",
+                                    parsed.ip, e
+                                ),
+                            )
                         }
                     }
                 }
@@ -3306,8 +4027,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let ui_weak = ui.as_weak();
+    let draft_vpn_for_add = draft_vpn_config.clone();
     ui.on_add_connection(move || {
         println!("Add connection initiated");
+        if let Ok(mut d_lock) = draft_vpn_for_add.lock() {
+            *d_lock = None;
+        }
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_vpn_enabled(false);
+            ui.set_vpn_conf_path("".into());
+            ui.set_vpn_endpoint("".into());
+            ui.set_vpn_interface_ip("".into());
+            ui.set_vpn_masked_pubkey("".into());
+            ui.set_vpn_tunnel_status("Disabled".into());
+        }
     });
 
     ui.on_pause_transfer(move || {

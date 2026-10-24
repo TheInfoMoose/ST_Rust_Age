@@ -9,6 +9,7 @@ use keyring::Entry;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -20,6 +21,15 @@ pub enum CryptoError {
     NotFound,
     #[error("Other error: {0}")]
     Other(String),
+}
+
+/// Process-wide lock serializing every read-modify-write cycle on the shared vault file.
+static VAULT_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_vault() -> MutexGuard<'static, ()> {
+    VAULT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Abstract storage for secrets (like SSH passphrases or profile secrets)
@@ -41,7 +51,7 @@ impl SecureStorage {
         Entry::new(&self.service_name, account).map_err(CryptoError::KeyringError)
     }
 
-    fn get_vault_path() -> PathBuf {
+    fn get_vault_path(&self) -> PathBuf {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
@@ -58,7 +68,16 @@ impl SecureStorage {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         }
-        dir.join("vault.enc")
+        if self.service_name == "com.simplytransfer.app" {
+            dir.join("vault.enc")
+        } else {
+            let sanitized: String = self
+                .service_name
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            dir.join(format!("vault_{}.enc", sanitized))
+        }
     }
 
     fn derive_vault_key(&self) -> [u8; 32] {
@@ -77,7 +96,7 @@ impl SecureStorage {
     }
 
     fn load_encrypted_vault(&self) -> HashMap<String, String> {
-        let path = Self::get_vault_path();
+        let path = self.get_vault_path();
         if !path.exists() {
             return HashMap::new();
         }
@@ -103,7 +122,7 @@ impl SecureStorage {
     }
 
     fn save_encrypted_vault(&self, map: &HashMap<String, String>) -> Result<(), CryptoError> {
-        let path = Self::get_vault_path();
+        let path = self.get_vault_path();
         let json_bytes = serde_json::to_vec(map).map_err(|e| CryptoError::Other(e.to_string()))?;
         let key = self.derive_vault_key();
         let cipher = Aes256Gcm::new_from_slice(&key).expect("32 bytes key");
@@ -117,11 +136,18 @@ impl SecureStorage {
         payload.extend_from_slice(&nonce_bytes);
         payload.extend_from_slice(&ciphertext);
 
-        std::fs::write(&path, &payload).map_err(|e| CryptoError::Other(e.to_string()))?;
+        // Write to a temp file in the same directory, then atomically rename into place
+        // so readers never observe a partially written vault.
+        let tmp_path = path.with_extension(format!("enc.tmp.{}", std::process::id()));
+        std::fs::write(&tmp_path, &payload).map_err(|e| CryptoError::Other(e.to_string()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(CryptoError::Other(e.to_string()));
         }
         Ok(())
     }
@@ -129,19 +155,21 @@ impl SecureStorage {
     /// Store a sensitive string securely. Synchronizes with both the OS keyring and the AES-256-GCM encrypted vault fallback
     /// so transient D-Bus Secret Service sessions (e.g. on Arch/CachyOS Linux) never lose keys across threads or restarts.
     pub fn set_secret(&self, account: &str, mut secret: String) -> Result<(), CryptoError> {
+        let _guard = lock_vault();
         if let Ok(entry) = self.get_entry(account) {
             let _ = entry.set_password(&secret);
         }
 
         let mut vault = self.load_encrypted_vault();
         vault.insert(account.to_string(), secret.clone());
-        self.save_encrypted_vault(&vault)?;
+        let res = self.save_encrypted_vault(&vault);
         secret.zeroize();
-        Ok(())
+        res
     }
 
     /// Retrieve a sensitive string. The caller is responsible for zeroizing it after use.
     pub fn get_secret(&self, account: &str) -> Result<String, CryptoError> {
+        let _guard = lock_vault();
         if let Ok(entry) = self.get_entry(account)
             && let Ok(pwd) = entry.get_password()
             && !pwd.trim().is_empty()
@@ -159,6 +187,7 @@ impl SecureStorage {
 
     /// Delete a secret securely.
     pub fn delete_secret(&self, account: &str) -> Result<(), CryptoError> {
+        let _guard = lock_vault();
         if let Ok(entry) = self.get_entry(account) {
             let _ = entry.delete_credential();
         }
@@ -172,6 +201,7 @@ impl SecureStorage {
     /// Purge all stored secrets that are not referenced in `active_accounts`.
     /// Returns the number of orphaned keys purged.
     pub fn purge_orphaned_keys(&self, active_accounts: &[String]) -> Result<usize, CryptoError> {
+        let _guard = lock_vault();
         let mut vault = self.load_encrypted_vault();
         let mut to_remove = Vec::new();
         for key in vault.keys() {

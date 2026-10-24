@@ -110,10 +110,18 @@ impl RusshClient {
             info.port
         );
         let config = Self::make_config();
-        let mut new_handle =
-            russh::client::connect(config, (info.host.as_str(), info.port), ClientHandler)
-                .await
-                .map_err(|e| SshError::ConnectionFailed(format!("Reconnect failed: {}", e)))?;
+        let mut new_handle = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            russh::client::connect(config, (info.host.as_str(), info.port), ClientHandler),
+        )
+        .await
+        .map_err(|_| {
+            SshError::ConnectionFailed(format!(
+                "Connection to {}:{} timed out after 10s (check firewall port 2222 or VPN)",
+                info.host, info.port
+            ))
+        })?
+        .map_err(|e| SshError::ConnectionFailed(format!("Reconnect failed: {}", e)))?;
 
         Self::do_auth(&mut new_handle, &info.username, &info.private_key_pem).await?;
 
@@ -415,9 +423,18 @@ impl SshClient for RusshClient {
         *self.remote_port.lock().await = port;
 
         let config = Self::make_config();
-        let client = russh::client::connect(config, (host, port), ClientHandler)
-            .await
-            .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
+        let client = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            russh::client::connect(config, (host, port), ClientHandler),
+        )
+        .await
+        .map_err(|_| {
+            SshError::ConnectionFailed(format!(
+                "SSH connection to {}:{} timed out after 10s (ensure Simply Transfer is open on remote device, port {}/tcp is allowed in firewall, or Preflight VPN is connected)",
+                host, port, port
+            ))
+        })?
+        .map_err(|e| SshError::ConnectionFailed(e.to_string()))?;
 
         *handle_guard = Some(client);
         Ok(())
