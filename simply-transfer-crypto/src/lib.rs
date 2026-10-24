@@ -51,7 +51,7 @@ impl SecureStorage {
         Entry::new(&self.service_name, account).map_err(CryptoError::KeyringError)
     }
 
-    fn get_vault_path() -> PathBuf {
+    fn get_vault_path(&self) -> PathBuf {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| ".".to_string());
@@ -68,7 +68,16 @@ impl SecureStorage {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         }
-        dir.join("vault.enc")
+        if self.service_name == "com.simplytransfer.app" {
+            dir.join("vault.enc")
+        } else {
+            let sanitized: String = self
+                .service_name
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            dir.join(format!("vault_{}.enc", sanitized))
+        }
     }
 
     fn derive_vault_key(&self) -> [u8; 32] {
@@ -87,7 +96,7 @@ impl SecureStorage {
     }
 
     fn load_encrypted_vault(&self) -> HashMap<String, String> {
-        let path = Self::get_vault_path();
+        let path = self.get_vault_path();
         if !path.exists() {
             return HashMap::new();
         }
@@ -113,7 +122,7 @@ impl SecureStorage {
     }
 
     fn save_encrypted_vault(&self, map: &HashMap<String, String>) -> Result<(), CryptoError> {
-        let path = Self::get_vault_path();
+        let path = self.get_vault_path();
         let json_bytes = serde_json::to_vec(map).map_err(|e| CryptoError::Other(e.to_string()))?;
         let key = self.derive_vault_key();
         let cipher = Aes256Gcm::new_from_slice(&key).expect("32 bytes key");
@@ -153,9 +162,9 @@ impl SecureStorage {
 
         let mut vault = self.load_encrypted_vault();
         vault.insert(account.to_string(), secret.clone());
-        self.save_encrypted_vault(&vault)?;
+        let res = self.save_encrypted_vault(&vault);
         secret.zeroize();
-        Ok(())
+        res
     }
 
     /// Retrieve a sensitive string. The caller is responsible for zeroizing it after use.

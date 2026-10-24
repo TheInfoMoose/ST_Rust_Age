@@ -11,12 +11,17 @@ use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc};
 
+pub type OobVerifyCallback = Arc<dyn Fn(String, String, String) + Send + Sync>;
+pub type OobActionCallback = Arc<dyn Fn(String) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct TransferServer {
     pub authorized_keys_file_path: PathBuf,
     pub authorized_keys: Arc<tokio::sync::RwLock<HashMap<String, PublicKey>>>,
     file_writers: Arc<Mutex<HashMap<ChannelId, mpsc::Sender<Vec<u8>>>>>,
     pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
+    pub oob_verify_callback: Option<OobVerifyCallback>,
+    pub oob_action_callback: Option<OobActionCallback>,
 }
 
 impl Default for TransferServer {
@@ -100,6 +105,8 @@ impl TransferServer {
             authorized_keys: Arc::new(tokio::sync::RwLock::new(loaded_keys)),
             file_writers: Arc::new(Mutex::new(HashMap::new())),
             event_sender: None,
+            oob_verify_callback: None,
+            oob_action_callback: None,
         }
     }
 
@@ -108,6 +115,15 @@ impl TransferServer {
         sender: tokio::sync::broadcast::Sender<crate::engine::TransferEvent>,
     ) {
         self.event_sender = Some(sender);
+    }
+
+    pub fn set_oob_callbacks(
+        &mut self,
+        on_verify: OobVerifyCallback,
+        on_action: OobActionCallback,
+    ) {
+        self.oob_verify_callback = Some(on_verify);
+        self.oob_action_callback = Some(on_action);
     }
 
     pub async fn add_authorized_key(&self, key: PublicKey) {
@@ -691,13 +707,117 @@ pub async fn run_server(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     loop {
-        let (socket, _) = listener.accept().await?;
+        let (mut socket, peer_addr) = listener.accept().await?;
         let config_clone = config.clone();
         let mut server_clone = server.clone();
 
         tokio::spawn(async move {
-            if let Err(e) =
-                russh::server::run_stream(config_clone, socket, server_clone.new_client(None)).await
+            let mut peek_buf = [0u8; 4];
+            let is_oob_json = match tokio::time::timeout(
+                std::time::Duration::from_millis(150),
+                socket.peek(&mut peek_buf),
+            )
+            .await
+            {
+                Ok(Ok(n)) if n > 0 => {
+                    let slice = &peek_buf[..n];
+                    let trimmed = slice
+                        .iter()
+                        .skip_while(|&&b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
+                        .copied()
+                        .next();
+                    trimmed == Some(b'{')
+                }
+                _ => false,
+            };
+
+            if is_oob_json {
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+                let (reader, mut writer) = socket.split();
+                let mut buf_reader = tokio::io::BufReader::new(reader);
+                let mut line = String::new();
+                if tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    buf_reader.read_line(&mut line),
+                )
+                .await
+                .is_ok_and(|r| r.is_ok())
+                    && let Ok(req) = serde_json::from_str::<serde_json::Value>(&line)
+                {
+                    let action = req["action"].as_str().unwrap_or("");
+                    if action == "verify" {
+                        let dest_ip = peer_addr.ip().to_string();
+                        let dest_user = req["user"]
+                            .as_str()
+                            .unwrap_or("simply-transfer")
+                            .to_string();
+                        let dest_pub = req
+                            .get("pub_key")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        tracing::info!(
+                            "Port 2222 OOB verify request from {}@{}",
+                            dest_user,
+                            dest_ip
+                        );
+
+                        if !dest_pub.is_empty()
+                            && server_clone.add_authorized_key_from_str(&dest_pub).await
+                        {
+                            // Also append to ~/.ssh/authorized_keys for OS sshd compatibility
+                            let home_dir = std::env::var("HOME")
+                                .or_else(|_| std::env::var("USERPROFILE"))
+                                .unwrap_or_else(|_| ".".to_string());
+                            let ssh_dir = PathBuf::from(&home_dir).join(".ssh");
+                            let _ = fs::create_dir_all(&ssh_dir);
+                            let auth_keys = ssh_dir.join("authorized_keys");
+                            let pub_key_line =
+                                format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
+                            let already_present = fs::read_to_string(&auth_keys)
+                                .map(|c| c.contains(dest_pub.trim()))
+                                .unwrap_or(false);
+                            if !already_present
+                                && let Ok(mut f) = fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&auth_keys)
+                            {
+                                let _ = writeln!(f, "{}", pub_key_line);
+                            }
+
+                            let my_user = std::env::var("USER")
+                                .or_else(|_| std::env::var("USERNAME"))
+                                .unwrap_or_else(|_| "simply-transfer".to_string());
+                            let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
+                            let _ = writer.write_all(res.as_bytes()).await;
+                            let _ = writer.flush().await;
+
+                            if let Some(cb) = &server_clone.oob_verify_callback {
+                                cb(dest_ip, dest_user, dest_pub);
+                            }
+                            return;
+                        }
+                        let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
+                        let _ = writer.flush().await;
+                    } else if action == "commit" || action == "cancel" {
+                        let _ = writer.write_all(b"{\"status\":\"ok\"}\n").await;
+                        let _ = writer.flush().await;
+                        if let Some(cb) = &server_clone.oob_action_callback {
+                            cb(action.to_string());
+                        }
+                    }
+                }
+                return;
+            }
+
+            if let Err(e) = russh::server::run_stream(
+                config_clone,
+                socket,
+                server_clone.new_client(Some(peer_addr)),
+            )
+            .await
             {
                 tracing::error!("SSH server error: {}", e);
             }
@@ -812,6 +932,8 @@ mod tests {
             authorized_keys: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             file_writers: Arc::new(Mutex::new(HashMap::new())),
             event_sender: None,
+            oob_verify_callback: None,
+            oob_action_callback: None,
         };
 
         let key = generate_host_key();

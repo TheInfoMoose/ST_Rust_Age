@@ -896,6 +896,9 @@ export component MainWindow inherits Window {
     in-out property <string> vpn_masked_pubkey: "";
     in-out property <string> vpn_tunnel_status: "Disabled";
     callback import_wireguard_conf(string);
+    callback toggle_vpn(bool);
+    callback test_vpn_connection();
+    callback update_connection(int, string, string, string);
 
     in property <string> network_link_type: "Dynamic";
     in property <string> network_max_throughput: "Variable";
@@ -1330,11 +1333,11 @@ export component MainWindow inherits Window {
                         }
 
                         RustCheckBox {
-                            text: "Enable WAN VPN (WireGuard)";
+                            text: "Enable Preflight WAN VPN (WireGuard)";
                             checked: root.vpn_enabled;
                             toggled => {
                                 root.vpn_enabled = self.checked;
-                                root.vpn_tunnel_status = self.checked ? (root.vpn_endpoint != "" ? "Configured (Ready)" : "Enabled (No .conf)") : "Disabled";
+                                root.toggle_vpn(self.checked);
                             }
                         }
 
@@ -1350,20 +1353,43 @@ export component MainWindow inherits Window {
 
                                 LineEdit {
                                     text: root.vpn_conf_path;
-                                    placeholder-text: "/path/to/wg0.conf";
+                                    placeholder-text: "/path/to/wg0.conf (or click Import .conf)";
                                     edited(t) => { root.vpn_conf_path = t; }
                                 }
 
                                 RustButton {
                                     variant: "outline-accent";
                                     text: "Import .conf";
-                                    tooltip: "Parse and securely store the specified WireGuard configuration file in the vault.";
+                                    tooltip: "Parse, encrypt in vault, and immediately bring up the persistent WireGuard VPN tunnel.";
                                     clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
+                                }
+
+                                RustButton {
+                                    variant: "secondary";
+                                    text: "Verify VPN";
+                                    tooltip: "Verify that the WireGuard tunnel interface is up and confirm peer handshake.";
+                                    clicked => { root.test_vpn_connection(); }
+                                }
+                            }
+
+                            HorizontalBox {
+                                spacing: 8px;
+                                Text {
+                                    text: "VPN Status:";
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.vpn_tunnel_status;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    color: AppTheme.accent;
+                                    vertical-alignment: center;
                                 }
                             }
 
                             if root.vpn_endpoint != "": Text {
-                                text: "Endpoint: " + root.vpn_endpoint + " | Interface IP: " + root.vpn_interface_ip + " | PublicKey: " + root.vpn_masked_pubkey;
+                                text: "Endpoint: " + root.vpn_endpoint + " | Tunnel IP: " + root.vpn_interface_ip + " | Peer Key: " + root.vpn_masked_pubkey;
                                 font-size: 11px;
                                 color: AppTheme.text_muted;
                             }
@@ -1388,6 +1414,12 @@ export component MainWindow inherits Window {
                                 text: "Commit";
                                 tooltip: "Save the updated connection configuration.";
                                 clicked => {
+                                    root.update_connection(
+                                        root.selected_connection_idx,
+                                        edit_name.text,
+                                        edit_host.text,
+                                        edit_key.text
+                                    );
                                     root.is_editing_connection = false;
                                 }
                             }
@@ -1433,16 +1465,92 @@ export component MainWindow inherits Window {
                             border-top-left-radius: 0px;
                             if root.add_connection_tab == 0: VerticalBox {
                                 Text {
-                                    text: "New Connection";
+                                    text: "New Connection (Host / Generate Token)";
                                     font-weight: 700;
                                     font-size: 16px;
                                 }
 
+                                Text {
+                                    text: "Generate a connection token on this machine and share it with the remote device.";
+                                    font-size: 11px;
+                                    color: AppTheme.text_muted;
+                                }
+
                                 Rectangle {
-                                    height: 10px;
+                                    height: 6px;
                                 }
 
                                 spacing: 8px;
+                                RustCheckBox {
+                                    text: "Step 1 (Optional): Enable Preflight WAN VPN (WireGuard)";
+                                    checked: root.vpn_enabled;
+                                    toggled => {
+                                        root.vpn_enabled = self.checked;
+                                        root.toggle_vpn(self.checked);
+                                    }
+                                }
+
+                                if root.vpn_enabled: VerticalBox {
+                                    spacing: 6px;
+                                    Text {
+                                        text: "Import your WireGuard .conf before generating a key so this device's VPN tunnel IP is embedded in the token and stays connected.";
+                                        font-size: 11px;
+                                        color: AppTheme.text_muted;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalBox {
+                                        Text {
+                                            text: "WG Config:";
+                                            width: 10%;
+                                            min-width: 100px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        LineEdit {
+                                            text: root.vpn_conf_path;
+                                            placeholder-text: "/path/to/wg0.conf (or click Import .conf)";
+                                            edited(t) => { root.vpn_conf_path = t; }
+                                        }
+
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Import .conf";
+                                            tooltip: "Parse, encrypt in vault, and immediately bring up the persistent WireGuard VPN tunnel.";
+                                            clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
+                                        }
+
+                                        RustButton {
+                                            variant: "secondary";
+                                            text: "Verify VPN";
+                                            tooltip: "Verify that the WireGuard tunnel interface is up and confirm peer handshake.";
+                                            clicked => { root.test_vpn_connection(); }
+                                        }
+                                    }
+
+                                    HorizontalBox {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "VPN Status:";
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: root.vpn_tunnel_status;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    if root.vpn_endpoint != "": Text {
+                                        text: "Endpoint: " + root.vpn_endpoint + " | Local Tunnel IP: " + root.vpn_interface_ip + " | Peer Key: " + root.vpn_masked_pubkey;
+                                        font-size: 11px;
+                                        color: AppTheme.text_muted;
+                                    }
+                                }
+
                                 HorizontalBox {
                                     Text {
                                         text: "Name:";
@@ -1465,7 +1573,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     new_host := LineEdit {
-                                        placeholder-text: "e.g. user@IP or IP";
+                                        placeholder-text: "Optional peer IP (auto-filled when peer verifies token)";
                                     }
                                 }
 
@@ -1478,7 +1586,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     new_key := LineEdit {
-                                        placeholder-text: "Click Generate, or paste st:... token";
+                                        placeholder-text: "Click Generate, then Commit to copy your st:... token";
                                     }
 
                                     RustButton {
@@ -1486,46 +1594,6 @@ export component MainWindow inherits Window {
                                         text: "Generate";
                                         tooltip: "Generate an Ed25519 keypair and listen for the remote peer to verify your token.";
                                         clicked => { new_key.text = root.generate_key(new_host.text); }
-                                    }
-                                }
-
-                                RustCheckBox {
-                                    text: "Enable WAN VPN (WireGuard)";
-                                    checked: root.vpn_enabled;
-                                    toggled => {
-                                        root.vpn_enabled = self.checked;
-                                        root.vpn_tunnel_status = self.checked ? (root.vpn_endpoint != "" ? "Configured (Ready)" : "Enabled (No .conf)") : "Disabled";
-                                    }
-                                }
-
-                                if root.vpn_enabled: VerticalBox {
-                                    spacing: 6px;
-                                    HorizontalBox {
-                                        Text {
-                                            text: "WG Config:";
-                                            width: 10%;
-                                            min-width: 100px;
-                                            vertical-alignment: center;
-                                        }
-
-                                        LineEdit {
-                                            text: root.vpn_conf_path;
-                                            placeholder-text: "/path/to/wg0.conf";
-                                            edited(t) => { root.vpn_conf_path = t; }
-                                        }
-
-                                        RustButton {
-                                            variant: "outline-accent";
-                                            text: "Import .conf";
-                                            tooltip: "Parse and securely store the specified WireGuard configuration file in the vault.";
-                                            clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
-                                        }
-                                    }
-
-                                    if root.vpn_endpoint != "": Text {
-                                        text: "Endpoint: " + root.vpn_endpoint + " | Interface IP: " + root.vpn_interface_ip + " | PublicKey: " + root.vpn_masked_pubkey;
-                                        font-size: 11px;
-                                        color: AppTheme.text_muted;
                                     }
                                 }
                                 Rectangle {
@@ -1565,16 +1633,92 @@ export component MainWindow inherits Window {
                             }
                             if root.add_connection_tab == 1: VerticalBox {
                                 Text {
-                                    text: "Remote Connection";
+                                    text: "Remote Connection (Verify Peer Token)";
                                     font-weight: 700;
                                     font-size: 16px;
                                 }
 
+                                Text {
+                                    text: "Paste the st:... token generated on the other device to complete mutual key exchange.";
+                                    font-size: 11px;
+                                    color: AppTheme.text_muted;
+                                }
+
                                 Rectangle {
-                                    height: 10px;
+                                    height: 6px;
                                 }
 
                                 spacing: 8px;
+                                RustCheckBox {
+                                    text: "Step 1 (Optional): Enable Preflight WAN VPN (WireGuard)";
+                                    checked: root.vpn_enabled;
+                                    toggled => {
+                                        root.vpn_enabled = self.checked;
+                                        root.toggle_vpn(self.checked);
+                                    }
+                                }
+
+                                if root.vpn_enabled: VerticalBox {
+                                    spacing: 6px;
+                                    Text {
+                                        text: "If the host device is on a remote network, import your WireGuard .conf first so the VPN tunnel is active before clicking Verify.";
+                                        font-size: 11px;
+                                        color: AppTheme.text_muted;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalBox {
+                                        Text {
+                                            text: "WG Config:";
+                                            width: 10%;
+                                            min-width: 100px;
+                                            vertical-alignment: center;
+                                        }
+
+                                        LineEdit {
+                                            text: root.vpn_conf_path;
+                                            placeholder-text: "/path/to/wg0.conf (or click Import .conf)";
+                                            edited(t) => { root.vpn_conf_path = t; }
+                                        }
+
+                                        RustButton {
+                                            variant: "outline-accent";
+                                            text: "Import .conf";
+                                            tooltip: "Parse, encrypt in vault, and immediately bring up the persistent WireGuard VPN tunnel.";
+                                            clicked => { root.import_wireguard_conf(root.vpn_conf_path); }
+                                        }
+
+                                        RustButton {
+                                            variant: "secondary";
+                                            text: "Verify VPN";
+                                            tooltip: "Verify that the WireGuard tunnel interface is up and confirm peer handshake.";
+                                            clicked => { root.test_vpn_connection(); }
+                                        }
+                                    }
+
+                                    HorizontalBox {
+                                        spacing: 8px;
+                                        Text {
+                                            text: "VPN Status:";
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: root.vpn_tunnel_status;
+                                            font-size: 12px;
+                                            font-weight: 700;
+                                            color: AppTheme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    if root.vpn_endpoint != "": Text {
+                                        text: "Endpoint: " + root.vpn_endpoint + " | Local Tunnel IP: " + root.vpn_interface_ip + " | Peer Key: " + root.vpn_masked_pubkey;
+                                        font-size: 11px;
+                                        color: AppTheme.text_muted;
+                                    }
+                                }
+
                                 HorizontalBox {
                                     Text {
                                         text: "Token:";
@@ -1584,7 +1728,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     remote_token := LineEdit {
-                                        placeholder-text: "Paste Remote Token Here";
+                                        placeholder-text: "Paste Remote Token Here (st:...)";
                                     }
 
                                     RustButton {
