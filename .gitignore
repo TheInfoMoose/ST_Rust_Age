@@ -69,3 +69,6 @@ BugFix.txt
 .roomodes
 TODO.md
 scripts/time_tracker.py
+
+## Agent step plan (local only)
+STEPPED_IMPLEMENTATION_PLAN.md
