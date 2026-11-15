@@ -298,6 +298,14 @@ impl Handler for TransferServer {
                 (0, payload.to_string())
             };
 
+            if is_protected_write_target(&remote_path) {
+                tracing::warn!("Rejected QUIC write to protected path: {}", remote_path);
+                let _ = session.data(channel, b"ERR|protected path\n".to_vec());
+                let _ = session.eof(channel);
+                let _ = session.close(channel);
+                return Ok(());
+            }
+
             tracing::info!(
                 "Accepted QUIC binary transfer for: {} at offset {}",
                 remote_path,
@@ -365,9 +373,20 @@ impl Handler for TransferServer {
             let event_sender_clone = self.event_sender.clone();
 
             tokio::spawn(async move {
-                if let Some(conn) = endpoint.accept().await
-                    && let Ok(connection) = conn.await
+                let incoming = match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    endpoint.accept(),
+                )
+                .await
                 {
+                    Ok(Some(conn)) => conn,
+                    Ok(None) => return,
+                    Err(_) => {
+                        endpoint.close(0u32.into(), b"timeout");
+                        return;
+                    }
+                };
+                if let Ok(connection) = incoming.await {
                     if let Ok(mut bi) = connection.accept_bi().await {
                         let mut token_buf = [0u8; 8];
                         if bi.1.read_exact(&mut token_buf).await.is_ok() {
@@ -539,6 +558,10 @@ impl Handler for TransferServer {
             let handle = session.handle();
             tokio::spawn(async move {
                 for path in paths.iter().filter(|&p| !p.trim().is_empty()) {
+                    if is_protected_write_target(path) {
+                        tracing::warn!("Skipping mkdir for protected path: {}", path);
+                        continue;
+                    }
                     let normalized = if cfg!(windows) {
                         path.replace('/', "\\")
                     } else {
@@ -939,6 +962,67 @@ pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
         .map_err(|e| e.to_string())
 }
 
+pub(crate) fn is_protected_write_target(path: &str) -> bool {
+    if path.contains('\0') {
+        return true;
+    }
+    let normalized = if cfg!(windows) {
+        path.replace('/', "\\").to_ascii_lowercase()
+    } else {
+        path.replace('\\', "/")
+    };
+    if cfg!(windows) && normalized.starts_with("\\\\") {
+        return true;
+    }
+    let p = Path::new(&normalized);
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return true;
+    }
+    if !p.is_absolute() {
+        return true;
+    }
+    if let Ok(home_raw) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+        && !home_raw.is_empty()
+    {
+        let home_norm = if cfg!(windows) {
+            home_raw.replace('/', "\\").to_ascii_lowercase()
+        } else {
+            home_raw.replace('\\', "/")
+        };
+        let home = Path::new(&home_norm);
+        if p.starts_with(home.join(".ssh"))
+            || p.starts_with(home.join(".simply-transfer"))
+            || p.starts_with(home.join(".config").join("autostart"))
+        {
+            return true;
+        }
+        if let Ok(rel) = p.strip_prefix(home)
+            && let Some(std::path::Component::Normal(first)) = rel.components().next()
+            && first.to_string_lossy().starts_with('.')
+        {
+            return true;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if p.starts_with("c:\\programdata\\ssh") {
+            return true;
+        }
+        if let Ok(appdata) = std::env::var("APPDATA")
+            && !appdata.is_empty()
+        {
+            let startup = PathBuf::from(appdata.replace('/', "\\").to_ascii_lowercase())
+                .join("microsoft\\windows\\start menu\\programs\\startup");
+            if p.starts_with(&startup) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn is_known_verb(cmd: &str) -> bool {
     let trimmed = cmd.trim();
     trimmed == "simply-transfer-volumes"
@@ -1158,5 +1242,35 @@ mod tests {
         assert!(is_known_verb("simply-transfer-hash|/tmp/a"));
         assert!(is_known_verb("simply-transfer-size|/tmp/a"));
         assert!(is_known_verb("simply-transfer-df|/tmp"));
+    }
+
+    #[test]
+    fn test_is_protected_write_target() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap();
+
+        assert!(is_protected_write_target("a/../b"));
+        assert!(is_protected_write_target(".ssh/authorized_keys"));
+        assert!(is_protected_write_target(&format!(
+            "{}/.ssh/authorized_keys",
+            home
+        )));
+        assert!(is_protected_write_target(&format!("{}/.bashrc", home)));
+        assert!(!is_protected_write_target(&format!(
+            "{}/Documents/x.txt",
+            home
+        )));
+        let temp_file = std::env::temp_dir().join("st_unprotected_test.txt");
+        assert!(!is_protected_write_target(temp_file.to_str().unwrap()));
+
+        #[cfg(windows)]
+        {
+            assert!(is_protected_write_target(&format!(
+                "{}\\.ssh\\authorized_keys",
+                home.to_ascii_uppercase()
+            )));
+            assert!(is_protected_write_target("\\\\?\\C:\\Users\\x\\.ssh\\k"));
+        }
     }
 }
