@@ -148,6 +148,17 @@ impl SshClient for MockSshClient {
                 output_lines.push("mock_hash".to_string());
             }
             Ok(output_lines.join("\n"))
+        } else if command.trim() == "simply-transfer-os" {
+            Ok("unix\n".to_string())
+        } else if let Some(p) = command.strip_prefix("simply-transfer-size|") {
+            let len = std::fs::metadata(p.trim())
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .unwrap_or(0);
+            Ok(format!("{}\n", len))
+        } else if command.starts_with("simply-transfer-df|") {
+            Ok("999999999999\n".to_string())
         } else if command.contains("df") {
             Ok("Filesystem     1024-blocks      Used Available Capacity Mounted on\n/dev/sda1      100000000 100000000 999999999   1% /".to_string())
         } else if command.contains("Get-WmiObject")

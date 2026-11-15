@@ -577,6 +577,60 @@ impl Handler for TransferServer {
             return Ok(());
         }
 
+        if cmd_str.trim() == "simply-transfer-os" {
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload = format!("{}\n", native_os());
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
+        if cmd_str.starts_with("simply-transfer-size|") {
+            let target_path = cmd_str
+                .trim_start_matches("simply-transfer-size|")
+                .trim()
+                .to_string();
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload =
+                    tokio::task::spawn_blocking(move || format!("{}\n", native_size(&target_path)))
+                        .await
+                        .unwrap_or_else(|_| "0\n".to_string());
+
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
+        if cmd_str.starts_with("simply-transfer-df|") {
+            let target_path = cmd_str
+                .trim_start_matches("simply-transfer-df|")
+                .trim()
+                .to_string();
+            let handle = session.handle();
+            tokio::spawn(async move {
+                let payload = tokio::task::spawn_blocking(move || match native_df(&target_path) {
+                    Some(n) => format!("{}\n", n),
+                    None => "unknown\n".to_string(),
+                })
+                .await
+                .unwrap_or_else(|_| "unknown\n".to_string());
+
+                let _ = handle.data(channel, payload.into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            return Ok(());
+        }
+
         if cmd_str.starts_with("simply-transfer-hash|") {
             let paths_str = cmd_str.trim_start_matches("simply-transfer-hash|");
             let paths: Vec<String> = paths_str.split('|').map(|s| s.to_string()).collect();
@@ -908,6 +962,42 @@ pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
         .map_err(|e| e.to_string())
 }
 
+pub fn native_os() -> &'static str {
+    if cfg!(windows) { "windows" } else { "unix" }
+}
+
+pub fn native_size(path: &str) -> u64 {
+    let normalized = if cfg!(windows) {
+        path.trim().replace('/', "\\")
+    } else {
+        path.trim().replace('\\', "/")
+    };
+    match std::fs::metadata(&normalized) {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => 0,
+    }
+}
+
+pub fn native_df(path: &str) -> Option<u64> {
+    let normalized = if cfg!(windows) {
+        path.trim().replace('/', "\\")
+    } else {
+        path.trim().replace('\\', "/")
+    };
+    let mut cur = Path::new(&normalized);
+    let dir = loop {
+        if cur.is_dir() {
+            break cur;
+        }
+        cur = cur.parent()?;
+    };
+    let vols = simply_transfer_snapshots::list_local_volumes().ok()?;
+    let mount_point = simply_transfer_snapshots::resolve_owning_volume(dir, &vols)?;
+    vols.into_iter()
+        .find(|v| v.mount_point == mount_point)
+        .map(|v| v.available_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1046,5 +1136,23 @@ mod tests {
         assert!(lines[1].starts_with("F|beta_file.txt|"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_native_verbs() {
+        use std::io::Write;
+
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(b"hello").unwrap();
+        tmp.flush().unwrap();
+        assert_eq!(native_size(tmp.path().to_str().unwrap()), 5);
+
+        let missing = tmp.path().with_file_name("definitely_missing_file_st_test");
+        assert_eq!(native_size(missing.to_str().unwrap()), 0);
+
+        assert!(native_df(std::env::temp_dir().to_str().unwrap()).is_some());
+
+        let expected_os = if cfg!(windows) { "windows" } else { "unix" };
+        assert_eq!(native_os(), expected_os);
     }
 }
