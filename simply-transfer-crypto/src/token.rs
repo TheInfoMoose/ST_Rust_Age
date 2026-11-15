@@ -20,6 +20,7 @@ pub struct ConnectionToken {
     pub port: u16,
     pub pub_key: String,
     pub user: Option<String>,
+    pub pair_secret: Option<String>,
 }
 
 impl ConnectionToken {
@@ -30,6 +31,24 @@ impl ConnectionToken {
             format!("{}|{}|{}", ip, port, pub_key)
         };
         // XOR obfuscation to prevent casual Base64 decoding from revealing the IP
+        let xored: Vec<u8> = raw
+            .bytes()
+            .enumerate()
+            .map(|(i, b)| b ^ MASK[i % MASK.len()])
+            .collect();
+
+        let b64 = URL_SAFE_NO_PAD.encode(&xored);
+        format!("st:{}", b64)
+    }
+
+    pub fn generate_with_secret(
+        ip: &str,
+        port: u16,
+        pub_key: &str,
+        user: &str,
+        pair_secret: &str,
+    ) -> String {
+        let raw = format!("{}|{}|{}|{}|{}", ip, port, pub_key, user, pair_secret);
         let xored: Vec<u8> = raw
             .bytes()
             .enumerate()
@@ -75,11 +94,14 @@ impl ConnectionToken {
             None
         };
 
+        let pair_secret = parts.get(4).map(|s| (*s).to_string());
+
         Ok(Self {
             ip: parts[0].to_string(),
             port,
             pub_key: parts[2].to_string(),
             user,
+            pair_secret,
         })
     }
 }
@@ -100,6 +122,7 @@ mod tests {
         assert_eq!(parsed.ip, "192.0.2.10");
         assert_eq!(parsed.port, 59770);
         assert_eq!(parsed.user.as_deref(), Some("testuser"));
+        assert_eq!(parsed.pair_secret, None);
     }
 
     #[test]
@@ -116,5 +139,19 @@ mod tests {
         assert_eq!(parsed.port, 51234);
         assert_eq!(parsed.pub_key, "AAAAC3NzaC1lZDI1NTE5");
         assert_eq!(parsed.user.as_deref(), Some("testuser"));
+        assert_eq!(parsed.pair_secret, None);
+    }
+
+    #[test]
+    fn test_generate_with_secret_round_trip() {
+        let secret = "00ff11ee22dd33cc44bb55aa66997788";
+        let tok =
+            ConnectionToken::generate_with_secret("192.0.2.10", 2222, "AAAA", "testuser", secret);
+        let parsed = ConnectionToken::parse(&tok).unwrap();
+        assert_eq!(parsed.ip, "192.0.2.10");
+        assert_eq!(parsed.port, 2222);
+        assert_eq!(parsed.pub_key, "AAAA");
+        assert_eq!(parsed.user.as_deref(), Some("testuser"));
+        assert_eq!(parsed.pair_secret.as_deref(), Some(secret));
     }
 }

@@ -22,6 +22,7 @@ pub struct TransferServer {
     pub event_sender: Option<tokio::sync::broadcast::Sender<crate::engine::TransferEvent>>,
     pub oob_verify_callback: Option<OobVerifyCallback>,
     pub oob_action_callback: Option<OobActionCallback>,
+    pending_pairings: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
 }
 
 impl Default for TransferServer {
@@ -107,6 +108,35 @@ impl TransferServer {
             event_sender: None,
             oob_verify_callback: None,
             oob_action_callback: None,
+            pending_pairings: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn issue_pair_secret(&self) -> String {
+        let bytes = rand::random::<[u8; 16]>();
+        let mut secret = String::with_capacity(32);
+        for b in bytes {
+            use std::fmt::Write as _;
+            let _ = write!(secret, "{:02x}", b);
+        }
+        let hash = simply_transfer_crypto::hash::compute_sha256_bytes(secret.as_bytes());
+        let now = std::time::Instant::now();
+        let expiry = now + std::time::Duration::from_secs(600);
+        if let Ok(mut pending) = self.pending_pairings.lock() {
+            pending.retain(|_, exp| *exp > now);
+            pending.insert(hash, expiry);
+        }
+        secret
+    }
+
+    fn consume_pair_secret(&self, secret: &str) -> bool {
+        let now = std::time::Instant::now();
+        let hash = simply_transfer_crypto::hash::compute_sha256_bytes(secret.as_bytes());
+        if let Ok(mut pending) = self.pending_pairings.lock() {
+            pending.retain(|_, exp| *exp > now);
+            pending.remove(&hash).is_some_and(|exp| exp > now)
+        } else {
+            false
         }
     }
 
@@ -747,6 +777,16 @@ pub async fn run_server(
                     let action = req["action"].as_str().unwrap_or("");
                     if action == "verify" {
                         let dest_ip = peer_addr.ip().to_string();
+                        let valid_secret = req["pair_secret"]
+                            .as_str()
+                            .is_some_and(|s| server_clone.consume_pair_secret(s));
+                        if !valid_secret {
+                            tracing::warn!("OOB verify rejected from {}", dest_ip);
+                            let _ = writer.write_all(b"{\"status\":\"error\"}\n").await;
+                            let _ = writer.flush().await;
+                            return;
+                        }
+
                         let dest_user = req["user"]
                             .as_str()
                             .unwrap_or("simply-transfer")
@@ -790,7 +830,8 @@ pub async fn run_server(
                             let my_user = std::env::var("USER")
                                 .or_else(|_| std::env::var("USERNAME"))
                                 .unwrap_or_else(|_| "simply-transfer".to_string());
-                            let res = format!("{{\"status\":\"ok\",\"user\":\"{}\"}}\n", my_user);
+                            let res = serde_json::json!({"status":"ok","user":my_user}).to_string()
+                                + "\n";
                             let _ = writer.write_all(res.as_bytes()).await;
                             let _ = writer.flush().await;
 
@@ -925,16 +966,21 @@ pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_transfer_server_auth_publickey_matching() {
-        let mut server = TransferServer {
+    fn dummy_server() -> TransferServer {
+        TransferServer {
             authorized_keys_file_path: PathBuf::from("/nonexistent/keys.json"),
             authorized_keys: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             file_writers: Arc::new(Mutex::new(HashMap::new())),
             event_sender: None,
             oob_verify_callback: None,
             oob_action_callback: None,
-        };
+            pending_pairings: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_transfer_server_auth_publickey_matching() {
+        let mut server = dummy_server();
 
         let key = generate_host_key();
         let pub_key = key.public_key().clone();
@@ -976,6 +1022,31 @@ mod tests {
             .insert("arbitrary_key_id".to_string(), pub_key.clone());
         let res = server.auth_publickey("test_user", &pub_key).await;
         assert!(matches!(res, Ok(Auth::Accept)));
+    }
+
+    #[test]
+    fn test_pair_secret_single_use_unknown_and_expired() {
+        let server = dummy_server();
+
+        // (a) consume_pair_secret is true once then false for the same secret
+        let secret = server.issue_pair_secret();
+        assert_eq!(secret.len(), 32);
+        assert!(server.consume_pair_secret(&secret));
+        assert!(!server.consume_pair_secret(&secret));
+
+        // (b) an unknown secret is false
+        assert!(!server.consume_pair_secret("deadbeef00112233445566778899aabb"));
+        assert!(!server.consume_pair_secret(""));
+
+        // (c) an expired secret is false
+        let expired_secret = "0123456789abcdef0123456789abcdef";
+        let expired_hash =
+            simply_transfer_crypto::hash::compute_sha256_bytes(expired_secret.as_bytes());
+        server.pending_pairings.lock().unwrap().insert(
+            expired_hash,
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        assert!(!server.consume_pair_secret(expired_secret));
     }
 
     #[test]
