@@ -317,9 +317,9 @@ impl TransferEngine {
 
         let is_windows_dest = self
             .ssh_client
-            .execute_command("cmd.exe /c echo Windows")
+            .execute_command("simply-transfer-os")
             .await
-            .map(|out| out.trim() == "Windows")
+            .map(|out| out.trim() == "windows")
             .unwrap_or(false);
 
         let dest_dir =
@@ -605,27 +605,19 @@ impl TransferEngine {
                 let cmd = format!("simply-transfer-mkdir|{}", chunk.join("|"));
                 match self.ssh_client.execute_command(&cmd).await {
                     Ok(res) if res.trim() == "OK" => {}
-                    _ => {
-                        if is_windows_dest {
-                            let dir_list: String = chunk
-                                .iter()
-                                .map(|d| format!("'{}'", d.replace('\'', "''")))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let fallback_cmd = format!(
-                                "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force -Path @({})\"",
-                                dir_list
-                            );
-                            let _ = self.ssh_client.execute_command(&fallback_cmd).await;
-                        } else {
-                            let dir_list: String = chunk
-                                .iter()
-                                .map(|d| format!("'{}'", d.replace('\'', "'\\''")))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let fallback_cmd = format!("mkdir -p {}", dir_list);
-                            let _ = self.ssh_client.execute_command(&fallback_cmd).await;
-                        }
+                    Ok(res) => {
+                        warn!(
+                            "Remote mkdir returned unexpected response for chunk of {} dirs: {}",
+                            chunk.len(),
+                            res.trim()
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to create remote directories for chunk of {} dirs: {}",
+                            chunk.len(),
+                            e
+                        );
                     }
                 }
             }
@@ -890,74 +882,12 @@ impl TransferEngine {
         required_bytes: u64,
         dest_dir: &str,
     ) -> Result<(), EngineError> {
-        let is_windows = self
+        let free_space_opt: Option<u64> = self
             .ssh_client
-            .execute_command("cmd.exe /c echo Windows")
+            .execute_command(&format!("simply-transfer-df|{}", dest_dir))
             .await
-            .map(|o| o.trim() == "Windows")
-            .unwrap_or(false);
-
-        let free_space_opt: Option<u64> = if is_windows {
-            let powershell_cmd = format!(
-                r#"Get-PSDrive -Name (Split-Path "{}" -Qualifier).TrimEnd(':') | Select-Object -ExpandProperty Free"#,
-                dest_dir.replace("\"", "\"\"").replace('\\', "\\\\")
-            );
-
-            match self
-                .ssh_client
-                .execute_command(&format!(
-                    "powershell.exe -NoProfile -Command \"{}\"",
-                    powershell_cmd
-                ))
-                .await
-            {
-                Ok(output) => {
-                    let parsed = output.trim().parse::<u64>().ok();
-                    if parsed.is_none() {
-                        tracing::warn!("Could not parse Windows disk space output: {:?}", output);
-                    }
-                    parsed
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to get Windows disk space: {}", e);
-                    None
-                }
-            }
-        } else {
-            let normalized_dest = dest_dir.replace('\\', "/");
-            let cleaned_dest = if normalized_dest.len() >= 2
-                && normalized_dest.as_bytes()[1] == b':'
-                && normalized_dest.as_bytes()[0].is_ascii_alphabetic()
-            {
-                &normalized_dest[2..]
-            } else {
-                normalized_dest.as_str()
-            };
-            let posix_dest = if !cleaned_dest.starts_with('/') && !cleaned_dest.starts_with('.') {
-                format!("/{}", cleaned_dest)
-            } else {
-                cleaned_dest.to_string()
-            };
-            let escaped_dir = posix_dest.replace('\'', "'\\''");
-            let df_cmd = format!(
-                "d='{}'; while [ ! -d \"$d\" ] && [ \"$d\" != \"/\" ] && [ \"$d\" != \".\" ]; do d=$(dirname \"$d\"); done; df -k -P \"$d\" 2>/dev/null; if [ -d \"/System/Volumes/Data\" ]; then df -k -P \"/System/Volumes/Data\" 2>/dev/null; fi; if [ -n \"$HOME\" ] && [ -d \"$HOME\" ]; then df -k -P \"$HOME\" 2>/dev/null; fi",
-                escaped_dir
-            );
-
-            match self.ssh_client.execute_command(&df_cmd).await {
-                Ok(output) => {
-                    let parsed = parse_df_available_bytes(&output);
-                    if parsed.is_none() {
-                        tracing::warn!("Could not parse POSIX df output: {:?}", output);
-                    }
-                    parsed
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to execute POSIX df command: {}", e);
-                    None
-                }
-            }
-        };
+            .ok()
+            .and_then(|out| out.trim().parse::<u64>().ok());
 
         if let Some(free_space) = free_space_opt {
             tracing::info!(
@@ -1000,39 +930,6 @@ impl TransferEngine {
             .await
             .ok();
     }
-}
-
-pub(crate) fn parse_df_available_bytes(output: &str) -> Option<u64> {
-    let mut max_avail: Option<u64> = None;
-
-    for line in output.lines() {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.is_empty() || tokens[0] == "Filesystem" {
-            continue;
-        }
-
-        // In POSIX `df -k -P` output format:
-        // Filesystem 1024-blocks Used Available Capacity Mounted on
-        // Capacity is always a percentage ending in '%', e.g. "56%".
-        // The token immediately preceding Capacity is always Available (in 1024-byte blocks).
-        let avail_opt = if let Some(cap_idx) = tokens.iter().position(|t| t.ends_with('%')) {
-            if cap_idx > 0 {
-                tokens[cap_idx - 1].parse::<u64>().ok()
-            } else {
-                None
-            }
-        } else {
-            // Fallback to standard column 3 (0-indexed: 0=fs, 1=total, 2=used, 3=avail)
-            tokens.get(3).and_then(|s| s.parse::<u64>().ok())
-        };
-
-        if let Some(avail_kb) = avail_opt {
-            let bytes = avail_kb.saturating_mul(1024);
-            max_avail = Some(max_avail.map_or(bytes, |cur| cur.max(bytes)));
-        }
-    }
-
-    max_avail
 }
 
 #[cfg(test)]
@@ -1095,41 +992,6 @@ mod tests {
         assert_eq!(completed_files, 1);
         assert_eq!(validated_files, 1);
         assert!(transfer_complete);
-    }
-
-    #[test]
-    fn test_parse_df_available_bytes() {
-        // Linux output
-        let linux_output = "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme0n1p3  1950801920 1086302456 857593032      56% /home\n";
-        assert_eq!(
-            parse_df_available_bytes(linux_output),
-            Some(857593032 * 1024)
-        );
-
-        // macOS output
-        let macos_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3s1s1 488245288 12345678 400000000 3% /System/Volumes/Data\n";
-        assert_eq!(
-            parse_df_available_bytes(macos_output),
-            Some(400000000 * 1024)
-        );
-
-        // Mount / filesystem with space in name
-        let space_fs_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n//user@mac/Macintosh HD 488245288 12345678 400000000 3% /Volumes/Macintosh HD\n";
-        assert_eq!(
-            parse_df_available_bytes(space_fs_output),
-            Some(400000000 * 1024)
-        );
-
-        // macOS multi-line output where root mount has 0 available but data mount has capacity
-        let macos_multiline_output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/disk3s1s1 488245288 15423840 0 100% /\n/dev/disk3s5 488245288 12345678 350000000 4% /System/Volumes/Data\n";
-        assert_eq!(
-            parse_df_available_bytes(macos_multiline_output),
-            Some(350000000 * 1024)
-        );
-
-        // Error / invalid output
-        let invalid_output = "df: illegal option -- B\nusage: df ...\n";
-        assert_eq!(parse_df_available_bytes(invalid_output), None);
     }
 
     #[test]

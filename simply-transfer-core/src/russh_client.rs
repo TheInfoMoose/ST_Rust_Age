@@ -193,115 +193,7 @@ pub async fn list_remote_volumes_via_ssh(
         }
     }
 
-    let is_windows = ssh
-        .execute_command("cmd.exe /c echo Windows")
-        .await
-        .map(|out| out.trim() == "Windows")
-        .unwrap_or(false);
-
-    if is_windows {
-        let cmd = "powershell -NoProfile -NonInteractive -Command \"[System.IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady } | ForEach-Object { $r = $_.Name; $f = [uint64]$_.AvailableFreeSpace; $t = [uint64]$_.TotalSize; $fs = if ($_.DriveFormat) { $_.DriveFormat } else { 'NTFS' }; $d = if ($_.VolumeLabel) { $_.VolumeLabel } else { $_.Name.TrimEnd('\\') }; Write-Output ($r + '|' + $d + '|' + $fs + '|' + $t + '|' + $f) }\"";
-        let output = ssh.execute_command(cmd).await?;
-        let mut volumes = Vec::new();
-        for line in output.lines() {
-            let parts: Vec<&str> = line.trim().split('|').collect();
-            if parts.len() == 5 {
-                volumes.push(simply_transfer_snapshots::VolumeInfo {
-                    mount_point: std::path::PathBuf::from(parts[0]),
-                    label: parts[1].to_string(),
-                    fs_type: parts[2].to_string(),
-                    total_bytes: parts[3].parse::<u64>().unwrap_or(0),
-                    available_bytes: parts[4].parse::<u64>().unwrap_or(0),
-                });
-            }
-        }
-        if volumes.is_empty() {
-            volumes.push(simply_transfer_snapshots::VolumeInfo {
-                mount_point: std::path::PathBuf::from("C:\\"),
-                label: "Local Disk (C:)".to_string(),
-                fs_type: "NTFS".to_string(),
-                total_bytes: 0,
-                available_bytes: 0,
-            });
-        }
-        Ok(volumes)
-    } else {
-        let output = ssh.execute_command("df -k -P 2>/dev/null").await?;
-        let mut volumes = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut root_stats = (0u64, 0u64);
-        for line in output.lines().skip(1) {
-            let tokens: Vec<&str> = line.split_whitespace().collect();
-            if let Some(cap_idx) = tokens.iter().position(|t| t.ends_with('%'))
-                && cap_idx >= 3
-                && cap_idx + 1 < tokens.len()
-            {
-                let dev = tokens[0];
-                let total_kb = tokens[cap_idx - 3].parse::<u64>().unwrap_or(0);
-                let avail_kb = tokens[cap_idx - 1].parse::<u64>().unwrap_or(0);
-                let total_bytes = total_kb.saturating_mul(1024);
-                let avail_bytes = avail_kb.saturating_mul(1024);
-                let mount_str = tokens[cap_idx + 1..].join(" ");
-                if mount_str == "/" {
-                    root_stats = (total_bytes, avail_bytes);
-                }
-                if mount_str.starts_with("/proc")
-                    || mount_str.starts_with("/sys")
-                    || mount_str.starts_with("/dev")
-                    || (mount_str.starts_with("/run") && !mount_str.starts_with("/run/media"))
-                    || mount_str.starts_with("/snap")
-                    || mount_str.starts_with("/boot")
-                    || dev == "tmpfs"
-                    || dev == "devtmpfs"
-                    || dev == "overlay"
-                    || dev == "efivarfs"
-                {
-                    continue;
-                }
-                if seen.insert(mount_str.clone()) {
-                    volumes.push(simply_transfer_snapshots::VolumeInfo {
-                        mount_point: std::path::PathBuf::from(&mount_str),
-                        label: format!("{} ({})", mount_str, dev),
-                        fs_type: "posix".to_string(),
-                        total_bytes,
-                        available_bytes: avail_bytes,
-                    });
-                }
-            }
-        }
-        if let Ok(mnt_out) = ssh
-            .execute_command(
-                "for d in /mnt/* /media/*; do [ -d \"$d\" ] && echo \"$d\"; done 2>/dev/null",
-            )
-            .await
-        {
-            for line in mnt_out.lines() {
-                let mount_str = line.trim().to_string();
-                if mount_str.is_empty() || mount_str.starts_with("/mnt/st_snap_") {
-                    continue;
-                }
-                if seen.insert(mount_str.clone()) {
-                    volumes.push(simply_transfer_snapshots::VolumeInfo {
-                        mount_point: std::path::PathBuf::from(&mount_str),
-                        label: mount_str.clone(),
-                        fs_type: "posix".to_string(),
-                        total_bytes: root_stats.0,
-                        available_bytes: root_stats.1,
-                    });
-                }
-            }
-        }
-        if volumes.is_empty() {
-            volumes.push(simply_transfer_snapshots::VolumeInfo {
-                mount_point: std::path::PathBuf::from("/"),
-                label: "Root (/)".to_string(),
-                fs_type: "posix".to_string(),
-                total_bytes: 0,
-                available_bytes: 0,
-            });
-        }
-        Ok(volumes)
-    }
+    Ok(vec![])
 }
 
 /// Pools active authenticated SSH client handles by `connection_id: Uuid` so multiple
@@ -469,24 +361,11 @@ impl SshClient for RusshClient {
     async fn get_remote_file_size(
         &self,
         remote_path: &str,
-        is_windows_dest: bool,
+        _is_windows_dest: bool,
     ) -> Result<u64, SshError> {
-        let exec_request = if is_windows_dest {
-            // Check if file exists first to avoid error spam
-            format!(
-                "powershell -NoProfile -Command \"if (Test-Path '{}') {{ (Get-Item '{}').length }} else {{ 0 }}\"",
-                remote_path.replace("'", "''"),
-                remote_path.replace("'", "''")
-            )
-        } else {
-            let escaped = remote_path.replace("'", "'\\''");
-            format!(
-                "f='{}'; if [ -f \"$f\" ]; then stat -c%s \"$f\" 2>/dev/null || stat -f%z \"$f\" 2>/dev/null || wc -c < \"$f\" 2>/dev/null || echo 0; else echo 0; fi",
-                escaped
-            )
-        };
-
-        let output = self.execute_command(&exec_request).await?;
+        let output = self
+            .execute_command(&format!("simply-transfer-size|{}", remote_path))
+            .await?;
         Ok(output.trim().parse::<u64>().unwrap_or(0))
     }
 
