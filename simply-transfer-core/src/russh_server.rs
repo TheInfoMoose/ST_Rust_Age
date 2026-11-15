@@ -478,7 +478,9 @@ impl Handler for TransferServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let cmd_str = String::from_utf8_lossy(program).to_string();
-        tracing::info!("Executing command via exec_request: {}", cmd_str);
+        if is_known_verb(&cmd_str) {
+            tracing::info!("Executing command via exec_request: {}", cmd_str);
+        }
 
         if cmd_str.trim() == "simply-transfer-volumes" {
             let handle = session.handle();
@@ -678,33 +680,8 @@ impl Handler for TransferServer {
             return Ok(());
         }
 
-        #[cfg(windows)]
-        let output = {
-            use std::os::windows::process::CommandExt;
-            std::process::Command::new("cmd")
-                .arg("/Q")
-                .arg("/c")
-                .raw_arg(&cmd_str)
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .output()
-        };
-        #[cfg(not(windows))]
-        let output = std::process::Command::new("sh")
-            .args(["-c", &cmd_str])
-            .output();
-
-        match output {
-            Ok(out) => {
-                let _ = session.data(channel, out.stdout);
-                let _ = session.extended_data(channel, 1, out.stderr);
-                let _ = session.exit_status_request(channel, out.status.code().unwrap_or(0) as u32);
-            }
-            Err(e) => {
-                tracing::error!("Failed to execute command: {}", e);
-                let _ = session.exit_status_request(channel, 1);
-            }
-        }
-
+        tracing::warn!("Rejected unknown exec command ({} bytes)", cmd_str.len());
+        let _ = session.exit_status_request(channel, 127);
         let _ = session.eof(channel);
         let _ = session.close(channel);
         Ok(())
@@ -962,6 +939,18 @@ pub fn parse_public_key(key_str: &str) -> Result<PublicKey, String> {
         .map_err(|e| e.to_string())
 }
 
+pub(crate) fn is_known_verb(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+    trimmed == "simply-transfer-volumes"
+        || trimmed == "simply-transfer-os"
+        || cmd.starts_with("simply-transfer-list|")
+        || cmd.starts_with("simply-transfer-mkdir|")
+        || cmd.starts_with("simply-transfer-exists|")
+        || cmd.starts_with("simply-transfer-hash|")
+        || cmd.starts_with("simply-transfer-size|")
+        || cmd.starts_with("simply-transfer-df|")
+}
+
 pub fn native_os() -> &'static str {
     if cfg!(windows) { "windows" } else { "unix" }
 }
@@ -1154,5 +1143,20 @@ mod tests {
 
         let expected_os = if cfg!(windows) { "windows" } else { "unix" };
         assert_eq!(native_os(), expected_os);
+    }
+
+    #[test]
+    fn test_is_known_verb() {
+        assert!(!is_known_verb("id"));
+        assert!(!is_known_verb("sh -c id"));
+        assert!(!is_known_verb("cmd /c whoami"));
+        assert!(is_known_verb("simply-transfer-volumes"));
+        assert!(is_known_verb("simply-transfer-os"));
+        assert!(is_known_verb("simply-transfer-list|/tmp"));
+        assert!(is_known_verb("simply-transfer-mkdir|/tmp/a"));
+        assert!(is_known_verb("simply-transfer-exists|/tmp/a"));
+        assert!(is_known_verb("simply-transfer-hash|/tmp/a"));
+        assert!(is_known_verb("simply-transfer-size|/tmp/a"));
+        assert!(is_known_verb("simply-transfer-df|/tmp"));
     }
 }

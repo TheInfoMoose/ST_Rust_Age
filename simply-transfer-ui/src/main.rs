@@ -2099,7 +2099,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
 
-                        let mut resolved_path = if path_str.trim().is_empty() {
+                        let resolved_path = if path_str.trim().is_empty() {
                             "/".to_string()
                         } else {
                             path_str.clone()
@@ -2139,66 +2139,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             snapshot_type: get_file_snapshot_type(name).into(),
                                         });
                                     }
-                                }
-                            }
-                        }
-
-                        // 2. Fallback path for legacy peers
-                        if !success {
-                            let is_windows = ssh_client
-                                .execute_command("cmd.exe /c echo Windows")
-                                .await
-                                .map(|out| out.trim() == "Windows")
-                                .unwrap_or(false);
-
-                            if is_windows && (resolved_path == "/" || resolved_path.is_empty()) {
-                                resolved_path = "C:\\".to_string();
-                            } else if !is_windows
-                                && (resolved_path.is_empty() || resolved_path == "\\")
-                            {
-                                resolved_path = "/".to_string();
-                            }
-                            final_path = resolved_path.clone();
-
-                            let cmd = if is_windows {
-                                format!(
-                                    "powershell -NoProfile -NonInteractive -Command \"Get-ChildItem -Path '{}' -Force | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"",
-                                    resolved_path
-                                )
-                            } else {
-                                format!("ls -1p \"{}\"", resolved_path)
-                            };
-
-                            if let Ok(output) = ssh_client.execute_command(&cmd).await {
-                                success = true;
-                                for line in output.lines() {
-                                    let line = line.trim();
-                                    if line.is_empty() {
-                                        continue;
-                                    }
-                                    let is_dir = line.ends_with('/');
-                                    let name = if is_dir {
-                                        &line[..line.len() - 1]
-                                    } else {
-                                        line
-                                    };
-                                    let full_path = if resolved_path.ends_with('/')
-                                        || resolved_path.ends_with('\\')
-                                    {
-                                        format!("{}{}", resolved_path, name)
-                                    } else {
-                                        let sep = if is_windows { "\\" } else { "/" };
-                                        format!("{}{}{}", resolved_path, sep, name)
-                                    };
-                                    nodes.push(FileNode {
-                                        name: name.into(),
-                                        is_dir,
-                                        path: full_path.into(),
-                                        is_selected: false,
-                                        depth: 0,
-                                        is_expanded: false,
-                                        snapshot_type: get_file_snapshot_type(name).into(),
-                                    });
                                 }
                             }
                         }
@@ -2362,14 +2302,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let parts: Vec<&str> = host.split('@').collect();
                     dest_user = parts[0].trim().to_string();
                     dest_ip = parts[1].trim().to_string();
-                } else if host == "Remote" || (host.trim().is_empty() && t_type == "Remote Transfer") {
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
+                } else if host == "Remote"
+                    || (host.trim().is_empty() && t_type == "Remote Transfer")
+                {
+                    if let Ok(parsed) =
+                        simply_transfer_crypto::token::ConnectionToken::parse(first_token)
+                    {
                         dest_ip = parsed.ip;
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     }
                 } else if !host.trim().is_empty() {
                     dest_ip = host.trim().to_string();
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(first_token) {
+                    if let Ok(parsed) =
+                        simply_transfer_crypto::token::ConnectionToken::parse(first_token)
+                    {
                         dest_user = parsed.user.unwrap_or_else(|| "simply-transfer".to_string());
                     } else {
                         dest_user = "simply-transfer".to_string();
@@ -2390,12 +2336,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 ui.get_browser_nodes().iter().collect()
             };
-            let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path.as_str());
+            let index = browser_nodes
+                .iter()
+                .position(|n| n.path.as_str() == node_path.as_str());
             if let Some(index) = index {
                 let mut new_nodes = browser_nodes.clone();
                 new_nodes[index].is_expanded = true;
                 if is_dest {
-                    ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                    ui.set_dest_browser_nodes(
+                        std::rc::Rc::new(slint::VecModel::from(new_nodes)).into(),
+                    );
                 } else {
                     ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
                 }
@@ -2429,14 +2379,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await;
                     }
 
-                    use simply_transfer_core::ssh::SshClient;
                     use simply_transfer_core::russh_client::RusshClient;
+                    use simply_transfer_core::ssh::SshClient;
 
                     let mut ssh_client = RusshClient::new();
                     let mut priv_pem_str = String::new();
 
-                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(token_str.split(';').next().unwrap_or(&token_str)) {
-                        let mgr = simply_transfer_crypto::keys::KeyPairManager::new("com.simplytransfer.app");
+                    if let Ok(parsed) = simply_transfer_crypto::token::ConnectionToken::parse(
+                        token_str.split(';').next().unwrap_or(&token_str),
+                    ) {
+                        let mgr = simply_transfer_crypto::keys::KeyPairManager::new(
+                            "com.simplytransfer.app",
+                        );
                         let private_key_id = token_str
                             .split(';')
                             .nth(1)
@@ -2444,37 +2398,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| parsed.pub_key.clone());
 
-                        if let Some(pem) = resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key) {
+                        if let Some(pem) =
+                            resolve_private_key_pem(&mgr, &private_key_id, &parsed.pub_key)
+                        {
                             priv_pem_str = pem;
                         }
                     }
 
                     if priv_pem_str.is_empty() {
-                        tracing::error!("on_expand_node: Private key not available for authentication.");
+                        tracing::error!(
+                            "on_expand_node: Private key not available for authentication."
+                        );
                     } else if let Err(e) = ssh_client.connect(&dest_ip, 2222).await {
                         tracing::error!("on_expand_node: SSH connect to {} failed: {}", dest_ip, e);
-                    } else if let Err(e) = ssh_client.authenticate_publickey(&dest_user, &priv_pem_str, None).await {
-                        tracing::error!("on_expand_node: SSH auth for {}@{} failed: {}", dest_user, dest_ip, e);
+                    } else if let Err(e) = ssh_client
+                        .authenticate_publickey(&dest_user, &priv_pem_str, None)
+                        .await
+                    {
+                        tracing::error!(
+                            "on_expand_node: SSH auth for {}@{} failed: {}",
+                            dest_user,
+                            dest_ip,
+                            e
+                        );
                     } else {
-                        let mut resolved_path = if node_path.trim().is_empty() {
+                        let resolved_path = if node_path.trim().is_empty() {
                             "/".to_string()
                         } else {
                             node_path.clone()
                         };
-                        let mut expanded_via_native = false;
 
                         let native_cmd = format!("simply-transfer-list|{}", resolved_path);
                         if let Ok(output) = ssh_client.execute_command(&native_cmd).await {
                             let trimmed_out = output.trim();
                             let is_native_format = !trimmed_out.starts_with("E|")
-                                && trimmed_out
-                                    .lines()
-                                    .all(|l| {
-                                        let t = l.trim();
-                                        t.is_empty() || t.starts_with("D|") || t.starts_with("F|")
-                                    });
+                                && trimmed_out.lines().all(|l| {
+                                    let t = l.trim();
+                                    t.is_empty() || t.starts_with("D|") || t.starts_with("F|")
+                                });
                             if is_native_format {
-                                expanded_via_native = true;
                                 for line in trimmed_out.lines() {
                                     let line = line.trim();
                                     if line.is_empty() {
@@ -2498,61 +2460,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-
-                        if !expanded_via_native {
-                            let is_windows = ssh_client
-                                .execute_command("cmd.exe /c echo Windows")
-                                .await
-                                .map(|out| out.trim() == "Windows")
-                                .unwrap_or(false);
-
-                            let cmd = if is_windows {
-                                if resolved_path.is_empty() {
-                                    resolved_path = "C:\\".to_string();
-                                }
-                                format!(
-                                    "powershell -NoProfile -NonInteractive -Command \"Get-ChildItem -Path '{}' | ForEach-Object {{ if ($_.PSIsContainer) {{ $_.Name + '/' }} else {{ $_.Name }} }}\"",
-                                    resolved_path.replace("'", "''")
-                                )
-                            } else {
-                                if resolved_path.is_empty() {
-                                    resolved_path = "/".to_string();
-                                }
-                                format!("ls -1p '{}'", resolved_path.replace("'", "'\\''"))
-                            };
-
-                            if let Ok(output) = ssh_client.execute_command(&cmd).await {
-                                for line in output.lines() {
-                                    let line = line.trim();
-                                    if line.is_empty() {
-                                        continue;
-                                    }
-                                    let is_dir = line.ends_with('/');
-                                    let name = if is_dir {
-                                        &line[..line.len() - 1]
-                                    } else {
-                                        line
-                                    };
-                                    let full_path = if resolved_path.ends_with('/')
-                                        || resolved_path.ends_with('\\')
-                                    {
-                                        format!("{}{}", resolved_path, name)
-                                    } else {
-                                        let sep = if is_windows { "\\" } else { "/" };
-                                        format!("{}{}{}", resolved_path, sep, name)
-                                    };
-                                    nodes.push(FileNode {
-                                        name: name.into(),
-                                        is_dir,
-                                        path: full_path.into(),
-                                        is_selected: false,
-                                        depth,
-                                        is_expanded: false,
-                                        snapshot_type: get_file_snapshot_type(name).into(),
-                                    });
-                                }
-                            }
-                        }
                     }
                 }
             } else if let Ok(entries) = std::fs::read_dir(&node_path) {
@@ -2572,9 +2479,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             nodes.sort_by(|a, b| {
-                if a.is_dir && !b.is_dir { std::cmp::Ordering::Less }
-                else if !a.is_dir && b.is_dir { std::cmp::Ordering::Greater }
-                else { a.name.cmp(&b.name) }
+                if a.is_dir && !b.is_dir {
+                    std::cmp::Ordering::Less
+                } else if !a.is_dir && b.is_dir {
+                    std::cmp::Ordering::Greater
+                } else {
+                    a.name.cmp(&b.name)
+                }
             });
 
             let _ = slint::invoke_from_event_loop(move || {
@@ -2584,7 +2495,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         ui.get_browser_nodes().iter().collect()
                     };
-                    let index = browser_nodes.iter().position(|n| n.path.as_str() == node_path.as_str());
+                    let index = browser_nodes
+                        .iter()
+                        .position(|n| n.path.as_str() == node_path.as_str());
 
                     if let Some(index) = index {
                         let mut new_nodes = Vec::new();
@@ -2601,9 +2514,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
 
                         if is_dest {
-                            ui.set_dest_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                            ui.set_dest_browser_nodes(
+                                std::rc::Rc::new(slint::VecModel::from(new_nodes)).into(),
+                            );
                         } else {
-                            ui.set_browser_nodes(std::rc::Rc::new(slint::VecModel::from(new_nodes)).into());
+                            ui.set_browser_nodes(
+                                std::rc::Rc::new(slint::VecModel::from(new_nodes)).into(),
+                            );
                         }
                     }
                 }
