@@ -546,8 +546,8 @@ mod tests {
     use super::*;
     use simply_transfer_crypto::{SecureStorage, VpnConfig, WireGuardConf};
 
-    #[tokio::test]
-    async fn test_vpn_tunnel_manager_scoped_route_and_lifecycle() {
+    #[test]
+    fn test_vpn_scoped_route_and_render() {
         assert_eq!(
             VpnTunnelManager::compute_scoped_route("backup@198.51.100.42:2222"),
             "198.51.100.42/32"
@@ -586,7 +586,22 @@ AllowedIPs = 0.0.0.0/0
             VpnTunnelManager::render_scoped_wireguard_conf(&parsed, "203.0.113.10");
         assert!(rendered_ep_guard.contains("AllowedIPs = 10.88.0.0/24"));
         assert!(!rendered_ep_guard.contains("203.0.113.10/32"));
+    }
 
+    #[tokio::test]
+    #[ignore = "runs wg-quick/pkexec and writes a WireGuard private key; run manually"]
+    async fn test_vpn_tunnel_lifecycle_runs_wg_quick() {
+        let raw = r#"
+[Interface]
+PrivateKey = cHJpdmF0ZWtleXJlYWxseWxvbmdiYXNlNjRzdHJpbmc=
+Address = 10.88.0.2/24
+
+[Peer]
+PublicKey = cHVibGlja2V5cmVhbGx5bG9uZ2Jhc2U2NHN0cmluZw==
+Endpoint = 203.0.113.10:51820
+AllowedIPs = 0.0.0.0/0
+"#;
+        let parsed = WireGuardConf::parse(raw).unwrap();
         let storage = SecureStorage::new("simply_transfer_vpn_mgr_test");
         let mut vpn_cfg = VpnConfig::from_wireguard_conf(&parsed, &storage).unwrap();
         let mgr = VpnTunnelManager::new();

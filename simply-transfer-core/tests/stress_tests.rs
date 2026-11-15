@@ -80,6 +80,7 @@ async fn run_engine_and_measure(source_dir: std::path::PathBuf, expected_success
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "slow; exercises MockSshClient only"]
 async fn test_stress_numerous_files() {
     let dir = tempdir().unwrap();
     let count = 2000; // 2,000 files to simulate a large directory
@@ -90,6 +91,7 @@ async fn test_stress_numerous_files() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "slow; exercises MockSshClient only"]
 async fn test_stress_large_file() {
     let dir = tempdir().unwrap();
     println!("Generating 500 MB file...");
@@ -100,6 +102,7 @@ async fn test_stress_large_file() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "slow; exercises MockSshClient only"]
 async fn test_stress_numerous_large_files() {
     let dir = tempdir().unwrap();
     let count = 20; // 20 files of 25MB each = 500MB
@@ -113,6 +116,7 @@ async fn test_stress_numerous_large_files() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "slow; exercises MockSshClient only"]
 async fn test_extreme_10000_files() {
     let dir = tempdir().unwrap();
     let count = 10000;

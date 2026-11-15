@@ -90,22 +90,31 @@ mod tests {
 
     #[test]
     fn test_parse_user_token() {
-        let tok = "st:Yl5fXl1OekBPXEJSGUdvBXhSGjQyIiA3WiEULCJCB3sXIFw-ODxhMyAvMi8vMzRQflIDNkISN0A6XAsHCSIBRh45HjEHOyNdTjoEUi8HAXUVFwoNGwALCDMOBQ";
-        let parsed = ConnectionToken::parse(tok).unwrap();
-        assert_eq!(parsed.ip, "172.17.2.214");
+        let tok = ConnectionToken::generate(
+            "192.0.2.10",
+            59770,
+            "AAAAC3NzaC1lZDI1NTE5",
+            Some("testuser"),
+        );
+        let parsed = ConnectionToken::parse(&tok).unwrap();
+        assert_eq!(parsed.ip, "192.0.2.10");
         assert_eq!(parsed.port, 59770);
-        assert_eq!(parsed.user.as_deref(), Some("Zak"));
+        assert_eq!(parsed.user.as_deref(), Some("testuser"));
     }
 
     #[test]
     fn test_parse_token_with_whitespace_and_semicolon_suffix() {
-        let tok =
-            ConnectionToken::generate("192.168.1.50", 51234, "AAAAC3NzaC1lZDI1NTE5", Some("Admin"));
+        let tok = ConnectionToken::generate(
+            "192.0.2.50",
+            51234,
+            "AAAAC3NzaC1lZDI1NTE5",
+            Some("testuser"),
+        );
         let decorated = format!("  \r\n{};AAAAC3NzaC1lZDI1NTE5_peer\r\n  ", tok);
         let parsed = ConnectionToken::parse(&decorated).unwrap();
-        assert_eq!(parsed.ip, "192.168.1.50");
+        assert_eq!(parsed.ip, "192.0.2.50");
         assert_eq!(parsed.port, 51234);
         assert_eq!(parsed.pub_key, "AAAAC3NzaC1lZDI1NTE5");
-        assert_eq!(parsed.user.as_deref(), Some("Admin"));
+        assert_eq!(parsed.user.as_deref(), Some("testuser"));
     }
 }
