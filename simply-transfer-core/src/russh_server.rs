@@ -2,11 +2,11 @@ use russh::keys::{HashAlg, PublicKey};
 use russh::server::{Auth, ChannelOpenHandle, Handler, Server, Session};
 use russh::{Channel, ChannelId};
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Write};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc};
@@ -41,7 +41,7 @@ impl TransferServer {
             home_dir
         ));
 
-        let mut loaded_keys = if keys_file_path.exists() {
+        let loaded_keys = if keys_file_path.exists() {
             if let Ok(file) = File::open(&keys_file_path) {
                 let reader = BufReader::new(file);
                 if let Ok(keys_map) = serde_json::from_reader::<_, HashMap<String, String>>(reader)
@@ -69,37 +69,6 @@ impl TransferServer {
         } else {
             HashMap::new()
         };
-
-        // Also ingest any keys already present in standard OS authorized_keys files
-        let mut os_key_files = vec![
-            PathBuf::from(&home_dir)
-                .join(".ssh")
-                .join("authorized_keys"),
-        ];
-        if cfg!(windows) {
-            os_key_files.push(PathBuf::from(
-                "C:\\ProgramData\\ssh\\administrators_authorized_keys",
-            ));
-        }
-        for key_file in os_key_files {
-            if let Ok(contents) = fs::read_to_string(&key_file) {
-                for line in contents.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() || trimmed.starts_with('#') {
-                        continue;
-                    }
-                    if let Ok(public_key) = parse_public_key(trimmed) {
-                        let canonical_fp = public_key.fingerprint(HashAlg::Sha256).to_string();
-                        let raw_fp = canonical_fp
-                            .strip_prefix("SHA256:")
-                            .unwrap_or(&canonical_fp)
-                            .to_string();
-                        loaded_keys.insert(canonical_fp, public_key.clone());
-                        loaded_keys.insert(raw_fp, public_key);
-                    }
-                }
-            }
-        }
 
         TransferServer {
             authorized_keys_file_path: keys_file_path,
@@ -171,11 +140,6 @@ impl TransferServer {
 
         let keys = self.authorized_keys.read().await;
 
-        let path = &self.authorized_keys_file_path;
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-
         let mut keys_map: HashMap<String, String> = HashMap::new();
         for public_key in keys.values() {
             let fp = public_key.fingerprint(HashAlg::Sha256).to_string();
@@ -184,19 +148,7 @@ impl TransferServer {
             }
         }
 
-        if let Ok(file) = File::create(path) {
-            let mut writer = BufWriter::new(file);
-            let _ = serde_json::to_writer_pretty(&mut writer, &keys_map);
-            let _ = writer.flush();
-
-            #[cfg(unix)]
-            {
-                if let Ok(mut perms) = fs::metadata(path).map(|m| m.permissions()) {
-                    perms.set_mode(0o600);
-                    let _ = fs::set_permissions(path, perms);
-                }
-            }
-        }
+        write_keys_file(&self.authorized_keys_file_path, &keys_map);
     }
 
     pub async fn add_authorized_key_from_str(&self, key_str: &str) -> bool {
@@ -245,17 +197,33 @@ impl TransferServer {
             }
         }
 
-        let path = &self.authorized_keys_file_path;
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(file) = File::create(path) {
-            let mut writer = BufWriter::new(file);
-            let _ = serde_json::to_writer_pretty(&mut writer, &keys_map);
-            let _ = writer.flush();
-        }
+        write_keys_file(&self.authorized_keys_file_path, &keys_map);
 
         unique_before.len().saturating_sub(unique_after.len())
+    }
+}
+
+fn write_keys_file(path: &Path, keys_map: &HashMap<String, String>) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        opts.mode(0o600);
+    }
+    if let Ok(file) = opts.open(&tmp_path) {
+        let mut writer = BufWriter::new(file);
+        let _ = serde_json::to_writer_pretty(&mut writer, keys_map);
+        let _ = writer.flush();
+        drop(writer);
+        let _ = fs::rename(&tmp_path, path);
     }
 }
 
@@ -280,10 +248,9 @@ impl Handler for TransferServer {
 
         let keys = self.authorized_keys.read().await;
         tracing::info!(
-            "Received auth request for user '{}' with fingerprint: {}. Known keys: {:?}",
+            "Auth request for user '{}' fingerprint {}",
             user,
-            fingerprint,
-            keys.keys()
+            fingerprint
         );
 
         let is_authorized = keys.contains_key(&fingerprint)
@@ -806,27 +773,6 @@ pub async fn run_server(
                         if !dest_pub.is_empty()
                             && server_clone.add_authorized_key_from_str(&dest_pub).await
                         {
-                            // Also append to ~/.ssh/authorized_keys for OS sshd compatibility
-                            let home_dir = std::env::var("HOME")
-                                .or_else(|_| std::env::var("USERPROFILE"))
-                                .unwrap_or_else(|_| ".".to_string());
-                            let ssh_dir = PathBuf::from(&home_dir).join(".ssh");
-                            let _ = fs::create_dir_all(&ssh_dir);
-                            let auth_keys = ssh_dir.join("authorized_keys");
-                            let pub_key_line =
-                                format!("ssh-ed25519 {} simply-transfer", dest_pub.trim());
-                            let already_present = fs::read_to_string(&auth_keys)
-                                .map(|c| c.contains(dest_pub.trim()))
-                                .unwrap_or(false);
-                            if !already_present
-                                && let Ok(mut f) = fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(&auth_keys)
-                            {
-                                let _ = writeln!(f, "{}", pub_key_line);
-                            }
-
                             let my_user = std::env::var("USER")
                                 .or_else(|_| std::env::var("USERNAME"))
                                 .unwrap_or_else(|_| "simply-transfer".to_string());
