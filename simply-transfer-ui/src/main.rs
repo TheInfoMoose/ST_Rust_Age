@@ -1806,14 +1806,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .or_else(|_| std::env::var("USERNAME"))
                     .unwrap_or_else(|_| "simply-transfer".to_string());
                 // Use port 2222 (the permanent P2P server port, which handles both OOB JSON handshakes and SSH)
-                let generated_token = simply_transfer_crypto::token::ConnectionToken::generate(
-                    &local_ip,
-                    2222,
-                    &pub_key,
-                    Some(&my_user),
-                );
-                conn_to_save.token = generated_token.into();
-                conn_to_save.state = "Waiting for peer...".into();
+                let pair_secret = P2P_SERVER
+                    .get()
+                    .map(|s| s.issue_pair_secret())
+                    .unwrap_or_default();
+                if pair_secret.is_empty() {
+                    tracing::error!("Failed to issue pairing secret: P2P server not initialized");
+                } else {
+                    let generated_token =
+                        simply_transfer_crypto::token::ConnectionToken::generate_with_secret(
+                            &local_ip,
+                            2222,
+                            &pub_key,
+                            &my_user,
+                            &pair_secret,
+                        );
+                    conn_to_save.token = generated_token.into();
+                    conn_to_save.state = "Waiting for peer...".into();
+                }
             } else {
                 let token = conn_to_save.token.to_string();
                 let first_token = token.split(';').next().unwrap_or(&token);
@@ -3582,6 +3592,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             log_event("connection", &format!("Validating remote token: {}", token));
 
             let (verified, status) = match simply_transfer_crypto::token::ConnectionToken::parse(&token) {
+                Ok(parsed) if parsed.pair_secret.is_none() => {
+                    log_event("connection", "Token has no pairing secret; re-create it on the source (v1.1+)");
+                    (false, "Token has no pairing secret; re-create it on the source (v1.1+)".to_string())
+                }
                 Ok(parsed) => {
                     // 0. If Preflight VPN is enabled, bring up the persistent WireGuard tunnel targeting parsed.ip first!
                     let vpn_cfg_opt = if ui_vpn_enabled {
@@ -3811,7 +3825,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(mut stream) => {
                             use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
                             let dest_user = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "simply-transfer".to_string());
-                            let req = format!("{{\"action\":\"verify\",\"user\":\"{}\",\"pub_key\":\"{}\"}}\n", dest_user, my_pub_key_id);
+                            let req = serde_json::json!({"action":"verify","user":dest_user,"pub_key":my_pub_key_id,"pair_secret":parsed.pair_secret.clone().unwrap_or_default()}).to_string() + "\n";
                             let _ = stream.write_all(req.as_bytes()).await;
                             let mut reader = tokio::io::BufReader::new(stream);
                             let mut line = String::new();
