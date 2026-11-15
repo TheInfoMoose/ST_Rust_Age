@@ -36,6 +36,8 @@ fn lock_vault() -> MutexGuard<'static, ()> {
 /// backed by the native OS keyring with an authenticated AES-256-GCM encrypted vault fallback.
 pub struct SecureStorage {
     service_name: String,
+    vault_dir: Option<PathBuf>,
+    use_keyring: bool,
 }
 
 impl SecureStorage {
@@ -44,6 +46,17 @@ impl SecureStorage {
     pub fn new(service_name: &str) -> Self {
         Self {
             service_name: service_name.to_string(),
+            vault_dir: None,
+            use_keyring: true,
+        }
+    }
+
+    /// No OS keyring; vault lives in `vault_dir`. For tests and headless use.
+    pub fn isolated(service_name: &str, vault_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            service_name: service_name.to_string(),
+            vault_dir: Some(vault_dir.into()),
+            use_keyring: false,
         }
     }
 
@@ -52,16 +65,21 @@ impl SecureStorage {
     }
 
     fn get_vault_path(&self) -> PathBuf {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_string());
-        let primary_dir = PathBuf::from(&home).join(".simply-transfer");
-        let dir = if std::fs::create_dir_all(&primary_dir).is_ok() {
-            primary_dir
+        let dir = if let Some(ref custom_dir) = self.vault_dir {
+            let _ = std::fs::create_dir_all(custom_dir);
+            custom_dir.clone()
         } else {
-            let fallback_dir = std::env::temp_dir().join("simply-transfer-vault");
-            let _ = std::fs::create_dir_all(&fallback_dir);
-            fallback_dir
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_string());
+            let primary_dir = PathBuf::from(&home).join(".simply-transfer");
+            if std::fs::create_dir_all(&primary_dir).is_ok() {
+                primary_dir
+            } else {
+                let fallback_dir = std::env::temp_dir().join("simply-transfer-vault");
+                let _ = std::fs::create_dir_all(&fallback_dir);
+                fallback_dir
+            }
         };
         #[cfg(unix)]
         {
@@ -156,7 +174,9 @@ impl SecureStorage {
     /// so transient D-Bus Secret Service sessions (e.g. on Arch/CachyOS Linux) never lose keys across threads or restarts.
     pub fn set_secret(&self, account: &str, mut secret: String) -> Result<(), CryptoError> {
         let _guard = lock_vault();
-        if let Ok(entry) = self.get_entry(account) {
+        if self.use_keyring
+            && let Ok(entry) = self.get_entry(account)
+        {
             let _ = entry.set_password(&secret);
         }
 
@@ -170,7 +190,8 @@ impl SecureStorage {
     /// Retrieve a sensitive string. The caller is responsible for zeroizing it after use.
     pub fn get_secret(&self, account: &str) -> Result<String, CryptoError> {
         let _guard = lock_vault();
-        if let Ok(entry) = self.get_entry(account)
+        if self.use_keyring
+            && let Ok(entry) = self.get_entry(account)
             && let Ok(pwd) = entry.get_password()
             && !pwd.trim().is_empty()
         {
@@ -188,7 +209,9 @@ impl SecureStorage {
     /// Delete a secret securely.
     pub fn delete_secret(&self, account: &str) -> Result<(), CryptoError> {
         let _guard = lock_vault();
-        if let Ok(entry) = self.get_entry(account) {
+        if self.use_keyring
+            && let Ok(entry) = self.get_entry(account)
+        {
             let _ = entry.delete_credential();
         }
         let mut vault = self.load_encrypted_vault();
@@ -215,7 +238,9 @@ impl SecureStorage {
         }
         let purged_count = to_remove.len();
         for key in &to_remove {
-            if let Ok(entry) = self.get_entry(key) {
+            if self.use_keyring
+                && let Ok(entry) = self.get_entry(key)
+            {
                 let _ = entry.delete_credential();
             }
             vault.remove(key);
@@ -269,7 +294,8 @@ mod tests {
 
     #[test]
     fn test_secure_storage() {
-        let storage = SecureStorage::new("test.simplytransfer.crypto");
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = SecureStorage::isolated("test.simplytransfer.crypto", tmp.path());
         let account = "test_user";
 
         let _ = storage.delete_secret(account);
@@ -299,6 +325,22 @@ mod tests {
         assert!(storage.get_secret("key_orphan_1").is_err());
         assert_eq!(storage.get_secret("key_active_1").unwrap(), "secret_active");
         storage.delete_secret("key_active_1").unwrap();
+    }
+
+    #[test]
+    fn isolated_storage_writes_only_inside_vault_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = SecureStorage::isolated("test.simplytransfer.crypto", tmp.path());
+        storage
+            .set_secret("acct", "secret_value".to_string())
+            .unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].extension().and_then(|s| s.to_str()), Some("enc"));
     }
 }
 pub mod keys;

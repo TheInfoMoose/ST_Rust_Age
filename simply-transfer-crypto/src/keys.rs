@@ -14,6 +14,10 @@ impl KeyPairManager {
         }
     }
 
+    pub fn from_storage(storage: SecureStorage) -> Self {
+        Self { storage }
+    }
+
     /// Generates a new Ed25519 keypair, securely stores the OpenSSH private key PEM keyed by the public key,
     /// and returns the public key as a hex string (or OpenSSH string).
     pub fn generate_and_store(&self) -> Result<String, CryptoError> {
@@ -280,7 +284,8 @@ PersistentKeepalive = 25
         );
         assert_eq!(parsed.persistent_keepalive, Some(25));
 
-        let storage = SecureStorage::new("test.simplytransfer.wg");
+        let tmp = tempfile::tempdir().unwrap();
+        let storage = SecureStorage::isolated("test.simplytransfer.wg", tmp.path());
         let vpn_cfg =
             VpnConfig::from_wireguard_conf(&parsed, &storage).expect("should encrypt keys");
 
