@@ -1,0 +1,24 @@
+schema_version = 2
+
+[item]
+id = "TASK-0018"
+type = "task"
+title = "Hermetic firewall test, stress tests #[ignore], placeholder token fixture. Start snapshot reconstructed after the fact (pre-1A tree); POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+scope_ref = "simply_transfer_core"
+created_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-19T02:00:39Z"
+source_ref = "STEP 1A"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+
+[[history.previous_fixes]]
+date = "2026-11-19"
+commit = "b401f40"
+summary = "Completed per plan roadmap"

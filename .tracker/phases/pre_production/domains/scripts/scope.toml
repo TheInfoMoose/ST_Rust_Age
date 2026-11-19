@@ -1,0 +1,18 @@
+[scope]
+id = "scripts"
+target = "scripts"
+tech_stack = ["shell"]
+description = "Promoted from component 'scripts' (scripts)"
+bound_component = "scripts"
+tracked_files = ["scripts/validate-step.sh"]
+
+[items]
+bugs = []
+features = []
+
+[[items.tasks]]
+id = "TASK-0017"
+title = "Copied validate-step.sh, gitignored this file, placed it in the repo (moved from ~/Documents/ST_Rust_Age 2026-11-14)"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"

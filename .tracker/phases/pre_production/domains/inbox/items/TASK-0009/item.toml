@@ -1,0 +1,20 @@
+schema_version = 2
+
+[item]
+id = "TASK-0009"
+type = "task"
+title = "One CI workflow, full clippy, documented audit ignore"
+status = "open"
+severity = "medium"
+scope_ref = "inbox"
+created_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-19T02:00:39Z"
+source_ref = "STEP 3C"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+previous_fixes = []

@@ -1,0 +1,49 @@
+[phase]
+id = "post_production"
+title = "Post-Production"
+status = "planned"
+start_date = "2026-11-19"
+
+[[scopes.manifest]]
+id = "inbox"
+type = "inbox"
+path = "domains/inbox"
+
+[[scopes.manifest]]
+id = "assets"
+type = "custom"
+path = "domains/assets"
+
+[[scopes.manifest]]
+id = "scripts"
+type = "build_scripts"
+path = "domains/scripts"
+
+[[scopes.manifest]]
+id = "simply_transfer_core"
+type = "rust_crate"
+path = "domains/simply_transfer_core"
+
+[[scopes.manifest]]
+id = "simply_transfer_crypto"
+type = "rust_crate"
+path = "domains/simply_transfer_crypto"
+
+[[scopes.manifest]]
+id = "simply_transfer_link"
+type = "rust_crate"
+path = "domains/simply_transfer_link"
+
+[[scopes.manifest]]
+id = "simply_transfer_snapshots"
+type = "rust_crate"
+path = "domains/simply_transfer_snapshots"
+
+[[scopes.manifest]]
+id = "simply_transfer_ui"
+type = "rust_crate"
+path = "domains/simply_transfer_ui"
+
+[summary]
+total_items = 0
+completed_items = 0

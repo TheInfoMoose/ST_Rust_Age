@@ -1,0 +1,176 @@
+[project]
+name = "ST_Rust_Age"
+version = "0.1.0"
+active_phase = "pre_production"
+default_scope = "inbox"
+created_at = "2026-11-19T01:55:52Z"
+
+[counters]
+bug = 6
+feature = 0
+task = 28
+
+[[phases.registry]]
+id = "pre_production"
+title = "Pre-Production"
+path = "phases/pre_production"
+
+[[phases.registry]]
+id = "production"
+title = "Production"
+path = "phases/production"
+
+[[phases.registry]]
+id = "post_production"
+title = "Post-Production"
+path = "phases/post_production"
+
+[metrics]
+target_daily_hours = 6.0
+stagnant_item_threshold_days = 4
+max_session_minutes = 480
+
+[git]
+sync_mode = "manual"
+sync_interval_minutes = 30
+remote = "origin"
+branch = "main"
+auto_commit_on_close = false
+
+[git.commit_policy]
+require_item_id = true
+require_scope = true
+require_summary = true
+min_summary_length = 12
+auto_append_to_desc = true
+
+[[components.registry]]
+id = "assets"
+name = "assets"
+relative_path = "assets"
+component_type = "custom"
+tech_stack = []
+tags = []
+flags = []
+files = [
+    "assets/icons/active_pulse.svg",
+    "assets/icons/arrow_right.svg",
+    "assets/icons/arrow_up.svg",
+    "assets/icons/check.svg",
+    "assets/icons/chevron_down.svg",
+    "assets/icons/chevron_right.svg",
+    "assets/icons/close.svg",
+    "assets/icons/file.svg",
+    "assets/icons/folder.svg",
+    "assets/icons/folder_open.svg",
+    "assets/icons/minus.svg",
+    "assets/icons/monitor.svg",
+    "assets/icons/more_vertical.svg",
+    "assets/icons/new_conn.svg",
+    "assets/icons/plus.svg",
+    "assets/icons/refresh.svg",
+    "assets/icons/remote_conn.svg",
+    "assets/icons/settings_gear.svg",
+    "assets/icons/setup_sliders.svg",
+    "assets/icons/transfer_arrows.svg",
+    "assets/logo.icns",
+    "assets/logo.ico",
+    "assets/logo.png",
+    "assets/theme_dark.png",
+    "assets/theme_light.png",
+    "assets/theme_system.png",
+]
+
+[[components.registry]]
+id = "scripts"
+name = "scripts"
+relative_path = "scripts"
+component_type = "build_scripts"
+tech_stack = ["shell"]
+tags = []
+flags = []
+files = ["scripts/validate-step.sh"]
+
+[[components.registry]]
+id = "simply_transfer_core"
+name = "simply-transfer-core"
+relative_path = "simply-transfer-core"
+component_type = "rust_crate"
+tech_stack = ["rust"]
+tags = []
+flags = []
+files = [
+    "simply-transfer-core/Cargo.toml",
+    "simply-transfer-core/src/engine.rs",
+    "simply-transfer-core/src/firewall.rs",
+    "simply-transfer-core/src/lib.rs",
+    "simply-transfer-core/src/registry.rs",
+    "simply-transfer-core/src/russh_client.rs",
+    "simply-transfer-core/src/russh_server.rs",
+    "simply-transfer-core/src/ssh.rs",
+    "simply-transfer-core/tests/stress_tests.rs",
+    "simply-transfer-core/tests/system_integration_tests.rs",
+]
+
+[[components.registry]]
+id = "simply_transfer_crypto"
+name = "simply-transfer-crypto"
+relative_path = "simply-transfer-crypto"
+component_type = "rust_crate"
+tech_stack = ["rust"]
+tags = []
+flags = []
+files = [
+    "simply-transfer-crypto/Cargo.toml",
+    "simply-transfer-crypto/src/hash.rs",
+    "simply-transfer-crypto/src/keys.rs",
+    "simply-transfer-crypto/src/lib.rs",
+    "simply-transfer-crypto/src/token.rs",
+]
+
+[[components.registry]]
+id = "simply_transfer_link"
+name = "simply-transfer-link"
+relative_path = "simply-transfer-link"
+component_type = "rust_crate"
+tech_stack = ["rust"]
+tags = []
+flags = []
+files = [
+    "simply-transfer-link/Cargo.toml",
+    "simply-transfer-link/src/lib.rs",
+    "simply-transfer-link/src/paths.rs",
+    "simply-transfer-link/src/protocol.rs",
+]
+
+[[components.registry]]
+id = "simply_transfer_snapshots"
+name = "simply-transfer-snapshots"
+relative_path = "simply-transfer-snapshots"
+component_type = "rust_crate"
+tech_stack = ["rust"]
+tags = []
+flags = []
+files = [
+    "simply-transfer-snapshots/Cargo.toml",
+    "simply-transfer-snapshots/src/lib.rs",
+    "simply-transfer-snapshots/src/linux.rs",
+    "simply-transfer-snapshots/src/macos.rs",
+    "simply-transfer-snapshots/src/windows.rs",
+]
+
+[[components.registry]]
+id = "simply_transfer_ui"
+name = "simply-transfer-ui"
+relative_path = "simply-transfer-ui"
+component_type = "rust_crate"
+tech_stack = ["rust"]
+tags = []
+flags = []
+files = [
+    "simply-transfer-ui/Cargo.toml",
+    "simply-transfer-ui/build.rs",
+    "simply-transfer-ui/src/main.rs",
+    "simply-transfer-ui/src/network.rs",
+    "simply-transfer-ui/ui/main.slint",
+]

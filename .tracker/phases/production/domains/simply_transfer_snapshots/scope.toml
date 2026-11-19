@@ -1,0 +1,17 @@
+[scope]
+id = "simply_transfer_snapshots"
+target = "simply-transfer-snapshots"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-snapshots' (simply-transfer-snapshots)"
+bound_component = "simply_transfer_snapshots"
+tracked_files = [
+    "simply-transfer-snapshots/Cargo.toml",
+    "simply-transfer-snapshots/src/lib.rs",
+    "simply-transfer-snapshots/src/linux.rs",
+    "simply-transfer-snapshots/src/macos.rs",
+    "simply-transfer-snapshots/src/windows.rs",
+]
+
+[items]
+bugs = []
+features = []

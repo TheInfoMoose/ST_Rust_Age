@@ -1,0 +1,31 @@
+[scope]
+id = "simply_transfer_crypto"
+target = "simply-transfer-crypto"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-crypto' (simply-transfer-crypto)"
+bound_component = "simply_transfer_crypto"
+tracked_files = [
+    "simply-transfer-crypto/Cargo.toml",
+    "simply-transfer-crypto/src/hash.rs",
+    "simply-transfer-crypto/src/keys.rs",
+    "simply-transfer-crypto/src/lib.rs",
+    "simply-transfer-crypto/src/token.rs",
+]
+
+[items]
+bugs = []
+features = []
+
+[[items.tasks]]
+id = "TASK-0007"
+title = "Random vault key in keyring (file fallback 0600), migrate old vault, no /tmp"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0019"
+title = "SecureStorage::isolated (temp vault, no keyring) for tests; POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"

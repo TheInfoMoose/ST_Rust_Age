@@ -1,0 +1,44 @@
+[scope]
+id = "simply_transfer_snapshots"
+target = "simply-transfer-snapshots"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-snapshots' (simply-transfer-snapshots)"
+bound_component = "simply_transfer_snapshots"
+tracked_files = [
+    "simply-transfer-snapshots/Cargo.toml",
+    "simply-transfer-snapshots/src/lib.rs",
+    "simply-transfer-snapshots/src/linux.rs",
+    "simply-transfer-snapshots/src/macos.rs",
+    "simply-transfer-snapshots/src/windows.rs",
+]
+
+[items]
+features = []
+
+[[items.bugs]]
+id = "BUG-0003"
+title = "Size LVM snapshots instead of taking 100%FREE"
+status = "pending"
+severity = "medium"
+created_at = "2026-11-19T02:00:38Z"
+
+[[items.bugs]]
+id = "BUG-0004"
+title = "Resolve LVM snapshot device without sh -c globbing"
+status = "pending"
+severity = "medium"
+created_at = "2026-11-19T02:00:38Z"
+
+[[items.bugs]]
+id = "BUG-0005"
+title = "Pass VSS arguments to PowerShell without string interpolation"
+status = "pending"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.bugs]]
+id = "BUG-0006"
+title = "Implement APFS snapshot path resolution on macOS"
+status = "pending"
+severity = "low"
+created_at = "2026-11-19T02:00:39Z"

@@ -1,0 +1,38 @@
+[scope]
+id = "assets"
+target = "assets"
+tech_stack = []
+description = "Promoted from component 'assets' (assets)"
+bound_component = "assets"
+tracked_files = [
+    "assets/icons/active_pulse.svg",
+    "assets/icons/arrow_right.svg",
+    "assets/icons/arrow_up.svg",
+    "assets/icons/check.svg",
+    "assets/icons/chevron_down.svg",
+    "assets/icons/chevron_right.svg",
+    "assets/icons/close.svg",
+    "assets/icons/file.svg",
+    "assets/icons/folder.svg",
+    "assets/icons/folder_open.svg",
+    "assets/icons/minus.svg",
+    "assets/icons/monitor.svg",
+    "assets/icons/more_vertical.svg",
+    "assets/icons/new_conn.svg",
+    "assets/icons/plus.svg",
+    "assets/icons/refresh.svg",
+    "assets/icons/remote_conn.svg",
+    "assets/icons/settings_gear.svg",
+    "assets/icons/setup_sliders.svg",
+    "assets/icons/transfer_arrows.svg",
+    "assets/logo.icns",
+    "assets/logo.ico",
+    "assets/logo.png",
+    "assets/theme_dark.png",
+    "assets/theme_light.png",
+    "assets/theme_system.png",
+]
+
+[items]
+bugs = []
+features = []

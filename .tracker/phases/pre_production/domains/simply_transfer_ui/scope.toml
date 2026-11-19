@@ -1,0 +1,38 @@
+[scope]
+id = "simply_transfer_ui"
+target = "simply-transfer-ui"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-ui' (simply-transfer-ui)"
+bound_component = "simply_transfer_ui"
+tracked_files = [
+    "simply-transfer-ui/Cargo.toml",
+    "simply-transfer-ui/build.rs",
+    "simply-transfer-ui/src/main.rs",
+    "simply-transfer-ui/src/network.rs",
+    "simply-transfer-ui/ui/main.slint",
+]
+
+[items]
+bugs = []
+features = []
+
+[[items.tasks]]
+id = "TASK-0013"
+title = "UI: persistent host key, start LinkServer"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0015"
+title = "UI share-roots picker + per-root browsing"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0021"
+title = "UI issues the secret in the token and sends it on verify. Spec amended in correction (strike 0, spec gap): no-secret tokens refused in a match guard at parse, before side effects; POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"

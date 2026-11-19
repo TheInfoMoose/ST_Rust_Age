@@ -1,0 +1,24 @@
+schema_version = 2
+
+[item]
+id = "TASK-0025"
+type = "task"
+title = "Unknown exec runs nothing (exit 127); UI shell browse fallbacks deleted. Hand-off added: log command text only for known verbs. main.rs rustfmt churn verified token-identical; POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+scope_ref = "inbox"
+created_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-19T02:00:39Z"
+source_ref = "STEP 2F"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+
+[[history.previous_fixes]]
+date = "2026-11-19"
+commit = "b401f40"
+summary = "Completed per plan roadmap"

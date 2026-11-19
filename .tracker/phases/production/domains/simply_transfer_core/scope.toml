@@ -1,0 +1,22 @@
+[scope]
+id = "simply_transfer_core"
+target = "simply-transfer-core"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-core' (simply-transfer-core)"
+bound_component = "simply_transfer_core"
+tracked_files = [
+    "simply-transfer-core/Cargo.toml",
+    "simply-transfer-core/src/engine.rs",
+    "simply-transfer-core/src/firewall.rs",
+    "simply-transfer-core/src/lib.rs",
+    "simply-transfer-core/src/registry.rs",
+    "simply-transfer-core/src/russh_client.rs",
+    "simply-transfer-core/src/russh_server.rs",
+    "simply-transfer-core/src/ssh.rs",
+    "simply-transfer-core/tests/stress_tests.rs",
+    "simply-transfer-core/tests/system_integration_tests.rs",
+]
+
+[items]
+bugs = []
+features = []

@@ -1,0 +1,65 @@
+[scope]
+id = "inbox"
+target = ".tracker"
+tech_stack = []
+description = "Default unscoped triage inbox"
+
+[items]
+bugs = []
+features = []
+
+[[items.tasks]]
+id = "TASK-0005"
+title = "Two-host example node (serve/client) + Docker two-container Linux test script"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0006"
+title = "Run scripts/two-host-link-test.sh: two ubuntu:24.04 containers on a private bridge network pair, list, upload and resume over SSH + QUIC"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0009"
+title = "One CI workflow, full clippy, documented audit ignore"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0010"
+title = "Docs describe the real trust model"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0014"
+title = "UI pairing via LinkClient::pair (token v2)"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0020"
+title = "One-time pairing secret on OOB verify (server + token); POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0022"
+title = "Stop reading/writing OS authorized_keys; quiet auth log; 0600 atomic key-store writes; POST_GATE exit 0. Leftover: simply-transfer-crypto/src/token.rs:7 encode_utf16le_base64 now has no callers (outside 2C scope)"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0025"
+title = "Unknown exec runs nothing (exit 127); UI shell browse fallbacks deleted. Hand-off added: log command text only for known verbs. main.rs rustfmt churn verified token-identical; POST_GATE exit 0"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"

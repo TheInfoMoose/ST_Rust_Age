@@ -1,0 +1,20 @@
+schema_version = 2
+
+[item]
+id = "TASK-0012"
+type = "task"
+title = "Connection pool on LinkClient; delete russh_client.rs, ssh.rs"
+status = "open"
+severity = "medium"
+scope_ref = "simply_transfer_core"
+created_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-19T02:00:39Z"
+source_ref = "STEP 5B"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+previous_fixes = []

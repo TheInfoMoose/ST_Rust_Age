@@ -1,0 +1,24 @@
+schema_version = 2
+
+[item]
+id = "TASK-0026"
+type = "task"
+title = '''Write-path guard, QUIC accept timeout, delete ssh_server.rs. Hand-off added relative-path and $HOME/.<x>-subtree rules; correction (strike 0, spec gap) made Windows matching case-insensitive and blocked \\ paths. POST_GATE ssh_server grep fixed to -qw (Claude's gate bug; snapshot plan hash refreshed). Windows not verified locally'''
+status = "closed"
+severity = "medium"
+scope_ref = "simply_transfer_core"
+created_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-19T02:00:39Z"
+source_ref = "STEP 2G"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+
+[[history.previous_fixes]]
+date = "2026-11-19"
+commit = "b401f40"
+summary = "Completed per plan roadmap"

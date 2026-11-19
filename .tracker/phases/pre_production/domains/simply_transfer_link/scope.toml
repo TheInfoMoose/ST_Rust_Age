@@ -1,0 +1,58 @@
+[scope]
+id = "simply_transfer_link"
+target = "simply-transfer-link"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-link' (simply-transfer-link)"
+bound_component = "simply_transfer_link"
+tracked_files = [
+    "simply-transfer-link/Cargo.toml",
+    "simply-transfer-link/src/lib.rs",
+    "simply-transfer-link/src/paths.rs",
+    "simply-transfer-link/src/protocol.rs",
+]
+
+[items]
+bugs = []
+features = []
+
+[[items.tasks]]
+id = "TASK-0001"
+title = "Server: auth, trust store, pairing, request dispatch"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0002"
+title = "QUIC data plane: tickets, pinned cert, upload/resume"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0003"
+title = "Client: connect/pin/pair, requests, upload"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0004"
+title = "Loopback security test suite"
+status = "open"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0027"
+title = "simply-transfer-link skeleton + framed protocol codec. Hand-off pinned exact Request/Response fields, added Roots and VolumeEntry, in-crate hex32 serde. Correction (strike 1): hex32 deserialized a borrowed &str (broke from_value/from_reader) → owned String + from_value test"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0028"
+title = "SharePolicy path containment + open_for_write (O_NOFOLLOW). Hand-off pinned signatures/error strings and switched the walk-up to symlink_metadata so dangling symlinks are checked (extra test). Strike 0"
+status = "closed"
+severity = "medium"
+created_at = "2026-11-19T02:00:39Z"

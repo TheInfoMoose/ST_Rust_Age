@@ -1,0 +1,16 @@
+[scope]
+id = "simply_transfer_link"
+target = "simply-transfer-link"
+tech_stack = ["rust"]
+description = "Promoted from component 'simply-transfer-link' (simply-transfer-link)"
+bound_component = "simply_transfer_link"
+tracked_files = [
+    "simply-transfer-link/Cargo.toml",
+    "simply-transfer-link/src/lib.rs",
+    "simply-transfer-link/src/paths.rs",
+    "simply-transfer-link/src/protocol.rs",
+]
+
+[items]
+bugs = []
+features = []
