@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 
 use crate::LinkError;
+use crate::data::DataPlane;
 use crate::paths::{Access, SharePolicy};
 use crate::protocol::{
     EntryInfo, Request, Response, ShareRootInfo, VolumeEntry, read_frame, write_frame,
@@ -82,6 +83,8 @@ impl LinkServer {
             .trust
             .ok_or_else(|| LinkError::Protocol("missing trust store".to_string()))?;
         let shares = self.shares;
+        let quic_addr = self.bind_addr.unwrap_or(listener.local_addr()?);
+        let data = DataPlane::bind(quic_addr)?;
 
         let config = Arc::new(Config {
             keys: vec![host_key],
@@ -97,6 +100,7 @@ impl LinkServer {
             let handler = ClientSessionHandler {
                 trust: Arc::clone(&trust),
                 shares: Arc::clone(&shares),
+                data: Arc::clone(&data),
                 peer_fp: None,
                 pairing_only: false,
                 channels: HashMap::new(),
@@ -113,6 +117,7 @@ impl LinkServer {
 pub struct RequestContext {
     pub trust: Arc<dyn TrustStore>,
     pub shares: Arc<RwLock<SharePolicy>>,
+    pub(crate) data: Option<Arc<DataPlane>>,
     pub peer_fp: Option<String>,
     pub pairing_only: bool,
 }
@@ -286,10 +291,32 @@ pub fn handle_request(ctx: &RequestContext, req: Request) -> Response {
                 },
             }
         }
-        Request::BeginUpload { .. } => Response::Error {
-            code: "unimplemented".to_string(),
-            message: "QUIC data plane is not yet enabled".to_string(),
-        },
+        Request::BeginUpload {
+            root_id,
+            rel_path,
+            offset,
+            len,
+        } => {
+            let resolved =
+                match resolve_with_policy(&ctx.shares, peer_fp, &root_id, &rel_path, Access::Write)
+                {
+                    Ok(p) => p,
+                    Err(resp) => return resp,
+                };
+            let Some(data) = ctx.data.as_ref() else {
+                return Response::Error {
+                    code: "unimplemented".to_string(),
+                    message: "QUIC data plane is not available".to_string(),
+                };
+            };
+            match data.issue(peer_fp, resolved, offset, len) {
+                Ok(grant) => Response::UploadGrant { grant },
+                Err(e) => Response::Error {
+                    code: "upload_grant".to_string(),
+                    message: e.to_string(),
+                },
+            }
+        }
     }
 }
 
@@ -406,6 +433,7 @@ fn disk_free_for_path(path: &Path) -> Option<u64> {
 struct ClientSessionHandler {
     trust: Arc<dyn TrustStore>,
     shares: Arc<RwLock<SharePolicy>>,
+    data: Arc<DataPlane>,
     peer_fp: Option<String>,
     pairing_only: bool,
     channels: HashMap<ChannelId, Channel<Msg>>,
@@ -514,6 +542,7 @@ impl Handler for ClientSessionHandler {
         let ctx = Arc::new(RequestContext {
             trust: Arc::clone(&self.trust),
             shares: Arc::clone(&self.shares),
+            data: Some(Arc::clone(&self.data)),
             peer_fp: self.peer_fp.clone(),
             pairing_only: self.pairing_only,
         });
@@ -583,6 +612,7 @@ mod tests {
         let ctx = RequestContext {
             trust: trust.clone(),
             shares: Arc::new(RwLock::new(policy)),
+            data: None,
             peer_fp: if pairing_only {
                 None
             } else {
@@ -695,5 +725,43 @@ mod tests {
                     .to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn begin_upload_issues_grant_and_respects_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut ctx, _) = make_ctx(tmp.path(), false);
+        let plane = DataPlane::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let expected_port = plane.udp_port().unwrap();
+        let expected_cert = plane.cert_sha256;
+        ctx.data = Some(plane);
+
+        let resp = handle_request(
+            &ctx,
+            Request::BeginUpload {
+                root_id: "share".to_string(),
+                rel_path: "upload.bin".to_string(),
+                offset: 0,
+                len: 1024,
+            },
+        );
+        match resp {
+            Response::UploadGrant { grant } => {
+                assert_eq!(grant.udp_port, expected_port);
+                assert_eq!(grant.cert_sha256, expected_cert);
+            }
+            other => panic!("expected UploadGrant, got {other:?}"),
+        }
+
+        let bad_resp = handle_request(
+            &ctx,
+            Request::BeginUpload {
+                root_id: "share".to_string(),
+                rel_path: "../escape.bin".to_string(),
+                offset: 0,
+                len: 1024,
+            },
+        );
+        assert!(matches!(bad_resp, Response::Error { .. }));
     }
 }
