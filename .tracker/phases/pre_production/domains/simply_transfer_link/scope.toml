@@ -12,13 +12,40 @@ tracked_files = [
 ]
 
 [items]
-bugs = []
 features = []
+
+[[items.bugs]]
+id = "BUG-0007"
+title = "Surface trust store write failures instead of dropping them"
+status = "pending"
+severity = "medium"
+created_at = "2026-11-19T03:58:19Z"
+
+[[items.bugs]]
+id = "BUG-0008"
+title = "Don't chmod the trust file's parent directory"
+status = "pending"
+severity = "low"
+created_at = "2026-11-19T03:58:19Z"
+
+[[items.bugs]]
+id = "BUG-0009"
+title = "Refuse to overwrite a corrupt trust file"
+status = "pending"
+severity = "low"
+created_at = "2026-11-19T03:58:19Z"
+
+[[items.bugs]]
+id = "BUG-0010"
+title = "Limit a pairing session to one Pair request"
+status = "pending"
+severity = "low"
+created_at = "2026-11-19T03:58:19Z"
 
 [[items.tasks]]
 id = "TASK-0001"
 title = "Server: auth, trust store, pairing, request dispatch"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
 
