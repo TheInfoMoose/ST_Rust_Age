@@ -1,3 +1,4 @@
+pub mod paths;
 pub mod protocol;
 
 #[derive(Debug, thiserror::Error)]
