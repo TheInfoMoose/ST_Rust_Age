@@ -1,5 +1,7 @@
 pub mod paths;
 pub mod protocol;
+pub mod server;
+pub mod trust;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LinkError {

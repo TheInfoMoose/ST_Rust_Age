@@ -5,8 +5,12 @@ edition = "2024"
 license = "GPL-3.0"
 
 [dependencies]
+rand = "0.10.3"
+russh = { version = "0.64.1", default-features = false, features = ["flate2", "aws-lc-rs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
+simply-transfer-snapshots = { version = "0.1.0", path = "../simply-transfer-snapshots" }
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["io-util", "macros", "rt", "net", "time", "sync", "fs"] }
 
