@@ -327,14 +327,11 @@ impl VpnTunnelManager {
         let short_id: String = connection_id.simple().to_string().chars().take(8).collect();
         let interface_name = format!("stwg{}", short_id);
 
-        let temp_conf_path = std::env::temp_dir().join(format!("{}.conf", interface_name));
-        let _ = std::fs::write(&temp_conf_path, &rendered_conf);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ =
-                std::fs::set_permissions(&temp_conf_path, std::fs::Permissions::from_mode(0o600));
-        }
+        let temp_conf_path = write_private_conf(
+            &run_dir()?,
+            &format!("{interface_name}.conf"),
+            &rendered_conf,
+        )?;
 
         let iface_ip = Self::extract_interface_ip(&vpn_config.address);
         let already_bound = Self::is_interface_ip_bound_locally(&iface_ip);
@@ -541,10 +538,93 @@ impl VpnTunnelManager {
     }
 }
 
+fn run_dir() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "HOME/USERPROFILE not set".to_string())?;
+    let dir = std::path::PathBuf::from(home)
+        .join(".simply-transfer")
+        .join("run");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(dir)
+}
+
+fn write_private_conf(
+    dir: &std::path::Path,
+    name: &str,
+    contents: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    let path = dir.join(name);
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => std::fs::remove_file(&path).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&path).map_err(|e| e.to_string())?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use simply_transfer_crypto::{SecureStorage, VpnConfig, WireGuardConf};
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_conf_creates_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_private_conf(dir.path(), "test.conf", "[Interface]\n").unwrap();
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[Interface]\n");
+    }
+
+    #[test]
+    fn write_private_conf_replaces_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path1 = write_private_conf(dir.path(), "x.conf", "a").unwrap();
+        assert_eq!(std::fs::read_to_string(&path1).unwrap(), "a");
+        let path2 = write_private_conf(dir.path(), "x.conf", "b").unwrap();
+        assert_eq!(path1, path2);
+        assert_eq!(std::fs::read_to_string(&path2).unwrap(), "b");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_conf_replaces_symlink_without_following() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        let target = target_dir.path().join("target.txt");
+        std::fs::write(&target, "keep").unwrap();
+
+        let link = dir.path().join("x.conf");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let written = write_private_conf(dir.path(), "x.conf", "new").unwrap();
+        assert_eq!(written, link);
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_file());
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+    }
 
     #[test]
     fn test_vpn_scoped_route_and_render() {
