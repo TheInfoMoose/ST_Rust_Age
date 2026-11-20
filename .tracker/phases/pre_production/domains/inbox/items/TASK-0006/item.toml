@@ -4,11 +4,11 @@ schema_version = 2
 id = "TASK-0006"
 type = "task"
 title = "Run scripts/two-host-link-test.sh: two ubuntu:24.04 containers on a private bridge network pair, list, upload and resume over SSH + QUIC"
-status = "open"
+status = "closed"
 severity = "medium"
 scope_ref = "inbox"
 created_at = "2026-11-19T02:00:39Z"
-updated_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-20T02:38:49Z"
 source_ref = "[CLAUDE] TWO-HOST RUN"
 
 [effort]
@@ -17,4 +17,8 @@ iteration_count = 1
 
 [history]
 recurrence_count = 0
-previous_fixes = []
+
+[[history.previous_fixes]]
+date = "2026-11-20"
+commit = "32607ac"
+summary = "duplicate of TASK-0029 (re-filed in simply_transfer_link scope)"

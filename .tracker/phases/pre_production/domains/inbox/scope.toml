@@ -11,14 +11,14 @@ features = []
 [[items.tasks]]
 id = "TASK-0005"
 title = "Two-host example node (serve/client) + Docker two-container Linux test script"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
 
 [[items.tasks]]
 id = "TASK-0006"
 title = "Run scripts/two-host-link-test.sh: two ubuntu:24.04 containers on a private bridge network pair, list, upload and resume over SSH + QUIC"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
 
