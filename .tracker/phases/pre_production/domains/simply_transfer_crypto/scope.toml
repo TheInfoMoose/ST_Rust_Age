@@ -13,13 +13,19 @@ tracked_files = [
 ]
 
 [items]
-bugs = []
 features = []
+
+[[items.bugs]]
+id = "BUG-0014"
+title = "Fix vault_key spin on dangling symlink and stuck short key file"
+status = "pending"
+severity = "low"
+created_at = "2026-11-20T02:50:51Z"
 
 [[items.tasks]]
 id = "TASK-0007"
 title = "Random vault key in keyring (file fallback 0600), migrate old vault, no /tmp"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
 

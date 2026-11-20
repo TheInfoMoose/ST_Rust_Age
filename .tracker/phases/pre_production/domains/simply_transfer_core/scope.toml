@@ -96,3 +96,10 @@ title = '''Write-path guard, QUIC accept timeout, delete ssh_server.rs. Hand-off
 status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
+
+[[items.tasks]]
+id = "TASK-0030"
+title = "Isolate VPN manager test from the real keyring and home vault"
+status = "pending"
+severity = "low"
+created_at = "2026-11-20T02:43:19Z"

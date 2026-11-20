@@ -45,5 +45,5 @@ type = "rust_crate"
 path = "domains/simply_transfer_ui"
 
 [summary]
-total_items = 42
-completed_items = 19
+total_items = 44
+completed_items = 20

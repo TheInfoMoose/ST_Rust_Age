@@ -1,0 +1,17 @@
+[item]
+id = "BUG-0014"
+type = "bug"
+title = "Fix vault_key spin on dangling symlink and stuck short key file"
+status = "pending"
+severity = "low"
+scope_ref = "simply_transfer_crypto"
+created_at = "2026-11-20T02:50:51Z"
+updated_at = "2026-11-20T02:50:51Z"
+
+[effort]
+logged_time_minutes = 0
+iteration_count = 1
+
+[history]
+recurrence_count = 0
+previous_fixes = []
