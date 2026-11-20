@@ -4,17 +4,22 @@ schema_version = 2
 id = "TASK-0003"
 type = "task"
 title = "Client: connect/pin/pair, requests, upload"
-status = "open"
+status = "closed"
 severity = "medium"
 scope_ref = "simply_transfer_link"
 created_at = "2026-11-19T02:00:39Z"
-updated_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-20T02:05:13Z"
 source_ref = "STEP 4E"
 
 [effort]
-logged_time_minutes = 0
+logged_time_minutes = 8
 iteration_count = 1
+last_timer_session = "TASK-0003@2026-11-20T01:56:36Z"
 
 [history]
 recurrence_count = 0
-previous_fixes = []
+
+[[history.previous_fixes]]
+date = "2026-11-20"
+commit = "2b9d71b"
+summary = "LinkClient: HostPin (SHA-256 fingerprint), connect/pair, 8 request helpers, cert-pinned QUIC upload with pause/cancel. Hand-off pinned the 4C/4D wire details; correction (strike 0, spec gap) added wait_while_paused so a dropped control sender cancels instead of spinning"
