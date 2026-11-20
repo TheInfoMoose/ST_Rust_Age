@@ -4,17 +4,22 @@ schema_version = 2
 id = "TASK-0008"
 type = "task"
 title = "WireGuard conf in private run dir, create_new + 0600"
-status = "open"
+status = "closed"
 severity = "medium"
 scope_ref = "simply_transfer_core"
 created_at = "2026-11-19T02:00:39Z"
-updated_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-20T02:57:36Z"
 source_ref = "STEP 3B"
 
 [effort]
-logged_time_minutes = 0
+logged_time_minutes = 4
 iteration_count = 1
+last_timer_session = "TASK-0008@2026-11-20T02:52:58Z"
 
 [history]
 recurrence_count = 0
-previous_fixes = []
+
+[[history.previous_fixes]]
+date = "2026-11-20"
+commit = "e02b635"
+summary = "Rendered WireGuard conf written via write_private_conf into ~/.simply-transfer/run (0700): pre-existing file or symlink removed without following, create_new + 0600, errors propagate. 3 unit tests. Strike 0"
