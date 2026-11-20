@@ -1,3 +1,4 @@
+pub mod client;
 pub(crate) mod data;
 pub mod paths;
 pub mod protocol;
