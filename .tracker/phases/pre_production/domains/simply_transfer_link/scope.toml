@@ -80,7 +80,7 @@ created_at = "2026-11-19T02:00:39Z"
 [[items.tasks]]
 id = "TASK-0004"
 title = "Loopback security test suite"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-19T02:00:39Z"
 

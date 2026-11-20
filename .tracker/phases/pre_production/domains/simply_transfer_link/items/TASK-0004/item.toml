@@ -4,17 +4,22 @@ schema_version = 2
 id = "TASK-0004"
 type = "task"
 title = "Loopback security test suite"
-status = "open"
+status = "closed"
 severity = "medium"
 scope_ref = "simply_transfer_link"
 created_at = "2026-11-19T02:00:39Z"
-updated_at = "2026-11-19T02:00:39Z"
+updated_at = "2026-11-20T02:12:35Z"
 source_ref = "STEP 4F"
 
 [effort]
-logged_time_minutes = 0
+logged_time_minutes = 5
 iteration_count = 1
+last_timer_session = "TASK-0004@2026-11-20T02:07:33Z"
 
 [history]
 recurrence_count = 0
-previous_fixes = []
+
+[[history.previous_fixes]]
+date = "2026-11-20"
+commit = "d8eb8d2"
+summary = "13 loopback tests on 127.0.0.1: host pin, untrusted key, pairing secret (wrong/single-use), pairing-only session, exec refused, traversal, symlink escape, upload round-trip and resume, ticket replay, read-only root. Hand-off added raw russh/QUIC helpers and a 30 s per-test timeout"
