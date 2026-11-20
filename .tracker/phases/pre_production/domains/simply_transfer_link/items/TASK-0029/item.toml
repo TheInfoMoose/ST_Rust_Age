@@ -4,16 +4,21 @@ schema_version = 2
 id = "TASK-0029"
 type = "task"
 title = "Run scripts/two-host-link-test.sh: two ubuntu:24.04 containers on a private bridge network pair, list, upload and resume over SSH + QUIC"
-status = "open"
+status = "closed"
 severity = "medium"
 scope_ref = "simply_transfer_link"
 created_at = "2026-11-20T02:38:49Z"
-updated_at = "2026-11-20T02:38:49Z"
+updated_at = "2026-11-20T02:40:30Z"
 
 [effort]
 logged_time_minutes = 0
 iteration_count = 1
+last_timer_session = "TASK-0029@2026-11-20T02:39:49Z"
 
 [history]
 recurrence_count = 0
-previous_fixes = []
+
+[[history.previous_fixes]]
+date = "2026-11-20"
+commit = "4dabb44"
+summary = "TWO-HOST: PASS on first run (2026-11-19): two unprivileged ubuntu:24.04 containers on a private bridge; all 10 link_node checks passed over SSH + QUIC (pin mismatch, pairing secret wrong/single-use, roots, mkdir, traversal, 8 MiB upload, 3 MiB resume); host-side sha256 matched; no containers or networks left behind"

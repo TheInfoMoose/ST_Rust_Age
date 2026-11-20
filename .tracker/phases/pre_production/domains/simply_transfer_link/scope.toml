@@ -101,6 +101,6 @@ created_at = "2026-11-19T02:00:39Z"
 [[items.tasks]]
 id = "TASK-0029"
 title = "Run scripts/two-host-link-test.sh: two ubuntu:24.04 containers on a private bridge network pair, list, upload and resume over SSH + QUIC"
-status = "open"
+status = "closed"
 severity = "medium"
 created_at = "2026-11-20T02:38:49Z"
